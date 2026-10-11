@@ -36,7 +36,7 @@ func TestRM207OneProcessKeepsWhatTheFoldedServicesHad(t *testing.T) {
 	separate := interpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, files...)
 	plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
 
-	mcp := plain.service(t, "innsegl-mcp")
+	mcp := plain.service(t, "innsegl-core")
 	targets := map[string]bool{}
 	for _, v := range mcp.Volumes {
 		targets[v.Target] = true
@@ -74,7 +74,7 @@ func TestRM207OneProcessKeepsWhatTheFoldedServicesHad(t *testing.T) {
 	}
 	// The reason this is the default: the reconciler's SPIRE pass runs only
 	// with an admin identity, and the MCP's is the only one there is.
-	if addr, _ := plain.env("innsegl-mcp", "INNSEGL_SPIRE_ADDRESS"); addr == "" {
+	if addr, _ := plain.env("innsegl-core", "INNSEGL_SPIRE_ADDRESS"); addr == "" {
 		t.Error("the MCP has no INNSEGL_SPIRE_ADDRESS, so the reconciler's SPIRE pass stays off")
 	}
 }

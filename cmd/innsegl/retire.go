@@ -44,7 +44,7 @@ import (
 // now runs where the engine's dependencies already are: inside the core's
 // container, under the core's own SPIRE admin identity and ledger credential.
 //
-//	docker exec innsegl-mcp innsegl retire <run_id>
+//	docker exec innsegl-core innsegl retire <run_id>
 //	make innsegl-retire RUN=<run_id>
 //
 // It reads the same variables `innsegl serve` and `innsegl reap` read, which
@@ -111,7 +111,7 @@ const (
 	// envRetireTimeout overrides it.
 	envRetireTimeout = "INNSEGL_RETIRE_TIMEOUT"
 	// retireOnTheCore is the one command line every remedy names.
-	retireOnTheCore = "docker exec innsegl-mcp innsegl retire"
+	retireOnTheCore = "docker exec innsegl-core innsegl retire"
 )
 
 // errNoAdminIdentity marks an opener failure that is REFUSED, not

@@ -5,7 +5,7 @@
 # Without it the core is exactly what innsegl.yml says.
 #
 # Two things change:
-#   - innsegl-mcp joins the unlock network, whose only other member is the
+#   - innsegl-core joins the unlock network, whose only other member is the
 #     custodian, and is told where the custodian is. That is the whole of its
 #     reach into custody: three routes, for the operator's machine (ADR-0076).
 #   - the trust-key backup (ADR-0074) also carries the store's own snapshot,
@@ -16,7 +16,7 @@
 
 services:
 
-  innsegl-mcp:
+  innsegl-core:
     networks:
       - innsegl-ca-unlock
     environment:

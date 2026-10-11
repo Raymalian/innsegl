@@ -75,7 +75,7 @@ import (
 // It gets that credential in one of two ways and never both:
 //
 //   - the Workload API (the default, and what a deployment uses). doc 05 §1
-//     runs `innsegl-mcp` as an attested container, so "holding the admin
+//     runs `innsegl-core` as an attested container, so "holding the admin
 //     credential" means BEING the workload SPIRE attests — there is no file to
 //     steal, and a process that cannot attest gets nothing.
 //   - three PEM files, named explicitly. This is for the case where the MCP is

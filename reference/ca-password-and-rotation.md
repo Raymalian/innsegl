@@ -44,7 +44,7 @@ with no skew.
 | `INNSEGL_STACK_PREFIX` | `innsegl` (`innsegl-dev` on a dev stack) | container names |
 | `INNSEGL_ROTATE_FULCIO_URL` | Fulcio's published port (`docker port`) | |
 | `INNSEGL_ROTATE_FULCIO_CONTAINER` | `<prefix>-sigstore-fulcio` | |
-| `INNSEGL_ROTATE_CORE_CONTAINER` | `<prefix>-mcp` | empty: none |
+| `INNSEGL_ROTATE_CORE_CONTAINER` | `<prefix>-core` | empty: none |
 | `INNSEGL_ROTATE_HISTORY_CMD` | `docker exec -i <core> innsegl trust-history` | |
 | `INNSEGL_ROTATE_PROOF_CMD` | `deploy/compose/sigstore/verify.sh` | |
 | `INNSEGL_ROTATE_WAIT_TRIES`, `INNSEGL_ROTATE_POLL_SECONDS` | `60`, `2` | wait for Fulcio |

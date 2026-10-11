@@ -102,14 +102,14 @@ and every line of it matters:
 - **`register.sh` is not optional.** It creates the two bootstrap registration
   entries the stack needs: `spire-oidc`'s own identity, without which the
   discovery provider has no JWKS to publish and Fulcio refuses every token, and
-  `innsegl-mcp`'s. It is idempotent, so if it says `no attested agent yet`, the
+  `innsegl-core`'s. It is idempotent, so if it says `no attested agent yet`, the
   agent has not finished attesting: wait a moment and run it again.
 - **Order.** `sigstore.yml` attaches to a network `spire.yml` declares and
   owns, and `innsegl.yml` attaches to networks *both* of them own plus the
   SPIRE agent's Workload API socket. Bringing a later stack up first fails
   naming the missing network. That is the correct failure and not a bug.
 - **`register.sh` runs twice, and the second run is not a mistake.** Its first
-  job is `spire-oidc`'s identity. Its second is `innsegl-mcp`'s — doc 05 §1's
+  job is `spire-oidc`'s identity. Its second is `innsegl-core`'s — doc 05 §1's
   "only service holding SPIRE admin credential" — and that entry's selectors
   are derived from the `innsegl:local` **image**, which the line above it
   builds. Running it before the build is harmless: it registers `spire-oidc`,
@@ -338,7 +338,7 @@ summary:
 |---|---|
 | [`spire/README.md`](spire/README.md) | `spire-server`, `spire-agent`, `spire-oidc` — the trust domain, workload attestation, and the JWT-SVID → OIDC bridge |
 | [`sigstore/README.md`](sigstore/README.md) | `fulcio`, `rekor` and Rekor's backing Trillian log and database — the CA and the transparency log |
-| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-s3`, one process), `innsegl-mcp`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api` (which serves the dashboard), `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
+| [`innsegl/README.md`](innsegl/README.md) | `postgres`, the object store (`innsegl-s3`, one process), `innsegl-core`, `innsegl-reconciler`, `innsegl-sealer`, `innsegl-api` (which serves the dashboard), `demo-agent` — **the components this project is**, and the two database roles they run under: append-only for the writers, read-only for the query API |
 
 The first two are Innsegl's dependencies. The third is Innsegl.
 
@@ -579,7 +579,7 @@ spiffe://innsegl.dev/agent/a7f3c91b/e2d5f004/run-850d52ce…
 **You do not have to do anything to get this.** `innsegl-identity-init`, a
 one-shot with no network at all, mints 32 random bytes into the
 `innsegl-identity-secret` volume on the first `up` and leaves them alone on
-every `up` after that; `innsegl-mcp` gates on its completion and reads the
+every `up` after that; `innsegl-core` gates on its completion and reads the
 file. That is the whole of the setup, and it is a one-shot rather than a value
 in `innsegl.yml` for one reason: **a secret shipped in this repository would
 give every deployment the same pseudonyms.** `a7f3c91b` would mean one
@@ -600,7 +600,7 @@ To supply your own instead of the generated one — from a secret store, say:
 ```sh
 export INNSEGL_IDENTITY_SECRET="$(openssl rand -hex 32)"   # then remove
                                                            # INNSEGL_IDENTITY_SECRET_FILE
-                                                           # from innsegl-mcp
+                                                           # from innsegl-core
 ```
 
 Four things worth knowing before you choose:
@@ -637,9 +637,9 @@ Four things worth knowing before you choose:
 | ports 28443, 5555, 23000, 28080, 28081, 28095, 8082 or 8443 already bound | the stack publishes those on loopback. Free them, or override: `INNSEGL_SPIRE_OIDC_PORT`, `INNSEGL_MCP_PORT`, `INNSEGL_MCP_HEALTH_PORT`, `INNSEGL_GATEWAY_PORT`, `INNSEGL_DASHBOARD_PORT`, `INNSEGL_DASHBOARD_TLS_PORT` |
 | `all predefined address pools have been fully subnetted` | Docker is out of network address space, at roughly the twenty-ninth network. The three stacks hold twelve between them. `docker network prune` |
 | compose refuses, naming `INNSEGL_SPIRE_PARENT_ID` | `register.sh` has not run since this stack booted. It writes `deploy/compose/.env`; re-run it |
-| `innsegl-mcp` restarts, logging that the Workload API gave it no SVID | its registration entry is missing or names an older build of `innsegl:local`. Re-run `register.sh` — it detects a stale entry and replaces it |
+| `innsegl-core` restarts, logging that the Workload API gave it no SVID | its registration entry is missing or names an older build of `innsegl:local`. Re-run `register.sh` — it detects a stale entry and replaces it |
 | `innsegl-db-init` exits non-zero naming a privilege | the ledger's role can do more than append. The message names which privilege; `make innsegl-verify` re-runs the check on its own |
-| `innsegl-mcp` restarts, logging that a companion subcommand stopped | the seal loop runs inside it by default and exits when it cannot reach the object store's gateway or Rekor. `docker compose -f deploy/compose/innsegl.yml logs innsegl-mcp` (or `innsegl-sealer` under `--profile separate`) |
+| `innsegl-core` restarts, logging that a companion subcommand stopped | the seal loop runs inside it by default and exits when it cannot reach the object store's gateway or Rekor. `docker compose -f deploy/compose/innsegl.yml logs innsegl-core` (or `innsegl-sealer` under `--profile separate`) |
 | Fulcio answers `invalid identity token` | the two stacks disagree about the issuer. Bring both down with `-v` and boot again with the export set |
 | `trillian-db` never becomes healthy on Apple Silicon | it is emulated; give it longer on the first pull |
 | `make smoke` removed a stack you were using | expected — see the note above `make smoke` |

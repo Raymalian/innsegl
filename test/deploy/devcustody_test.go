@@ -89,7 +89,7 @@ func TestOPS129CustodyKeepsEveryLiveName(t *testing.T) {
 		"docker exec innsegl-ca-custodian innsegl ca-custodian ready",
 		"docker volume rm innsegl-trust-ca-store",
 		"INNSEGL_CA_STORE_CONTAINER='innsegl-ca-store' scripts/ca-custody.sh init",
-		"for c in innsegl-mcp innsegl-ca-store innsegl-ca-custodian; do",
+		"for c in innsegl-core innsegl-ca-store innsegl-ca-custodian; do",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("a live custody target no longer runs %q:\n%s", want, out)
@@ -148,7 +148,7 @@ func TestOPS129DevCustodyHasItsOwnNames(t *testing.T) {
 		"docker exec innsegl-dev-ca-custodian innsegl ca-custodian ready",
 		"docker volume rm innsegl-dev-trust-ca-store",
 		"INNSEGL_CA_STORE_CONTAINER='innsegl-dev-ca-store' scripts/ca-custody.sh init",
-		"for c in innsegl-dev-mcp innsegl-dev-ca-store innsegl-dev-ca-custodian; do",
+		"for c in innsegl-dev-core innsegl-dev-ca-store innsegl-dev-ca-custodian; do",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("a dev custody target does not run %q:\n%s", want, out)
@@ -157,7 +157,7 @@ func TestOPS129DevCustodyHasItsOwnNames(t *testing.T) {
 	// Compose SERVICE names (`up -d innsegl-ca-store`) are the same in both;
 	// what must not appear is a live container or volume addressed directly.
 	for _, live := range []string{"exec innsegl-ca-", "CONTAINER='innsegl-ca-", "innsegl-trust-ca-",
-		"in innsegl-mcp", " innsegl-ca-custodian;", "innsegl-ca-token"} {
+		"in innsegl-core", " innsegl-ca-custodian;", "innsegl-ca-token"} {
 		if strings.Contains(out, live) {
 			t.Errorf("a dev custody target addresses a live name (%q):\n%s", live, out)
 		}

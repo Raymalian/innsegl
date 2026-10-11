@@ -15,11 +15,11 @@ innsegl reconcile [flags]
 innsegl reap [flags]
 ```
 
-By default both run inside `innsegl-mcp` (`-also seal,reconcile,reap,gateway`,
+By default both run inside `innsegl-core` (`-also seal,reconcile,reap,gateway`,
 ADR-0056). The compose profile `separate` runs `innsegl-reconciler` and
 `innsegl-sealer` as their own containers instead.
 
-Inside `innsegl-mcp` each companion runs on `serve`'s own context, so SIGTERM
+Inside `innsegl-core` each companion runs on `serve`'s own context, so SIGTERM
 (`docker stop`, `make update`) stops all of them together. A reap sweep in
 flight finishes first; then the process exits within seconds. Run on its own,
 `innsegl reap -interval` stops on SIGINT or SIGTERM the same way.
@@ -64,7 +64,7 @@ permanent end (see [identity.md](identity.md)).
 
 | Item | Holds |
 |---|---|
-| `innsegl-mcp` | runs both by default |
+| `innsegl-core` | runs both by default |
 | `innsegl-reconciler` | the reconciler alone (profile `separate`) |
 | volume `innsegl-mirror` | the per-repository mirror the passes read (ADR-0065) |
 | `/harness-log` inside the container | retained tool-call bodies, read-only |

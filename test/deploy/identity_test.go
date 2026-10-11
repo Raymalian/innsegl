@@ -61,7 +61,7 @@ func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
 	})
 
 	t.Run("the MCP gates on it and reads the file it wrote", func(t *testing.T) {
-		mcp := composeService(t, stack, "innsegl-mcp")
+		mcp := composeService(t, stack, "innsegl-core")
 		for _, want := range []struct{ needle, why string }{
 			{"innsegl-identity-init",
 				"the MCP must gate on the one-shot's completion: starting before the " +
@@ -74,7 +74,7 @@ func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
 					"so the MCP is told the PATH — the INNSEGL_MCP_SVID_FILE convention"},
 		} {
 			if !strings.Contains(mcp, want.needle) {
-				t.Errorf("the innsegl-mcp service never mentions %q: %s", want.needle, want.why)
+				t.Errorf("the innsegl-core service never mentions %q: %s", want.needle, want.why)
 			}
 		}
 	})

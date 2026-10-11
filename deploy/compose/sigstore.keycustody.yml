@@ -437,7 +437,7 @@ configs:
 networks:
   innsegl-ca-store:
     name: ${INNSEGL_CA_STORE_NETWORK:-innsegl-ca-store}
-  # ADR-0076. MEMBERS: innsegl-ca-custodian and innsegl-mcp (which joins it
+  # ADR-0076. MEMBERS: innsegl-ca-custodian and innsegl-core (which joins it
   # from deploy/compose/innsegl.custody.yml). Internal: it reaches nothing.
   innsegl-ca-unlock:
     name: ${INNSEGL_CA_UNLOCK_NETWORK:-innsegl-ca-unlock}

@@ -10,7 +10,7 @@ import (
 )
 
 // OPS-173 (proposed for doc 07) — the stack runs SEG-005's canary on a
-// schedule (doc 05 §2), records it where innsegl-mcp reads it, and never asks
+// schedule (doc 05 §2), records it where innsegl-core reads it, and never asks
 // the scoped identity for a retention it cannot set.
 //
 // The scoped object store identity is refused PutObjectRetention by design
@@ -32,7 +32,7 @@ func TestOPS173TheStackSchedulesTheCanaryWithoutAskingForRetention(t *testing.T)
 	for _, c := range []struct {
 		cfg     composeConfig
 		service string
-	}{{plain, "innsegl-mcp"}, {separate, "innsegl-sealer"}} {
+	}{{plain, "innsegl-core"}, {separate, "innsegl-sealer"}} {
 		if v, _ := c.cfg.env(c.service, "INNSEGL_CANARY_INTERVAL"); v == "" || v == "0" {
 			t.Errorf("%s runs the sealer with no scheduled canary (INNSEGL_CANARY_INTERVAL=%q)", c.service, v)
 		}

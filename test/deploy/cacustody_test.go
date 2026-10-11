@@ -191,13 +191,13 @@ func TestOPS150TheCustodyNetworksAndTheCAsHands(t *testing.T) {
 	if got := members(sig, "innsegl-ca-unlock"); !reflect.DeepEqual(got, []string{"innsegl-ca-custodian"}) {
 		t.Errorf("the unlock network's Sigstore-side members are %v; want the custodian alone", got)
 	}
-	if got := members(core, "innsegl-ca-unlock"); !reflect.DeepEqual(got, []string{"innsegl-mcp"}) {
-		t.Errorf("the unlock network's core-side members are %v; want innsegl-mcp alone", got)
+	if got := members(core, "innsegl-ca-unlock"); !reflect.DeepEqual(got, []string{"innsegl-core"}) {
+		t.Errorf("the unlock network's core-side members are %v; want innsegl-core alone", got)
 	}
 	if n := sig.Networks["innsegl-ca-unlock"]; !n.Internal {
 		t.Error("the unlock network is not internal")
 	}
-	if url := core.Services["innsegl-mcp"].Environment["INNSEGL_CA_CUSTODIAN_URL"]; url == nil || *url == "" {
+	if url := core.Services["innsegl-core"].Environment["INNSEGL_CA_CUSTODIAN_URL"]; url == nil || *url == "" {
 		t.Error("the core is not told where the custodian is")
 	}
 

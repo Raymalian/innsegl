@@ -466,7 +466,7 @@ var storeCredentialHolders = []struct {
 	},
 	{
 		files:    []string{"deploy/compose/innsegl.yml"},
-		services: []string{"innsegl-mcp"},
+		services: []string{"innsegl-core"},
 		why: "by default the sealer runs inside the MCP process (ADR-0056), so the MCP " +
 			"is the service holding the store credential there. A narrowing applied only " +
 			"to innsegl-sealer would leave the default arrangement running as root",

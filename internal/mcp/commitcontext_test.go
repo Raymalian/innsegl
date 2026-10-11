@@ -28,7 +28,7 @@ import (
 //	host lowercase, org not     the server knows how it stores them
 //
 // It found the run id by reading a hook log and the case rule by running
-// `docker exec innsegl-mcp find /work`. Neither was in its brief. That is good
+// `docker exec innsegl-core find /work`. Neither was in its brief. That is good
 // debugging and it should not have been necessary.
 //
 // # Why this is a tool and not a better error message

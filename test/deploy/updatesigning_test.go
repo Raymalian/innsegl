@@ -23,7 +23,7 @@ import (
 // An update can leave the stack running but unable to sign: the services are
 // healthy, the CA cannot reach its key. scripts/update-signing.sh runs the
 // core's one-shot `innsegl signing-probe` (exit 0 ok, 35 failing, 36 could
-// not be set up) with `docker exec` into <prefix>-mcp.
+// not be set up) with `docker exec` into <prefix>-core.
 //
 //	OPS-190: after the services are up, a failing probe exits non-zero with
 //	  the reason and one repair line; a passing one exits 0; exit 36 is
@@ -32,13 +32,18 @@ import (
 //	OPS-191: a probe that already failed BEFORE the update is reported first,
 //	  and the failure after it says the update did not cause it.
 //
-// The fake core is a plain container named <prefix>-mcp whose `innsegl` prints
+// The fake core is a plain container named <prefix>-core whose `innsegl` prints
 // /out and exits with /rc, so the test needs no image of ours.
 // ---------------------------------------------------------------------------
 
 func fakeCore(t *testing.T, prefix string, fulcio bool) {
 	t.Helper()
-	name := prefix + "-mcp"
+	fakeCoreNamed(t, prefix+"-core", fulcio)
+}
+
+// fakeCoreNamed starts the fake core under any container name.
+func fakeCoreNamed(t *testing.T, name string, fulcio bool) {
+	t.Helper()
 	script := `printf '#!/bin/sh\ncat /out\nexit $(cat /rc)\n' > /usr/local/bin/innsegl; ` +
 		`chmod +x /usr/local/bin/innsegl; echo 0 > /rc; echo 'signing: ok - the CA issued a certificate at T' > /out; exec sleep 3600`
 	args := []string{"run", "-d", "--name", name, "--network", "none"}
@@ -66,7 +71,7 @@ func fakeCore(t *testing.T, prefix string, fulcio bool) {
 func setProbe(t *testing.T, prefix string, rc int, out string) {
 	t.Helper()
 	cmd := fmt.Sprintf("echo %d > /rc; cat > /out", rc)
-	c := exec.CommandContext(t.Context(), "docker", "exec", "-i", prefix+"-mcp", "sh", "-c", cmd)
+	c := exec.CommandContext(t.Context(), "docker", "exec", "-i", prefix+"-core", "sh", "-c", cmd)
 	c.Stdin = strings.NewReader(out + "\n")
 	if b, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("setting the probe result: %v\n%s", err, b)
@@ -195,5 +200,24 @@ func TestOPS191ACoreBuiltBeforeTheProbeIsNotAFailure(t *testing.T) {
 	}
 	if !strings.Contains(out, "signing: not checked before the update") {
 		t.Errorf("want one line saying it was not checked:\n%s", out)
+	}
+}
+
+// OPS-197 (RM-346, #594): the update onto the rename finds the core running
+// under its old name (the prefix, then -mcp). `before` probes that one, so a CA
+// that already could not sign is still reported before the update; `after`
+// never does, because by then the old container must have been replaced.
+func TestOPS197BeforeProbesACoreStillUnderItsOldName(t *testing.T) {
+	requireDocker(t, "OPS-197")
+	prefix := uniqueName(t, "ops197")
+	fakeCoreNamed(t, prefix+"-mcp", true)
+
+	out, rc := runSigning(t, prefix, "before")
+	if rc != 0 || !strings.Contains(out, "signing: ok") {
+		t.Errorf("before: want the old-named core probed (exit 0, 'signing: ok'), got %d:\n%s", rc, out)
+	}
+	out, rc = runSigning(t, prefix, "after")
+	if rc == 0 || !strings.Contains(out, prefix+"-core is not running") {
+		t.Errorf("after: an old-named core must not stand in for the new one (exit %d):\n%s", rc, out)
 	}
 }

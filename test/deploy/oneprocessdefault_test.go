@@ -31,14 +31,14 @@ func TestRM211OneProcessIsBuiltIn(t *testing.T) {
 	} {
 		plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
 
-		also, _ := plain.env("innsegl-mcp", "INNSEGL_MCP_ALSO")
+		also, _ := plain.env("innsegl-core", "INNSEGL_MCP_ALSO")
 		have := map[string]bool{}
 		for _, name := range strings.Split(also, ",") {
 			have[strings.TrimSpace(name)] = true
 		}
 		for _, want := range []string{"seal", "reconcile", "reap", "gateway"} {
 			if !have[want] {
-				t.Errorf("%v with no profile: innsegl-mcp's INNSEGL_MCP_ALSO = %q, which does not run %s",
+				t.Errorf("%v with no profile: innsegl-core's INNSEGL_MCP_ALSO = %q, which does not run %s",
 					files, also, want)
 			}
 		}
@@ -62,7 +62,7 @@ func TestRM211OneProcessIsBuiltIn(t *testing.T) {
 	// topology runs the MCP with the reaper alone.
 	t.Setenv("INNSEGL_MCP_ALSO", "reap")
 	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, "deploy/compose/innsegl.yml")
-	if also, _ := cfg.env("innsegl-mcp", "INNSEGL_MCP_ALSO"); also != "reap" {
-		t.Errorf("INNSEGL_MCP_ALSO=reap is not honoured: innsegl-mcp gets %q", also)
+	if also, _ := cfg.env("innsegl-core", "INNSEGL_MCP_ALSO"); also != "reap" {
+		t.Errorf("INNSEGL_MCP_ALSO=reap is not honoured: innsegl-core gets %q", also)
 	}
 }

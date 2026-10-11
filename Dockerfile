@@ -2,7 +2,7 @@
 #
 # The innsegl image (RM-076, #109).
 #
-# ONE IMAGE, FIVE ROWS. doc 05 §1 gives `innsegl-mcp`, `innsegl-reconciler` and
+# ONE IMAGE, FIVE ROWS. doc 05 §1 gives the MCP server (`innsegl-core`), `innsegl-reconciler` and
 # `innsegl-sealer` the same "built (same binary, subcommand)" note, and doc 05
 # §3.1 adds the rule that decides the rest: "the verification BFF is the same
 # Go binary as the CLI, never a second implementation at the edge (threat model
@@ -115,7 +115,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/g
 # `target:`, so every service that builds this file without one gets whatever
 # stage happens to be LAST. This stage was unnamed and last, so it was also the
 # default — until `ca-bootstrap` was added after it, which silently moved the
-# default to a one-shot CA tool. Measured 2026-09-18: a rebuild of innsegl-mcp
+# default to a one-shot CA tool. Measured 2026-09-18: a rebuild of innsegl-core
 # produced an image whose entrypoint was ca-bootstrap, and the container
 # crash-looped asking for a secret store. Six services build through the shared
 # anchor and every one of them was affected; nothing failed at build time,
@@ -168,7 +168,7 @@ RUN mkdir -p /mirror && chown 1000:1000 /mirror && chmod 0700 /mirror
 RUN mkdir -p /dashboard-tls && chown 1000:1000 /dashboard-tls && chmod 0700 /dashboard-tls
 
 # /message-key is RM-237's own derived agent-message key (E19, #395-#397): a
-# named volume mounted read-write into innsegl-mcp and read-only into
+# named volume mounted read-write into innsegl-core and read-only into
 # innsegl-api, so the run page's query API can VERIFY a brief or a reply's
 # own keyed digest without ever holding -identity-secret. 0700, not the
 # 1000:1000-owned default other volumes above get: this one holds
@@ -180,7 +180,7 @@ RUN mkdir -p /dashboard-tls && chown 1000:1000 /dashboard-tls && chmod 0700 /das
 RUN mkdir -p /message-key && chown 1000:1000 /message-key && chmod 0700 /message-key
 
 # /run/innsegl/gateway-ca-key holds the gateway's own CA private key
-# (RM-246), on a named volume only innsegl-mcp mounts. 0700 is the mode
+# (RM-246), on a named volume only innsegl-core mounts. 0700 is the mode
 # internal/gateway enforces on every start; without the directory here a
 # fresh volume came up root-owned, the chmod failed, and the MCP restarted in
 # a loop (measured 2026-10-06, #470).

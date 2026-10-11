@@ -54,7 +54,7 @@ func TestOPS127BindAddressIsConfigurableAndLoopbackByDefault(t *testing.T) {
 	bound := publishedHosts(interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml"))
 
 	exposed := map[string]bool{
-		"innsegl-mcp:" + strconv.Itoa(gatewayContainerPort):      true,
+		"innsegl-core:" + strconv.Itoa(gatewayContainerPort):     true,
 		"innsegl-api:" + strconv.Itoa(dashboardContainerPort):    true,
 		"innsegl-api:" + strconv.Itoa(dashboardTLSContainerPort): true,
 	}
@@ -96,7 +96,7 @@ func TestOPS127TheServiceSeesTheExposureVariables(t *testing.T) {
 	t.Setenv("INNSEGL_GATEWAY_CLIENT_AUTH", "spiffe")
 	t.Setenv("INNSEGL_GATEWAY_CERT_NAMES", "<core-name>")
 	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
-	env := cfg.service(t, "innsegl-mcp").Environment
+	env := cfg.service(t, "innsegl-core").Environment
 
 	want := map[string]string{
 		"INNSEGL_BIND":                bindDocAddr,
@@ -106,12 +106,12 @@ func TestOPS127TheServiceSeesTheExposureVariables(t *testing.T) {
 	for k, v := range want {
 		got, ok := env[k]
 		if !ok || got == nil || *got != v {
-			t.Errorf("innsegl-mcp environment %s = %v, want %q", k, got, v)
+			t.Errorf("innsegl-core environment %s = %v, want %q", k, got, v)
 		}
 	}
 	dsn, ok := env["INNSEGL_GATEWAY_ACCOUNTS_DSN"]
 	if !ok || dsn == nil || *dsn == "" {
-		t.Fatalf("innsegl-mcp environment carries no INNSEGL_GATEWAY_ACCOUNTS_DSN")
+		t.Fatalf("innsegl-core environment carries no INNSEGL_GATEWAY_ACCOUNTS_DSN")
 	}
 	api := cfg.service(t, "innsegl-api").Environment["INNSEGL_API_AUTH_DSN"]
 	if api == nil || *api != *dsn {

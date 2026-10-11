@@ -147,7 +147,7 @@ On the dashboard's **Verify a commit** page:
 From the core instead, with the history copied out of the core:
 
 ```sh
-docker exec innsegl-mcp cat /run/innsegl/trust/trust-history.json > /tmp/trust-history.json
+docker exec innsegl-core cat /run/innsegl/trust/trust-history.json > /tmp/trust-history.json
 INNSEGL_FULCIO_URL=http://127.0.0.1:5555 INNSEGL_REKOR_URL=http://127.0.0.1:$(scripts/rekor-port.sh) INNSEGL_OIDC_ISSUER=http://spire-oidc:8080 innsegl verify <sha> --repo <clone> --trust-history /tmp/trust-history.json
 ```
 
@@ -199,6 +199,6 @@ rotate forward again instead.
 | Gap | What to do instead |
 |---|---|
 | A lost CA key cannot be archived, so the script refuses (exit 4) | Restore the CA volume from the trust-key backup, then rotate. |
-| Key custody hosts are refused | Rotate the key in the store and re-mint the root; record the new root with `docker exec -i innsegl-mcp innsegl trust-history record --kind fulcio_root < root.pem`, and end the old one with `innsegl trust-history end`. |
+| Key custody hosts are refused | Rotate the key in the store and re-mint the root; record the new root with `docker exec -i innsegl-core innsegl trust-history record --kind fulcio_root < root.pem`, and end the old one with `innsegl trust-history end`. |
 | The transparency log's key is not rotated by this | The trust history already accepts more than one log key; there is no script for it yet. |
 | A rotation is not an event in the ledger | The trust history and its backups are the record. A ledger event is a protected schema change (ADR-0073). |

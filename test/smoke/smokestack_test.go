@@ -674,7 +674,7 @@ func (s *stack) spireServer(ctx context.Context, args ...string) (string, error)
 // clone, not from this working tree — and the pinned gitsign, for the
 // container's platform.
 //
-// doc 05 §1 lists `innsegl-mcp` and `demo-agent` as *built* compose services.
+// doc 05 §1 lists the MCP server (now `innsegl-core`) and `demo-agent` as *built* compose services.
 // They have no Dockerfile and no compose service; until they do, the shipped
 // binary is bind-mounted into a stock image, which is exactly what
 // internal/verify's VER-001 already does with the verifier. It is the same

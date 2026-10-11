@@ -80,7 +80,7 @@ func TestTheAPIServesTheDashboard(t *testing.T) {
 	}
 	cfg := allProfilesConfig(ctx, t)
 	apiSvc := cfg.service(t, "innsegl-api")
-	mcp := cfg.service(t, "innsegl-mcp")
+	mcp := cfg.service(t, "innsegl-core")
 
 	// Its own image, from the api target; the core keeps the runtime one,
 	// so a UI change restarts innsegl-api alone.
@@ -88,10 +88,10 @@ func TestTheAPIServesTheDashboard(t *testing.T) {
 		t.Errorf("innsegl-api builds %+v, want the Dockerfile's api target", apiSvc.Build)
 	}
 	if mcp.Build == nil || mcp.Build.Target != "runtime" {
-		t.Errorf("innsegl-mcp builds %+v, want the runtime target", mcp.Build)
+		t.Errorf("innsegl-core builds %+v, want the runtime target", mcp.Build)
 	}
 	if apiSvc.Image == mcp.Image {
-		t.Errorf("innsegl-api and innsegl-mcp share the image %s; a UI change would restart the core", apiSvc.Image)
+		t.Errorf("innsegl-api and innsegl-core share the image %s; a UI change would restart the core", apiSvc.Image)
 	}
 
 	env := func(k string) string {
@@ -156,7 +156,7 @@ func TestTheAPIServesTheDashboard(t *testing.T) {
 	}
 	for name, svc := range cfg.Services {
 		for _, v := range svc.Volumes {
-			if v.Source == dashboardTLSVolume && !v.ReadOnly && name != "innsegl-mcp" {
+			if v.Source == dashboardTLSVolume && !v.ReadOnly && name != "innsegl-core" {
 				t.Errorf("%s mounts %s read-write; only the core writes it", name, dashboardTLSVolume)
 			}
 		}
