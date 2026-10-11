@@ -31,7 +31,7 @@ COVERPROFILE := cover.out
         innsegl-stack-clean innsegl-up-here verify-branch \
         install-hooks \
         verify-branch-selftest start backup-freshness update innsegl-here-services link clean \
-        image-bundle dev-stack stack-announce
+        image-bundle dev-stack stack-announce innsegl-ledger-lease innsegl-freeze innsegl-thaw
 
 all: build test lint
 
@@ -1030,6 +1030,22 @@ innsegl-retire:
 	@test -n "$(RUN)" || { echo 'usage: make innsegl-retire RUN=<run_id>'; exit 2; }
 	@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl retire '$(RUN)'
+
+## innsegl-ledger-lease: say which core holds the writer lease, and whether the ledger is frozen
+#
+# RM-326: run inside the core's container, with its own ledger credential. A
+# core waiting for the lease or for a thaw is still running, so this reaches it.
+innsegl-ledger-lease:
+	@$(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl ledger lease
+
+## innsegl-freeze: freeze the ledger before copying it (REASON=<why>); no core serves it until thawed
+innsegl-freeze:
+	@test -n "$(REASON)" || { echo 'usage: make innsegl-freeze REASON=<why>'; exit 2; }
+	@$(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl ledger freeze -reason '$(REASON)'
+
+## innsegl-thaw: end a freeze; the waiting core takes the writer lease and serves
+innsegl-thaw:
+	@$(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl ledger thaw
 
 ## innsegl-init: run `innsegl init` as a one-shot workload on the admin network
 #

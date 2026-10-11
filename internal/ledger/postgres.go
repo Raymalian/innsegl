@@ -148,6 +148,37 @@ var ledgerAssignedByStore = []string{event.FieldEventID}
 // here writes: Migrate does that, separately, so that a read-only consumer can
 // open a store without holding DDL rights.
 func Open(ctx context.Context, dsn string) (*Store, error) {
+	w := ""
+	if p := processWriter.Load(); p != nil {
+		w = *p
+	}
+	return open(ctx, dsn, w)
+}
+
+// processWriter is the writer lease holder this process runs as, when it
+// holds one: every store Open opens afterwards names it as the writer, so a
+// core's companions are fenced with it. Empty is none.
+var processWriter atomic.Pointer[string]
+
+// UseProcessWriter makes every store opened afterwards by Open name holder
+// as the writer (RM-326). The core sets it once it holds the writer lease,
+// and clears it ("") when it releases it.
+func UseProcessWriter(holder string) { processWriter.Store(&holder) }
+
+// OpenAs is Open for a core that holds the writer lease as holder (RM-326,
+// lease.go): every connection names holder as the writer, and the
+// database refuses its appends once holder no longer holds a live lease.
+func OpenAs(ctx context.Context, dsn, holder string) (*Store, error) {
+	if strings.TrimSpace(holder) == "" {
+		return nil, &StoreError{
+			Class: ClassInvariantViolation, Op: "open", Retryable: false,
+			Err: errors.New("a writer store needs the holder of the writer lease"),
+		}
+	}
+	return open(ctx, dsn, holder)
+}
+
+func open(ctx context.Context, dsn, writer string) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, &StoreError{
@@ -159,6 +190,9 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	// never assembled from strings, so the cache is a straight win and the
 	// only string interpolation in this package is the migration SQL itself.
 	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheStatement
+	if writer != "" {
+		cfg.ConnConfig.RuntimeParams[writerSetting] = writer
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -826,6 +860,13 @@ func classify(op string, err error) error {
 				Class: ClassInvariantViolation, Op: op, Retryable: false,
 				Err: ErrAlreadyRetired,
 			}
+		case pgErr.Code == FrozenSQLState:
+			// RM-326: frozen on purpose; no retry thaws it.
+			return unavailable(false)
+		case pgErr.Code == NotWriterSQLState:
+			// RM-326: another core holds the lease. This core stops; the
+			// caller may retry against the one that holds it.
+			return unavailable(true)
 		case pgErr.Code == AppendOnlySQLState, pgErr.Code == ChainLinkSQLState:
 			// The database refused to break the ledger. That is never a
 			// transport problem and never worth retrying.

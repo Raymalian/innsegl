@@ -25,10 +25,12 @@ dispatch table is `commands` in `cmd/innsegl/cli.go`; a test asserts the set.
 | `innsegl git-hook` | git's hooks: add the run's trailers; after a signed commit, send its branch to the core's mirror | [commit-path.md](commit-path.md) |
 | `innsegl hook` | the harness hooks: a git commit's tool call id, the session's workspace, a tool call's snapshot | [commit-path.md](commit-path.md) |
 | `innsegl init` | set up signed commits in one repository end to end | [commit-path.md](commit-path.md) |
+| `innsegl ledger` | say who holds the writer lease, and freeze or thaw the ledger | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl link` | install the git hooks the commit path needs in a repository | [commit-path.md](commit-path.md) |
 | `innsegl migrate-schema` | attest a major schema cutover in this chain | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl reap` | delete identity entries orphaned past their TTL | [reconciler-and-reaper.md](reconciler-and-reaper.md) |
 | `innsegl reconcile` | reconcile signing intents against the transparency log | [reconciler-and-reaper.md](reconciler-and-reaper.md) |
+| `innsegl resign` | sign the unsigned commits of a range on this branch again, through the core | [commit-path.md](commit-path.md) |
 | `innsegl retire` | end a run an operator knows is over; runs on the core | [identity.md](identity.md) |
 | `innsegl seal` | seal ledger segments and anchor them in the log | [ledger-and-segments.md](ledger-and-segments.md) |
 | `innsegl serve` | run the core: the MCP server (its wire surface deprecated, ADR-0077) and, with `-also`, the gateway and the loops | [identity.md](identity.md), [gateway.md](gateway.md) |

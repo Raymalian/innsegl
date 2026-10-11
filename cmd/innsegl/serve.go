@@ -89,6 +89,7 @@ const (
 	envMCPAddrFile           = "INNSEGL_MCP_ADDR_FILE"
 	envRunTTL                = "INNSEGL_RUN_TTL"
 	envIdempotencyLease      = "INNSEGL_IDEMPOTENCY_LEASE"
+	envWriterLeaseTTL        = "INNSEGL_WRITER_LEASE_TTL"
 	envRegisterRateCalls     = "INNSEGL_REGISTER_RATE_CALLS"
 	envRegisterRateWindow    = "INNSEGL_REGISTER_RATE_WINDOW"
 	envClockSkewBound        = "INNSEGL_CLOCK_SKEW_BOUND"
@@ -181,11 +182,13 @@ const (
 
 // serveOptions is the resolved command line.
 type serveOptions struct {
-	dsn          string
-	spireAddress string
-	trustDomain  string
-	serverID     string
-	parentID     string
+	// writerLeaseTTL is how long the writer lease lasts unrenewed (RM-326).
+	writerLeaseTTL time.Duration
+	dsn            string
+	spireAddress   string
+	trustDomain    string
+	serverID       string
+	parentID       string
 
 	// The admin credential, one of two ways. See servewiring.go.
 	workloadAPI string
@@ -523,7 +526,7 @@ func (d serveDeps) opener() func(context.Context, serveOptions, *serveLog) (serv
 	if d.open != nil {
 		return d.open
 	}
-	return openServer
+	return withWriterLease(openServer, writerLeasePoll)
 }
 
 // serveCommand is the subcommand body wired into cli.go's dispatch table.
@@ -841,6 +844,9 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 			"bound on one SPIRE admin RPC ($"+envSPIRETimeout+")")
 		runTTL = fs.Duration("run-ttl", envDuration(envRunTTL, 0),
 			"identity lifetime asked for per run; 0 uses internal/spire's default ($"+envRunTTL+")")
+		writerLeaseTTL = fs.Duration("writer-lease-ttl", envDuration(envWriterLeaseTTL, defaultWriterLeaseTTL),
+			"how long the writer lease lasts unrenewed: one core writes a ledger at a time, and a core "+
+				"that stopped without releasing it holds the next one up for at most this ($"+envWriterLeaseTTL+")")
 		lease = fs.Duration("idempotency-lease", envDuration(envIdempotencyLease, mcp.DefaultIdempotencyLease),
 			"how long one idempotency claim is honoured before another caller may take it over ($"+envIdempotencyLease+")")
 		rateCalls = fs.Int("register-rate-calls", envInt(envRegisterRateCalls, mcp.DefaultRegisterAgentRateLimitCalls),
@@ -964,7 +970,7 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		gitsignPath:         *gitsignPath,
 		listen:              *listen, adminListen: *adminListen, adminJWKS: *adminJWKS, also: alsoRun,
 		healthListen: *healthListen, addrFile: *addrFile,
-		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease,
+		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease, writerLeaseTTL: *writerLeaseTTL,
 		rateCalls: *rateCalls, rateWindow: *rateWindow,
 		clockSkewBound: *clockSkewBound, trustedOrigins: splitOrigins(*trustedOrigins),
 		sessionTimeout: *sessionTimeout, shutdownTimeout: *shutdownTimeout,
@@ -1070,6 +1076,8 @@ func (o serveOptions) validate() string {
 	case o.rateCalls > 0 && o.rateWindow <= 0:
 		return fmt.Sprintf("-register-rate-window %s is not positive; a limit measured over "+
 			"no time is not a limit", o.rateWindow)
+	case o.writerLeaseTTL < 0:
+		return "-writer-lease-ttl must not be negative; 0 is the default"
 	case o.lease < 0:
 		return "-idempotency-lease is negative"
 	case o.shutdownTimeout < 0:

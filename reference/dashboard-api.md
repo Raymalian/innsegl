@@ -56,6 +56,13 @@ other organisation never does, and `-hide-unowned-runs` hides them from
 the operator too. A run outside the viewer's scope answers 404 with the
 same body as a run that does not exist. Alerts with no run are unowned.
 
+The overview also carries `unrouted_sessions` (RM-319): sessions the
+viewer's machines reported as sending model traffic that bypassed innsegl,
+newest activity first, at most 50, each with `installation_id`,
+`session_id`, `first_reported_at` and `last_activity_at`. The dashboard lists
+them above the counts; none renders nothing
+([client-and-connect.md](client-and-connect.md)).
+
 A person in several organisations sees all of them at once, or one: the
 dashboard's switcher sets the `innsegl_organisation` cookie to an
 organisation id, and the reads narrow to it. A cookie naming an
@@ -279,6 +286,7 @@ organisation holds.
 
 ## Tests
 
+- `internal/api/unrouted_test.go` (API-039), `web/src/views/overview/unrouted.test.tsx` (FE-152)
 - `internal/api/*_test.go` (API-001 to API-033, AUTH-001 to AUTH-004,
   ALR-002 to ALR-004, RPG-001 to RPG-006)
 - `cmd/innsegl/api*_test.go` (API-008 to API-011, VER-001), `dashboardtls_test.go`

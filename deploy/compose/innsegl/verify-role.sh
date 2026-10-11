@@ -171,6 +171,8 @@ expect_refused "DELETE innsegl.idempotency" "DELETE FROM innsegl.idempotency WHE
 expect_refused "DELETE innsegl.pseudonyms" "DELETE FROM innsegl.pseudonyms WHERE false"
 expect_refused "UPDATE innsegl.pseudonyms" "UPDATE innsegl.pseudonyms SET literal = 'x' WHERE false"
 expect_refused "DELETE innsegl.repo_mode" "DELETE FROM innsegl.repo_mode WHERE false"
+# RM-326: the lease row is updated, never deleted.
+expect_refused "DELETE innsegl.writer_lease" "DELETE FROM innsegl.writer_lease WHERE false"
 # A role with CREATE anywhere is a role that can write. "It has no INSERT on
 # innsegl.events" would be a comforting half of the answer.
 expect_refused "CREATE TABLE in schema innsegl" "CREATE TABLE innsegl.verify_role_probe (x int)"

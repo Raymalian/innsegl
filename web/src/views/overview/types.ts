@@ -82,6 +82,18 @@ export interface OverviewData {
    * third thing and not a zero (P2). */
   readonly restore_horizon_seconds?: number;
   readonly data_as_of: string;
+  /** Sessions machines in scope reported as bypassing innsegl (RM-319),
+   * newest activity first. Absent from an older query API: read as none. */
+  readonly unrouted_sessions?: readonly UnroutedSession[];
+}
+
+/** One session a machine reported as bypassing innsegl
+ * (`internal/api/query.go`'s `UnroutedSession`). */
+export interface UnroutedSession {
+  readonly installation_id: string;
+  readonly session_id: string;
+  readonly first_reported_at: string;
+  readonly last_activity_at: string;
 }
 
 /**

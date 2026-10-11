@@ -98,6 +98,7 @@ func (e errCoreFailed) Error() string {
 // serveModel handles one model request: held for a resend, then to the core,
 // or straight to the provider while the core is known to be down.
 func (s *Server) serveModel(w http.ResponseWriter, r *http.Request) {
+	s.noteRouted(r.Header.Get("X-Claude-Code-Session-Id"))
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxReplayableBytes+1))
 	if err != nil {
 		http.Error(w, "innsegl client: reading the request: "+err.Error(), http.StatusBadRequest)

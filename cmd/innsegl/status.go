@@ -78,6 +78,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 	if local == "" {
 		local = "http://" + enrolledListen(paths)
 	}
+	var unrouted []client.UnroutedSession
 	if svc, err := localClientStatus(ctx, local); err != nil {
 		line("client service", false, "not answering at "+local+"; start it: "+client.RestartCommand(runtime.GOOS))
 	} else {
@@ -86,6 +87,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 			detail = "the core refused this machine's renewal; enrol again"
 		}
 		line("client service", !svc.Revoked, detail)
+		unrouted = svc.Unrouted
 	}
 
 	body, err := client.FetchCoreStatus(ctx, paths, local)
@@ -124,6 +126,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 			fmt.Fprintf(tw, "this machine\t%s\t%s, %s, %s, %s\n", in.Status, in.Name, in.Kind, in.Organisation, repos)
 		}
 	}
+	unroutedLines(tw, unrouted)
 	trustBackupLine(tw, paths, deps.now)
 	mirrorBehindLines(tw, paths)
 	if err := tw.Flush(); err != nil {
@@ -137,8 +140,19 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 }
 
 type localStatus struct {
-	Revoked              bool   `json:"revoked"`
-	CertificateExpiresAt string `json:"certificate_expires_at"`
+	Revoked              bool                     `json:"revoked"`
+	CertificateExpiresAt string                   `json:"certificate_expires_at"`
+	Unrouted             []client.UnroutedSession `json:"unrouted_sessions"`
+}
+
+// unroutedLines warns for each session whose model traffic did not pass
+// through innsegl (RM-319). A finding, not an outage: the exit status stays.
+func unroutedLines(tw io.Writer, sessions []client.UnroutedSession) {
+	for _, s := range sessions {
+		fmt.Fprintf(tw, "unrouted\tWARN\tsession %s in %s sent model traffic that did not pass through "+
+			"innsegl, last at %s; it is not recorded. Start it again after `innsegl connect`\n",
+			s.SessionID, s.Repo, s.LastActivity.UTC().Format(time.RFC3339))
+	}
 }
 
 // localStatusTimeout is longer than the client's own probe of the core

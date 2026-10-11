@@ -36,6 +36,14 @@ export const strings = {
       `The ${name} ${warning}, on ${date}. Plan its rotation now; ADR-0073 records how a rotated root keeps old commits verifiable.`,
   },
 
+  unrouted: {
+    regionLabel: "Sessions that bypassed innsegl",
+    /* RM-319: a session whose model traffic did not pass through innsegl,
+     * the machine that reported it, and when it was last active. */
+    line: (session: string, machine: string, at: string) =>
+      `Session ${session} on machine ${machine} sent model traffic that did not pass through innsegl, last at ${at}. It is not recorded; start it again after \`innsegl connect\`.`,
+  },
+
   page: {
     summary:
       "What the ledger holds, and how far behind the public record is.",

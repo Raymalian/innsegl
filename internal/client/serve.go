@@ -90,6 +90,9 @@ type Server struct {
 	recordedMu sync.Mutex
 	recorded   map[string]int64
 
+	// unrouted is the unrouted-session detector (RM-319, unrouted.go).
+	unrouted *unroutedState
+
 	// The proxy (RM-329, connectproxy.go).
 	proxyCA     *proxyCA
 	passThrough *httputil.ReverseProxy
@@ -114,6 +117,10 @@ type ServerOptions struct {
 	// CoreDownFor is how long model requests skip the core after it failed
 	// to answer; zero means DefaultCoreDownFor.
 	CoreDownFor time.Duration
+	// TranscriptDirs are where the harness keeps its session transcripts,
+	// read by the unrouted-session detector; empty means the harness's own
+	// folder (defaultTranscriptDirs).
+	TranscriptDirs []string
 }
 
 // NewServer loads the enrolment from paths. It refuses a key that is not
@@ -188,6 +195,7 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 	}
 	s.migrateOldLayout(paths.Dir)
 	s.loadWatchedSessions()
+	s.initUnrouted(opts.TranscriptDirs)
 	if _, err := os.Stat(paths.Revoked); err == nil {
 		s.revoked.Store(true)
 		s.log.Printf("%v; refusing every request. Run `innsegl connect --disconnect`, then enrol again.", ErrRevoked)
@@ -457,6 +465,9 @@ type Status struct {
 	// model requests by whether it recorded them: "true", "false" (the
 	// client journaled it), "none" (no repository; nothing to record).
 	Recorded map[string]int64 `json:"recorded"`
+	// Unrouted are the sessions whose model traffic did not pass through
+	// innsegl (RM-319), newest activity first.
+	Unrouted []UnroutedSession `json:"unrouted_sessions,omitempty"`
 }
 
 // countRecorded notes one answer of the core to a model request.
@@ -490,6 +501,7 @@ func (s *Server) Status(ctx context.Context) Status {
 		Outbox: s.outbox.status(),
 	}
 	st.Recorded = s.recordedCounts()
+	st.Unrouted = s.unroutedFindings()
 	st.CoreReachable = s.reachable(ctx)
 	return st
 }

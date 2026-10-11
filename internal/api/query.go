@@ -263,6 +263,47 @@ type RunDetail struct {
 	DataAsOf              time.Time `json:"data_as_of"`
 }
 
+// UnroutedSession is one session a machine reported as bypassing innsegl.
+type UnroutedSession struct {
+	InstallationID  string    `json:"installation_id"`
+	SessionID       string    `json:"session_id"`
+	FirstReportedAt time.Time `json:"first_reported_at"`
+	LastActivityAt  time.Time `json:"last_activity_at"`
+}
+
+// maxUnroutedSessions bounds the overview's list.
+const maxUnroutedSessions = 50
+
+const unroutedSQL = `
+SELECT installation_id, session_id, first_reported_at, last_activity_at
+  FROM innsegl.unrouted_sessions
+ WHERE $1::text[] IS NULL OR installation_id = ANY($1::text[])
+ ORDER BY last_activity_at DESC, session_id
+ LIMIT $2`
+
+// unroutedSessions reads the overview's list in the caller's scope.
+func (s *Store) unroutedSessions(ctx context.Context) ([]UnroutedSession, error) {
+	machines, _ := scopeArgs(ctx)
+	rows, err := s.pool.Query(ctx, unroutedSQL, machines, maxUnroutedSessions)
+	if err != nil {
+		return nil, fmt.Errorf("api: reading the unrouted sessions: %w", err)
+	}
+	defer rows.Close()
+	out := []UnroutedSession{}
+	for rows.Next() {
+		var u UnroutedSession
+		if err := rows.Scan(&u.InstallationID, &u.SessionID, &u.FirstReportedAt, &u.LastActivityAt); err != nil {
+			return nil, fmt.Errorf("api: reading an unrouted session: %w", err)
+		}
+		u.FirstReportedAt, u.LastActivityAt = u.FirstReportedAt.UTC(), u.LastActivityAt.UTC()
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("api: reading the unrouted sessions: %w", err)
+	}
+	return out, nil
+}
+
 // AnchorHeartbeat is FD §3.1's tamper-evidence pulse: the newest sealed
 // segment and whether Rekor has it yet.
 type AnchorHeartbeat struct {
@@ -304,6 +345,10 @@ type Overview struct {
 	// with; 0 means the deployment set none, and nothing is ever abandoned.
 	RestoreHorizonSeconds int64     `json:"restore_horizon_seconds"`
 	DataAsOf              time.Time `json:"data_as_of"`
+	// UnroutedSessions are the sessions machines in scope reported as
+	// sending model traffic that bypassed innsegl (RM-319), newest activity
+	// first, at most maxUnroutedSessions. Never null.
+	UnroutedSessions []UnroutedSession `json:"unrouted_sessions"`
 }
 
 // runIndexCTE derives the runs table from the event chain. It is shared by
@@ -708,10 +753,15 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 	o.RestoreHorizonSeconds = int64(horizon.Seconds())
 	o.IdleAfterSeconds = int64(s.idleAfter.Seconds())
 	o.DataAsOf = now
+	unrouted, err := s.unroutedSessions(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
+	o.UnroutedSessions = unrouted
 
 	var sealedAt time.Time
 	var body map[string]any
-	err := s.pool.QueryRow(ctx, anchorSQL).Scan(&sealedAt, &body)
+	err = s.pool.QueryRow(ctx, anchorSQL).Scan(&sealedAt, &body)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		// No segment has been sealed yet. Absent is not "anchored 0 minutes
