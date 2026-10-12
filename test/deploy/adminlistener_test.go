@@ -63,7 +63,7 @@ func TestOPS215DemoDryRunRunsNothing(t *testing.T) {
 	bin := t.TempDir()
 	calls := filepath.Join(t.TempDir(), "calls")
 	fake := "#!/bin/sh\necho \"docker $*\" >> '" + calls + "'\n"
-	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil { //nolint:gosec // a test's fake docker must be executable
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, mode := range []string{"dev", "live"} {
