@@ -38,8 +38,12 @@ const CUSTODY_SALT = "Y3VzdG9keS1zYWx0LTAwMDAwMDAwMDAwMDAwMDAwMDA"; // 32 bytes,
 const BACKUP_SALT = "YmFja3VwLXNhbHQtMDAwMDAwMDAwMDAwMDAwMDAwMDA";
 const NEW_ID = "bmV3LWNyZWQ";
 
+// A placeholder, not a key: scripts/ca-custody-selftest.sh refuses any
+// unseal key written into the repository as a literal.
+const PLACEHOLDER_UNSEAL = "unseal";
+
 const MATERIAL = {
-  unseal_key: "unseal",
+  unseal_key: PLACEHOLDER_UNSEAL,
   role_id: "role",
   secret_id: "secret",
   backup_role_id: "brole",

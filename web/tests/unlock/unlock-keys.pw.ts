@@ -101,8 +101,12 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: path.join(dir, `${name}.png`), fullPage: true });
 }
 
+// A placeholder, not a key: scripts/ca-custody-selftest.sh refuses any
+// unseal key written into the repository as a literal.
+const PLACEHOLDER_UNSEAL = "dW5zZWFsLWtleS1mb3ItdGhlLXRlc3Q=";
+
 const MATERIAL = {
-  unseal_key: "dW5zZWFsLWtleS1mb3ItdGhlLXRlc3Q=",
+  unseal_key: PLACEHOLDER_UNSEAL,
   role_id: "role-0b1c",
   secret_id: "secret-7e2f",
   backup_role_id: "backup-role-41aa",

@@ -245,7 +245,7 @@ func (s stack) load(t *testing.T) (*owner, bool) {
 		t.Fatal(err)
 	}
 	var f ownerFile
-	if err := json.Unmarshal(raw, &f); err != nil {
+	if err = json.Unmarshal(raw, &f); err != nil {
 		t.Fatalf("%s: %v", s.ownerPath(), err)
 	}
 	a, err := webauthntest.Import(f.Passkey)
@@ -461,7 +461,7 @@ func readCA(t *testing.T, path string) *x509.Certificate {
 // operator's own client service (127.0.0.1:28195).
 func freeLoopback(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +492,12 @@ func startClientService(t *testing.T, bin, home, listen string) *clientService {
 		t.Fatal(err)
 	}
 	svc := &clientService{cmd: cmd, cancel: cancel, log: &log, done: make(chan struct{})}
-	go func() { _ = cmd.Wait(); close(svc.done) }()
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			fmt.Fprintf(&log, "innsegl client serve: %v\n", err)
+		}
+		close(svc.done)
+	}()
 	t.Cleanup(svc.stop)
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
 		resp, err := http.Get("http://" + listen + "/_client/status") //nolint:noctx // a probe loop

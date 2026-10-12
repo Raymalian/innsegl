@@ -135,7 +135,7 @@ func TestOPS209AnUnlockKeyAloneUnlocksTheDevStack(t *testing.T) {
 		t.Fatalf("enrolling the operator's machine: %v", err)
 	}
 	listen := freeLoopback(t)
-	if err := client.WriteEnrolment(paths, e, listen); err != nil {
+	if err = client.WriteEnrolment(paths, e, listen); err != nil {
 		t.Fatal(err)
 	}
 	svc := startClientService(t, bin, home, listen)
