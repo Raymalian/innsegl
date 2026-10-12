@@ -27,18 +27,14 @@
 # SDK, and asserted in far more detail — OPS-004 is the release gate and this
 # is the operator-facing artifact. Two clients over one protocol is the point.
 #
-# RUN IT: `make innsegl-demo`, against a core `make start` brought up. It runs
-# this script with --no-deps, and hands it the identity lifecycle's listener
-# and a credential for the demo's repository when the core has one (#624).
+# RUN IT: `make innsegl-demo`, on a dev stack (ADR-0083: it serves the
+# identity lifecycle on the agent listener for the run).
 #
-# THE TWO LISTENERS AND THE RUN TOKEN (RM-372, #624). A core started by `make
-# start` serves register_agent and retire_agent on their own listener, behind
-# a repository-scoped credential (#170, #264): INNSEGL_MCP_ADMIN_URL and
-# INNSEGL_MCP_ADMIN_CREDENTIAL. Unset, every tool is asked at INNSEGL_MCP_URL.
-# And a run id alone is not authority (#341): get_credential and sign_commit
-# take the run_token register_agent returned. This script sent none, so
-# get_credential answered RUN_NOT_FOUND straight after a registration that
-# had worked; nothing ran it in a test. test/contract OPS-230 now does.
+# THE RUN TOKEN (RM-372, #624). A run id alone is not authority (#341):
+# get_credential and sign_commit take the run_token register_agent returned.
+# This script sent none, so get_credential answered RUN_NOT_FOUND straight
+# after a registration that had worked, and nothing ran it in a test.
+# test/contract OPS-230 now does.
 
 set -eu
 
@@ -52,10 +48,6 @@ readonly TOOL_RETIRE="retire_agent"
 readonly AUDIENCE="sigstore"
 
 MCP_URL="${INNSEGL_MCP_URL:-http://innsegl-core:8080}"
-# The identity lifecycle's listener and its credential. Empty: MCP_URL serves
-# every tool and asks for no credential.
-MCP_ADMIN_URL="${INNSEGL_MCP_ADMIN_URL:-}"
-ADMIN_CREDENTIAL="${INNSEGL_MCP_ADMIN_CREDENTIAL:-}"
 WORKSPACE="${INNSEGL_WORKSPACE:-/work}"
 # doc 02 §5's host/org/name. It is an IDENTIFIER, not a path: the MCP resolves
 # it beneath its own workspace root, and this script stages into the same tree
@@ -71,12 +63,6 @@ log()  { printf 'demo-agent: %s\n' "$*"; }
 fail() { printf 'demo-agent: FAIL: %s\n' "$*" >&2; exit 1; }
 
 SESSION=""
-# Which listener rpc() asks, and with what credential. use_agent and use_admin
-# set them; each listener has its own MCP session.
-CUR_URL="${MCP_URL}"
-CUR_AUTH=""
-AGENT_SESSION=""
-ADMIN_SESSION=""
 
 # SESSION_FILE is where rpc() leaves the Mcp-Session-Id it saw.
 #
@@ -108,9 +94,8 @@ rpc() {
       -H 'Content-Type: application/json' \
       -H 'Accept: application/json, text/event-stream' \
       ${SESSION:+-H "Mcp-Session-Id: ${SESSION}"} \
-      ${CUR_AUTH:+-H "Authorization: Bearer ${CUR_AUTH}"} \
       --data-binary "${body}" \
-      "${CUR_URL}")" || { rm -f "${headers}"; fail "POST ${method} to ${CUR_URL}: ${raw:-transport error}"; }
+      "${MCP_URL}")" || { rm -f "${headers}"; fail "POST ${method}: ${raw:-transport error}"; }
 
   sed -n 's/^[Mm]cp-[Ss]ession-[Ii]d:[[:space:]]*//p' "${headers}" \
     | tr -d '\r' | head -n 1 > "${SESSION_FILE}"
@@ -128,29 +113,8 @@ notify() {
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H "Mcp-Session-Id: ${SESSION}" \
-    ${CUR_AUTH:+-H "Authorization: Bearer ${CUR_AUTH}"} \
     --data-binary "$(printf '{"jsonrpc":"2.0","method":"%s"}' "$1")" \
-    "${CUR_URL}" >/dev/null
-}
-
-# open_session — initialize at CUR_URL and set SESSION. Called directly, never
-# inside $(...), for the reason SESSION_FILE gives.
-open_session() {
-  SESSION=""
-  init="$(rpc "initialize" '{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"innsegl-demo-agent","version":"v0"}}')"
-  SESSION="$(cat "${SESSION_FILE}")"
-  [ -n "${SESSION}" ] || fail "no Mcp-Session-Id on the initialize response from ${CUR_URL}: ${init}"
-  notify "notifications/initialized"
-  log "session with $(printf '%s' "${init}" | jq -r '.result.serverInfo.name // "?"') at ${CUR_URL}"
-}
-
-use_agent() { CUR_URL="${MCP_URL}"; CUR_AUTH=""; SESSION="${AGENT_SESSION}"; }
-use_admin() {
-  if [ -n "${MCP_ADMIN_URL}" ]; then
-    CUR_URL="${MCP_ADMIN_URL}"; CUR_AUTH="${ADMIN_CREDENTIAL}"; SESSION="${ADMIN_SESSION}"
-  else
-    use_agent
-  fi
+    "${MCP_URL}" >/dev/null
 }
 
 # with_token JSON — JSON with the run's token added, when the deployment
@@ -214,14 +178,11 @@ done
 # ---------------------------------------------------------------------------
 # 1. The MCP session.
 # ---------------------------------------------------------------------------
-use_agent
-open_session
-AGENT_SESSION="${SESSION}"
-if [ -n "${MCP_ADMIN_URL}" ]; then
-  CUR_URL="${MCP_ADMIN_URL}"; CUR_AUTH="${ADMIN_CREDENTIAL}"
-  open_session
-  ADMIN_SESSION="${SESSION}"
-fi
+init="$(rpc "initialize" '{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"innsegl-demo-agent","version":"v0"}}')"
+SESSION="$(cat "${SESSION_FILE}")"
+[ -n "${SESSION}" ] || fail "no Mcp-Session-Id on the initialize response: ${init}"
+notify "notifications/initialized"
+log "session with $(printf '%s' "${init}" | jq -r '.result.serverInfo.name // "?"') at ${MCP_URL}"
 
 # ---------------------------------------------------------------------------
 # 2. register_agent — I1: no identity without attestation.
@@ -234,7 +195,6 @@ fi
 #
 # `main` is the branch step 4 creates below, named here rather than read back
 # because the working tree does not exist yet at this point in the script.
-use_admin
 registered="$(tool "${TOOL_REGISTER}" "$(jq -nc \
   --arg t "${AGENT_TYPE}" --arg k "${TASK_REF}" --arg i "demo-${RUN_TAG}-register" \
   --arg r "${REPO}" --arg b "main" \
@@ -249,7 +209,6 @@ log "registered ${SPIFFE_ID} (run ${RUN_ID}, expires $(printf '%s' "${registered
 # ---------------------------------------------------------------------------
 # 3. get_credential — a real JWT-SVID, for the one audience Fulcio accepts.
 # ---------------------------------------------------------------------------
-use_agent
 credential="$(tool "${TOOL_CREDENTIAL}" "$(with_token "$(jq -nc \
   --arg r "${RUN_ID}" --arg a "${AUDIENCE}" '{run_id:$r, audience:$a}')")")"
 JWT="$(printf '%s' "${credential}" | jq -r '.jwt_svid')"
@@ -301,12 +260,10 @@ HEAD="$(demo_git rev-parse HEAD)"
 # spend it would be demonstrating the opposite of the claim, so the refusal is
 # part of the demonstration rather than an afterthought.
 # ---------------------------------------------------------------------------
-use_admin
 retired="$(tool "${TOOL_RETIRE}" "$(jq -nc --arg r "${RUN_ID}" '{run_id:$r}')")"
 log "retired ${RUN_ID} at $(printf '%s' "${retired}" | jq -r '.retired_at')"
 
 # With the token: the refusal must be retirement's, not the token gate's.
-use_agent
 refusal="$(tool_expect_refusal "${TOOL_CREDENTIAL}" "$(with_token "$(jq -nc \
   --arg r "${RUN_ID}" --arg a "${AUDIENCE}" '{run_id:$r, audience:$a}')")")" || \
   fail "get_credential SUCCEEDED after retire_agent. IP §6.2 makes retirement effective immediately, with no cached-credential grace path"

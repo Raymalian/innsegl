@@ -34,7 +34,7 @@ chmod +x "${BIN}" "${OTHER}"
 
 newhome() { HOMEDIR="$(mktemp -d "${TOP}/home.XXXXXX")"; LINK="${HOMEDIR}/.local/bin/innsegl"; }
 run() {
-  out="$(HOME="${HOMEDIR}" PATH="${1}" "${SCRIPT}" "${BIN}" 2>&1)"
+  out="$(HOME="${HOMEDIR}" PATH="${1}" INNSEGL_RELEASE_DIR="${TOP}/no-release" "${SCRIPT}" "${BIN}" 2>&1)"
   rc=$?
 }
 BASEPATH="/usr/bin:/bin"

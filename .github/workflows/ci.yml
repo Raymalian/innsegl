@@ -145,6 +145,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify every tracked source file carries the SPDX header
         run: ./scripts/spdx-check.sh
 
@@ -154,6 +156,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify no shipped file names a directory on the operator's machine
         run: ./scripts/no-operator-paths.sh
 
@@ -163,6 +167,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # A content gate's failure mode is silent: a grep that matches nothing
       # passes everything and reports success. This plants a violation and
       # requires the gate to catch it.
@@ -175,6 +181,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # RM-214. install.sh is what turns "know to run make start and make
       # link, then hand-edit two Claude Code files" into one command. Its own
       # bring-up and link steps are replaced by recorders here, and a fake
@@ -190,6 +198,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # OPS-169. `make build` signs the binary with a Developer ID on macOS
       # only, picking the newest-issued identity by its hash. Fakes stand in
       # for uname, security, openssl and codesign.
@@ -204,6 +214,11 @@ jobs:
       # a temporary HOME here; a file there that is not a link is left alone.
       - name: make build puts the binary on the PATH
         run: ./scripts/link-bin-selftest.sh
+      # OPS-211 (#599). `make install-release` installs a root-owned copy
+      # through one hash-checked sudo line; sudo and chown are fakes here,
+      # and the destination is a temporary folder.
+      - name: make install-release installs only the binary whose hash it printed
+        run: ./scripts/install-release-selftest.sh
 
   setup-link:
     name: setup link
@@ -211,6 +226,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # #445, ADR-0062's 2026-10-01 amendment. `make start` and install.sh
       # print a one-time setup link only while no account exists yet --
       # scripts/setup-link.sh is the one place that asks the API
@@ -241,6 +258,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # OPS-040 and OPS-041. Bring-up chose the directory to make signable with
       # `git rev-parse --show-toplevel`, which answers the tree you are standing
       # in -- so run from inside a linked worktree it linked the WORKTREE. The
@@ -259,6 +278,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # OPS-044, OPS-046 and OPS-047. The backup moved off a host scheduler and
       # into the deployment; these assert that the host scheduler is gone, that
       # the service holds no container-runtime socket -- a process holding that
@@ -278,6 +299,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # OPS-053 and OPS-054. doc 01 §3 says "Do not build these. If you find
       # yourself building them, stop." A rule about what the repository must NOT
       # grow has no failing test to write: nothing breaks the day someone adds a
@@ -299,6 +322,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The eight numbered specifications are local only, and until now the
       # whole of that was one .gitignore line with nothing behind it. Measured
       # on 2026-09-17 against the real repository: `git add -f docs/07-...`
@@ -323,6 +348,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # OPS-055. The pin is gitignored, so a git worktree is a checkout that
       # does not carry it -- and the fallback for "absent" is 0, the value that
       # means MINT A NEW TREE. Bring-up from a worktree therefore re-pointed the
@@ -351,6 +378,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # OPS-049 and OPS-051, the halves a pull request can break silently. The
       # live halves -- reading the CA container's filesystem, and issuing a
       # certificate -- run against a deployment.
@@ -387,6 +416,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # RM-218 (#352). A deployment's state and its trust roots live in
       # Docker volumes; nothing moved that state to another host before this
       # -- `make innsegl-backup` covers only the ledger, and a host that
@@ -408,6 +439,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # RM-217. The operator's one update command: fetch, refuse anything that
       # is not a fast-forward of merge commits with verified children, or
       # fast-forward and redeploy. Hermetic: a throwaway "remote" and "clone"
@@ -429,6 +462,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The backup's own cases. Its live half dumps a real ledger and runs
       # against a deployment; these run on tracked files alone and start no
       # container, measured in a tree holding only what CI checks out.
@@ -443,6 +478,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # #279. A self-test only protects anyone if something runs it on what
       # was pushed; a local hook does not travel. This fails on any
       # scripts/**/*-selftest.sh that no workflow names and that has no
@@ -459,6 +496,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The report test (race) prints when a test fails. It once showed only
       # the first 40 lines a test printed, a Docker download, and the reason
       # was cut off. This buries an assertion under that kind of noise.
@@ -476,6 +515,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # #279. The gate reads doc 07, which is local only, so it runs in the
       # pre-commit hook. Its self-test drives it against fixtures of its own
       # and needs nothing untracked: measured passing 17 of 17 in a tree
@@ -603,6 +644,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # FD 5.3 reserves green for cryptographic verification alone, and FD 8
       # makes a violation a defect found in review. Review is the wrong place
       # for a rule a machine can check: ADR-0038 chose headless primitives over
@@ -779,6 +822,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Docker Hub through a mirror
         # Anonymous pulls hit Docker Hub's rate limit (PR #567); see the action.
         uses: ./.github/actions/docker-hub-mirror
@@ -813,6 +858,8 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Docker Hub through a mirror
         # Anonymous pulls hit Docker Hub's rate limit (PR #567); see the action.
         uses: ./.github/actions/docker-hub-mirror

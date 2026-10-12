@@ -70,13 +70,82 @@ type connectDeps struct {
 	// loadHarness has Claude Code read the settings (connectverify.go); nil
 	// means the real one.
 	loadHarness func(settings string, named bool, debugFile, ca string) error
-	// serviceURL is where --disconnect asks the client service to revoke
-	// this machine; empty means the address the enrolment names.
-	serviceURL string
+	// socket is the client service's CLI socket --disconnect asks to revoke
+	// this machine on; empty means the enrolment's own (client.SocketPath).
+	socket string
+	// presence asks the person at this machine to confirm a disconnect,
+	// with the question to show; nil is the terminal (CLI-045, #600).
+	presence func(question string) error
 	// lookPath finds a program on this shell's PATH; nil is exec.LookPath.
 	lookPath func(string) (string, error)
 	// host is the machine the preflight checks; nil is this one.
 	host *hostdeps.Env
+	// release is the installed copy hooks and services run (#599); empty is
+	// client.ReleaseBinary().
+	release string
+	// writable says why the user could change the file at a path, or ""
+	// when they cannot; nil is realWritable.
+	writable func(path string) string
+}
+
+// realWritable is userWritable on the path with its symlinks resolved; a
+// path that cannot be resolved cannot be vouched for.
+func (d connectDeps) realWritable() func(string) string {
+	return func(p string) string {
+		resolved, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return err.Error()
+		}
+		return userWritable(resolved, d.uid)
+	}
+}
+
+func (d connectDeps) changeable(p string) string {
+	if d.writable == nil {
+		return d.realWritable()(p)
+	}
+	return d.writable(p)
+}
+
+func (d connectDeps) releasePath() string {
+	if d.release == "" {
+		return client.ReleaseBinary()
+	}
+	return d.release
+}
+
+// releaseRepair is what a refused binary is told to do.
+const releaseRepair = "Install this build as that copy, once per build (it asks for sudo and checks the copy's hash), " +
+	"then run the same command again:\n\n  make install-release    (in the innsegl checkout this binary was built in)\n\nNothing was changed."
+
+// hookBinary is the binary connect names in the hooks, the client service
+// and scheduled jobs (#599, CLI-041): one the user cannot change. That is
+// this binary when it already is one, or else the installed copy when it
+// holds this binary's bytes. Anything else is refused, with the repair:
+// hooks run on every prompt, and a binary any agent can rebuild would run
+// that agent's code as innsegl.
+func (d connectDeps) hookBinary() (string, error) {
+	self, err := d.binPath()
+	if err != nil {
+		return "", fmt.Errorf("resolving this binary's own path: %w", err)
+	}
+	why := d.changeable(self)
+	if why == "" {
+		return self, nil
+	}
+	release := d.releasePath()
+	lead := fmt.Sprintf("hooks and the client service run only a copy of innsegl you cannot change, and %s is one you can (%s)", self, why)
+	if _, err := os.Stat(release); err != nil {
+		return "", fmt.Errorf("%s; no copy is installed at %s. %s", lead, release, releaseRepair)
+	}
+	if rwhy := d.changeable(release); rwhy != "" {
+		return "", fmt.Errorf("%s; the installed copy %s can be changed too (%s): it must be owned by root, "+
+			"as must every folder above it. %s", lead, release, rwhy, releaseRepair)
+	}
+	if !sameContent(self, release) {
+		return "", fmt.Errorf("%s; the installed copy %s is another build than this one. %s", lead, release, releaseRepair)
+	}
+	return release, nil
 }
 
 // preflight names every dependency this machine lacks (CLI-027, #592) and
@@ -190,7 +259,7 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	fs.BoolVar(&f.service, "service", false, "with --update: also rewrite and reload the client service (ADR-0076)")
 	fs.BoolVar(&f.pause, "pause", false, "set the managed settings aside, unchanged")
 	fs.BoolVar(&f.resume, "resume", false, "put paused managed settings back")
-	fs.BoolVar(&f.disconnect, "disconnect", false, "remove what connect wrote: the managed settings keys, the service, ~/.innsegl/client")
+	fs.BoolVar(&f.disconnect, "disconnect", false, "remove what connect wrote: the managed settings keys, the service, ~/.innsegl/client (asks you to confirm on the terminal)")
 	fs.BoolVar(&f.update, "update", false, "rewrite this enrolled machine's managed settings to the chosen mode; no token")
 	fs.StringVar(&f.egress, "egress-control", "", "with --hardened, lock the sandbox's network to the hosts in this file, one per line")
 	fs.BoolVar(&f.hard, "hardened", false, "also lock the harness down: managed hooks only, bypass mode disabled, the sandbox; the user's statusLine is copied in")
@@ -292,10 +361,53 @@ func (d connectDeps) userSettingsPath() string {
 	return filepath.Join(d.home, ".claude", "settings.json")
 }
 
-func (d connectDeps) settingsConfig(listen string, hardened bool) (client.SettingsConfig, error) {
-	bin, err := d.binPath()
+// hookBinaryUse says how settingsConfig picks the binary it names.
+type hookBinaryUse int
+
+const (
+	// thisBinary names the running binary: disconnect, which only looks
+	// for what to remove.
+	thisBinary hookBinaryUse = iota
+	// preferInstalled names hookBinary's answer, or this binary when it
+	// refuses: settings of the caller's own (--managed-settings) and no
+	// service, which nothing loads or starts on its own.
+	preferInstalled
+	// requireInstalled names hookBinary's answer and refuses with it: the
+	// system managed settings, which every session loads, or a client
+	// service, which runs unattended.
+	requireInstalled
+)
+
+// unattended says whether connect is about to write something that runs
+// the binary it names with nobody choosing to: the system managed settings,
+// or a client service.
+func (d connectDeps) unattended(f connectFlags, service bool) hookBinaryUse {
+	if f.settings == defaultManagedSettingsPath(d.goos) || service {
+		return requireInstalled
+	}
+	return preferInstalled
+}
+
+// serviceInstalled says a client service definition is there.
+func (d connectDeps) serviceInstalled() bool {
+	_, err := os.Stat(d.service().Path())
+	return err == nil
+}
+
+// settingsConfig is what connect writes, naming the binary use picks.
+func (d connectDeps) settingsConfig(listen string, hardened bool, use hookBinaryUse) (client.SettingsConfig, error) {
+	var bin string
+	var err error
+	if use != thisBinary {
+		bin, err = d.hookBinary()
+	}
+	if use == thisBinary || (err != nil && use == preferInstalled) {
+		if bin, err = d.binPath(); err != nil {
+			err = fmt.Errorf("resolving this binary's own path: %w", err)
+		}
+	}
 	if err != nil {
-		return client.SettingsConfig{}, fmt.Errorf("resolving this binary's own path: %w", err)
+		return client.SettingsConfig{}, err
 	}
 	// The harness runs the hook command through a shell, unquoted, as
 	// install.sh has always written it.
@@ -322,6 +434,18 @@ func (d connectDeps) settingsConfig(listen string, hardened bool) (client.Settin
 		Hardened:   hardened,
 		StatusLine: line,
 	}, nil
+}
+
+// reportLeftoverJobs names a scheduled job an older innsegl installed that
+// runs code from a folder the user can change, with the command that
+// removes it (#599, CLI-042). It removes nothing: the job is the operator's
+// to drop.
+func (d connectDeps) reportLeftoverJobs(stderr io.Writer) {
+	if path, remove, ok := d.service().LeftoverBackupJob(); ok {
+		fprintf(stderr, "innsegl connect: %s still schedules the host backup innsegl dropped (#237). "+
+			"It runs a script from a checkout, which any agent working there can change, and the ledger "+
+			"backup now runs in the deployment (innsegl-backup). Remove it:\n\n  %s\n\n", path, remove)
+	}
 }
 
 func (d connectDeps) service() client.Service {
@@ -438,7 +562,7 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 	if !deps.preflight(stderr) {
 		return exitConnectFailed
 	}
-	settings, err := deps.settingsConfig(enrolledListen(paths), f.hard)
+	settings, err := deps.settingsConfig(enrolledListen(paths), f.hard, deps.unattended(f, f.service || deps.serviceInstalled()))
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
@@ -478,12 +602,17 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 	// start, so a pinned plugin whose directory moved (an upgrade) rewrites
 	// and restarts an installed service on its own.
 	pins, before := deps.pinPlugins(stdout, stderr)
-	_, statErr := os.Stat(deps.service().Path())
+	def, statErr := os.ReadFile(deps.service().Path())
 	moved := statErr == nil && client.ServicePATH(deps.goos, pins) != client.ServicePATH(deps.goos, before)
+	// #599 (CLI-042): an installed service that starts any other binary than
+	// the hooks now run (the checkout build an earlier connect named) moves
+	// onto it here.
+	elsewhere := statErr == nil && serviceProgram(deps.goos, def) != settings.HookBin
 	// ADR-0076: a machine enrolled before a change to the service definition
 	// gets it here, without a token. Otherwise only when asked: RM-312's
 	// --update changes no service on its own.
-	if f.service || moved {
+	defer deps.reportLeftoverJobs(stderr)
+	if f.service || moved || elsewhere {
 		if err := deps.serviceToInstall(pins).Install(settings.HookBin); err != nil {
 			fprintf(stderr, "innsegl connect: reinstalling the client service: %v\n", err)
 			return exitConnectFailed
@@ -495,7 +624,18 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 
 func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
 	paths := client.ClientPaths(deps.home)
-	settings, err := deps.settingsConfig(enrolledListen(paths), false)
+	// CLI-045 (#600): an enrolled machine is revoked on the core below; the
+	// person at it confirms first, before anything changes.
+	if cfg, cerr := client.ReadCoreConfig(paths); cerr == nil {
+		question := fmt.Sprintf("innsegl connect: this will revoke this machine (installation %s) on %s; its "+
+			"agents stop being recorded there, and it can only enrol again with a new token.",
+			cfg.InstallationID, cfg.CoreURL)
+		if perr := deps.askPresence(question); perr != nil {
+			fprintf(stderr, "innsegl connect: %v. Nothing was changed.\n", perr)
+			return exitConnectFailed
+		}
+	}
+	settings, err := deps.settingsConfig(enrolledListen(paths), false, thisBinary)
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
@@ -513,7 +653,7 @@ func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Wr
 	// reached does not stop the disconnect; it is said, with where to finish.
 	revokedOnCore := false
 	if _, statErr := os.Stat(paths.Core); statErr == nil {
-		if rerr := client.RevokeInstallation(ctx, paths, deps.serviceURL); rerr != nil {
+		if rerr := client.RevokeInstallation(ctx, paths, deps.socket); rerr != nil {
 			fprintf(stderr, "innsegl connect: the core could not revoke this machine (%v); its installation is "+
 				"still active on the core. Revoke it from the Account page, under Machines.\n", rerr)
 		} else {
@@ -570,7 +710,7 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 			"Run `innsegl connect --disconnect` first to enrol again.\n", paths.Core)
 		return exitConnectFailed
 	}
-	settings, err := deps.settingsConfig(f.listen, f.hard)
+	settings, err := deps.settingsConfig(f.listen, f.hard, deps.unattended(f, !f.noService))
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
@@ -645,6 +785,7 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 		fprintf(stdout, "innsegl connect: installed and started the client service (%s)\n", deps.service().Path())
 	}
 
+	deps.reportLeftoverJobs(stderr)
 	for _, dir := range dirs {
 		if runLinkInstall(ctx, filepath.Clean(dir), stdout, stderr) != exitOK {
 			failed = true

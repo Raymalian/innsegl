@@ -21,7 +21,7 @@
 #      internal/api/readonly.sql to it — THE SAME FILE api.EnsureReadOnlyRole
 #      embeds, mounted here rather than copied (see $READONLY_SQL below for how,
 #      and why a second copy of those GRANTs would be the wrong answer);
-#   6. creates the BACKUP role, gives it the reader's grants plus CREATEDB,
+#   6. creates the BACKUP role, gives it the reader's grants and no CREATEDB,
 #      and runs verify-backup-role.sh, which asks the server whether that
 #      credential can do the backup's whole job and still not write the ledger.
 #   5. runs verify-reader-role.sh, which connects AS the reader and does the
@@ -119,18 +119,15 @@ READER_ROLE="${INNSEGL_READER_ROLE:-innsegl_reader}"
 # The backup's role (RM-146, #237). Like the other two, a default and not a
 # protected string.
 #
-# IT IS THE READER PLUS CREATEDB, AND NOTHING ELSE. The backup does two things:
-# it dumps the ledger, which needs exactly what the reader has, and it restores
-# that dump into a THROWAWAY database to prove the dump restores at all — which
-# needs a database of its own to own. internal/api/readonly.sql's line 58 says
-# NOCREATEDB, correctly, for the role it was written for; the CREATEDB below is
-# applied AFTER it and is the one deliberate difference between these two roles.
+# IT IS THE READER, AND NOTHING ELSE (RM-356, #604). The backup dumps the
+# ledger, which needs exactly what the reader has, and proves the dump restores
+# by restoring it into a private Postgres it starts itself — not into a database
+# on this server, so it holds no CREATEDB here. A separate role with the same
+# grants keeps the two credentials apart: the backup's leaves the core.
 #
-# Undoing a line of somebody else's grants file is only safe because nothing
-# here is trusted: verify-backup-role.sh asks the SERVER what this credential
-# can do, and it asserts both halves — that the backup's whole job succeeds, and
-# that writing the live ledger is still refused BY PRIVILEGE. Provisioning is a
-# claim; the measurement is the gate.
+# Provisioning is a claim; verify-backup-role.sh asks the SERVER what this
+# credential can do — that it can read the ledger, and that creating a database
+# and writing the live ledger are refused BY PRIVILEGE.
 BACKUP_ROLE="${INNSEGL_BACKUP_ROLE:-innsegl_backup}"
 : "${INNSEGL_BACKUP_PASSWORD:?db-init: INNSEGL_BACKUP_PASSWORD must be set}"
 
@@ -450,7 +447,7 @@ log "applying ${READONLY_SQL} to ${READER_ROLE}"
 apply_readonly_sql "${READER_ROLE}"
 
 # ---------------------------------------------------------------------------
-# 5b. The backup's role: the reader's grants, then CREATEDB. See BACKUP_ROLE.
+# 5b. The backup's role: the reader's grants, and no CREATEDB. See BACKUP_ROLE.
 # ---------------------------------------------------------------------------
 backup_exists="$(psql_owner -A -t -c "SELECT 1 FROM pg_roles WHERE rolname = '${BACKUP_ROLE}'")"
 if [ -z "${backup_exists}" ]; then
@@ -469,12 +466,14 @@ SQL
 log "applying ${READONLY_SQL} to ${BACKUP_ROLE}"
 apply_readonly_sql "${BACKUP_ROLE}"
 
-# AFTER the grants, never before: readonly.sql ends with NOCREATEDB and the
-# order is what makes this the effective state rather than a line that was
-# silently overwritten.
-log "granting CREATEDB to ${BACKUP_ROLE} (throwaway restore databases only)"
+# NO CREATEDB (RM-356, #604). The backup restores each dump into a private
+# Postgres of its own, so this server owes it nothing but reads. readonly.sql
+# already ends with NOCREATEDB; it is said again here, last, because a deployment
+# provisioned before #604 has CREATEDB on this role and this script runs on every
+# `make update`. Running it twice changes nothing.
+log "${BACKUP_ROLE} may not create databases"
 psql_owner -v role="${BACKUP_ROLE}" <<'SQL'
-ALTER ROLE :"role" CREATEDB;
+ALTER ROLE :"role" NOCREATEDB;
 SQL
 
 # ---------------------------------------------------------------------------

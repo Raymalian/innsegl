@@ -8,13 +8,13 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"innsegl.dev/innsegl/internal/client/clienttest"
 	"innsegl.dev/innsegl/internal/trustbackup"
@@ -65,14 +65,14 @@ func passCore(t *testing.T) (*clienttest.Core, Paths, *coreLog) {
 	return core, paths, log
 }
 
-// serveFor starts this enrolment's client service on a loopback port and
-// writes that address into core.json, as `innsegl connect --listen` would.
-// The CLI then finds it where a real one is found.
-func serveFor(t *testing.T, paths Paths) *httptest.Server {
+// serveFor starts this enrolment's client service with its CLI socket where
+// `innsegl client serve` puts it (SocketPath), and answers that socket. The
+// CLI then finds it where a real one is found.
+func serveFor(t *testing.T, paths Paths) string {
 	t.Helper()
-	_, front, _ := startClient(t, paths)
-	setListen(t, paths, strings.TrimPrefix(front.URL, "http://"))
-	return front
+	srv, _, _ := startClient(t, paths)
+	serveSocket(t, srv, SocketPath(paths), os.Getuid())
+	return SocketPath(paths)
 }
 
 // enrolledServed is enrolled with its own client service running, for a
@@ -114,20 +114,21 @@ func installationOf(t *testing.T, paths Paths) string {
 // headers, body) comes back unchanged, marked as passed through.
 func TestCLI017TheServicePassesTheCLIsCoreRoutesThrough(t *testing.T) {
 	_, paths, log := passCore(t)
-	front := serveFor(t, paths)
+	sock := serveFor(t, paths)
 	id := installationOf(t, paths)
+	c := &http.Client{Transport: SocketTransport(sock)}
 
 	for _, route := range CorePassRoutes {
 		var body io.Reader = http.NoBody
 		if route.Method == http.MethodPost {
 			body = strings.NewReader(`{"name":"x"}`)
 		}
-		req, err := http.NewRequestWithContext(t.Context(), route.Method, front.URL+CorePassPrefix+route.Path, body)
+		req, err := http.NewRequestWithContext(t.Context(), route.Method, SocketBase+CorePassPrefix+route.Path, body)
 		if err != nil {
 			t.Fatal(err)
 		}
 		req.Header.Set(CorePassInstallationHeader, id)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := c.Do(req)
 		if err != nil {
 			t.Fatalf("%s %s: %v", route.Method, route.Path, err)
 		}
@@ -152,7 +153,7 @@ func TestCLI017TheServicePassesTheCLIsCoreRoutesThrough(t *testing.T) {
 // another installation.
 func TestCLI018TheServiceRefusesWhatIsNotOnTheList(t *testing.T) {
 	_, paths, log := passCore(t)
-	front := serveFor(t, paths)
+	sock := serveFor(t, paths)
 	id := installationOf(t, paths)
 
 	cases := []struct {
@@ -176,7 +177,7 @@ func TestCLI018TheServiceRefusesWhatIsNotOnTheList(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			// A raw request line, so nothing on this side cleans the path.
-			conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", strings.TrimPrefix(front.URL, "http://"))
+			conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", sock)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -210,9 +211,9 @@ func TestCLI018TheServiceRefusesWhatIsNotOnTheList(t *testing.T) {
 // it refuses everything else, and says so in the CLI's own shape.
 func TestCLI018ARevokedServiceRefusesTheCLIToo(t *testing.T) {
 	_, paths, log := passCore(t)
-	srv, front, _ := startClient(t, paths)
+	srv, _, _ := startClient(t, paths)
 	srv.revoked.Store(true)
-	setListen(t, paths, strings.TrimPrefix(front.URL, "http://"))
+	serveSocket(t, srv, SocketPath(paths), os.Getuid())
 	_, err := FetchCoreStatus(t.Context(), paths, "")
 	if err == nil || !strings.Contains(err.Error(), "revoked") {
 		t.Fatalf("FetchCoreStatus through a revoked service: %v", err)
@@ -229,27 +230,26 @@ func TestCLI018ARevokedServiceRefusesTheCLIToo(t *testing.T) {
 func TestCLI019TheCLISaysWhichPartIsNotAnswering(t *testing.T) {
 	t.Run("the service is down", func(t *testing.T) {
 		_, paths, _ := passCore(t)
-		ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addr := ln.Addr().String()
-		_ = ln.Close() // nothing listens there now
-		setListen(t, paths, addr)
-		_, err = FetchCoreStatus(t.Context(), paths, "")
-		if !errors.Is(err, ErrClientServiceDown) || !strings.Contains(err.Error(), addr) ||
+		// Nothing listens on the socket.
+		_, err := FetchCoreStatus(t.Context(), paths, "")
+		if !errors.Is(err, ErrClientServiceDown) || !strings.Contains(err.Error(), SocketPath(paths)) ||
 			!strings.Contains(err.Error(), RestartCommand(runtime.GOOS)) {
 			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("the service is older than the CLI", func(t *testing.T) {
 		_, paths, _ := passCore(t)
-		old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", SocketPath(paths))
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "innsegl gateway: unrecognised harness shape", http.StatusBadRequest)
-		}))
-		t.Cleanup(old.Close)
-		setListen(t, paths, strings.TrimPrefix(old.URL, "http://"))
-		_, err := FetchCoreStatus(t.Context(), paths, "")
+		})}
+		served := make(chan error, 1) // Serve ends with ErrServerClosed at cleanup
+		go func() { served <- old.Serve(ln) }()
+		t.Cleanup(func() { _ = old.Close() })
+		_, err = FetchCoreStatus(t.Context(), paths, "")
 		if !errors.Is(err, ErrClientServiceOld) || !strings.Contains(err.Error(), RestartCommand(runtime.GOOS)) {
 			t.Fatalf("err = %v", err)
 		}
@@ -260,14 +260,6 @@ func TestCLI019TheCLISaysWhichPartIsNotAnswering(t *testing.T) {
 		core.Stop()
 		_, err := FetchCoreStatus(t.Context(), paths, "")
 		if !errors.Is(err, ErrCoreUnreachable) || errors.Is(err, ErrClientServiceDown) {
-			t.Fatalf("err = %v", err)
-		}
-	})
-	t.Run("a listen address that is not loopback is never dialled", func(t *testing.T) {
-		_, paths, _ := passCore(t)
-		setListen(t, paths, "192.0.2.1:28195")
-		_, err := FetchCoreStatus(t.Context(), paths, "")
-		if err == nil || !strings.Contains(err.Error(), "loopback") {
 			t.Fatalf("err = %v", err)
 		}
 	})

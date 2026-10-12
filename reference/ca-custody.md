@@ -108,7 +108,8 @@ and unlock. A declined Touch ID prompt is not asked again for 15 minutes.
 ## Can the CA sign
 
 The custodian's status (`/status`, the core's `/_core/ca-custody`) carries
-`can_sign` and, when false, `reason`. It is tested on every call, in this
+`can_sign` and, when false, `reason`; when the token's lookup succeeds it
+also carries `token_seconds_left` (read-only, `innsegl doctor` shows it). It is tested on every call, in this
 order, and makes no signature:
 
 | Check | Reason when it fails |

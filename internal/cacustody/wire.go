@@ -22,4 +22,7 @@ type CoreStatus struct {
 	CanSign bool   `json:"can_sign"`
 	Reason  string `json:"reason,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// TokenSecondsLeft is how long the CA's token has left, read from the
+	// store (#601). Zero when unknown; a read-only field.
+	TokenSecondsLeft int64 `json:"token_seconds_left,omitempty"`
 }

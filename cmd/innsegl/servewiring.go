@@ -677,18 +677,22 @@ func openServer(ctx context.Context, o serveOptions, log *serveLog) (servedMCP, 
 
 	// ---- the transport ----------------------------------------------------
 	//
-	// #170: with -admin-listen set, this process serves two surfaces. The main
-	// listener gets the three tools that need a run_id that already exists;
-	// the identity lifecycle — register_agent, retire_agent — moves to a
-	// listener the model's MCP client is never pointed at, so a caller doing
-	// the work can use an identity it was given and cannot mint one.
-	//
-	// Unset, one listener serves all five, exactly as before. The split is
-	// opt-in because turning it on without also arranging for something to do
-	// the registering leaves nothing able to register at all.
-	mainTools := []mcp.ToolName(nil)
-	if o.adminListen != "" {
-		mainTools = mcp.AgentTools()
+	// #170, ADR-0083: the main listener serves only the tools that need a
+	// run_id that already exists. The identity lifecycle — register_agent,
+	// retire_agent and the recording tools — is served on -admin-listen when
+	// one is set, behind a credential, and otherwise on no listener at all.
+	// Nothing shipped needs it on the wire: the gateway and `innsegl retire`
+	// call the engine in process (ADR-0077).
+	mainTools := agentListenerTools(o)
+	if o.lifecycleOnAgentListener {
+		log.warn("-lifecycle-on-agent-listener is set: " +
+			strings.Join(toolStrings(mcp.AdminTools()), ", ") + " are served on " + o.listen +
+			" with NO credential. Any process that reaches it can mint or retire a run " +
+			"(doc 04 AB-13, AB-15). This is for tests and the demo profile, never a deployment (ADR-0083).")
+	} else if o.adminListen == "" {
+		log.info("the identity lifecycle is served on no listener (ADR-0083): " +
+			strings.Join(toolStrings(mcp.AdminTools()), ", ") + " run in process only, " +
+			"through the gateway and `innsegl retire` on the core")
 	}
 	server, err := mcp.New(mcp.Config{
 		Logger:         log.logger,
@@ -1320,4 +1324,16 @@ func (r runRestorer) RestoreRun(ctx context.Context, run spire.RunRef) error {
 		return nil
 	}
 	return err
+}
+
+// agentListenerTools is what -listen serves (ADR-0083). The split always
+// holds: the agent tools only, whether or not an admin listener is set. With
+// no admin listener the identity lifecycle is served nowhere on the wire; the
+// gateway and `innsegl retire` call the engine in process (ADR-0077). Nil, all
+// eight on -listen, is only for -lifecycle-on-agent-listener.
+func agentListenerTools(o serveOptions) []mcp.ToolName {
+	if o.lifecycleOnAgentListener {
+		return nil
+	}
+	return mcp.AgentTools()
 }

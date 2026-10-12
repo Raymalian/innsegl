@@ -279,7 +279,13 @@ FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc
 # was written for the host. Converting 380 lines of working shell to POSIX to
 # save a megabyte would be a change with real risk and no benefit; the shell it
 # declares is the shell it gets.
-RUN apk add --no-cache bash postgresql16-client aws-cli ca-certificates
+#
+# postgresql16, the server and not only the client (RM-356, #604): the backup
+# proves each dump restores by restoring it into a private Postgres it starts
+# in its own work directory, so its ledger role needs no CREATEDB. The major
+# matches the ledger's postgres:16, because a server restores dumps of its own
+# major or older.
+RUN apk add --no-cache bash postgresql16 postgresql16-client aws-cli ca-certificates
 
 RUN addgroup -g 1000 innsegl \
  && adduser -D -u 1000 -G innsegl -h /home/innsegl innsegl

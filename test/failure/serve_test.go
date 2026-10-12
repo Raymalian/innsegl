@@ -926,6 +926,7 @@ func runServeToCompletion(t *testing.T, c *campaign, extra ...string) (int, stri
 		"-key", filepath.Join(c.pemDir, "key.pem"),
 		"-bundle", filepath.Join(c.pemDir, "bundle.pem"),
 		"-listen", "127.0.0.1:0",
+		"-lifecycle-on-agent-listener", // ADR-0083: this harness registers over the wire
 		"-health-listen", "127.0.0.1:0",
 		"-fulcio-url", "http://127.0.0.1:1",
 		"-rekor-url", "http://127.0.0.1:1",
