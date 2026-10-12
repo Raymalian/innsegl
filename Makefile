@@ -1050,9 +1050,37 @@ innsegl-canary: innsegl-trust-volumes
 	  $(INNSEGL_COMPOSE) --profile canary run --rm innsegl-canary
 
 ## innsegl-demo: register an identity, sign a commit under it, retire it
+#
+# AGAINST THE CORE AS IT RUNS (RM-372, #624). `compose run` brings a service's
+# dependencies up first, under this target's environment, which has no
+# INNSEGL_MCP_ADMIN_LISTEN: the demo recreated the core with every tool on one
+# listener. --no-deps leaves it as `make start` made it; the script waits for
+# it. --build: the script is copied into the image, and an image a machine
+# built once is otherwise what every later demo runs.
+#
+# When the core runs the identity lifecycle on its own listener (`make start`
+# does), register_agent and retire_agent are asked there, with a credential
+# for the demo's repository minted the way innsegl.yml's note on
+# innsegl-admin-key says: a throwaway container with no network, the key
+# volume read-only, the credential on a pipe. It reaches the demo by name
+# (-e), never in a compose file. test/deploy OPS-233 holds this; test/contract
+# OPS-230 runs the script itself against the tools.
+DEMO_CORE = $(STACK_PREFIX)-core
 innsegl-demo: innsegl-trust-volumes
-	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent
+	@docker ps --format '{{.Names}}' | grep -qx '$(DEMO_CORE)' || \
+	  { echo 'innsegl-demo: $(DEMO_CORE) is not running; run make start first'; exit 2; }
+	@listen=$$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' '$(DEMO_CORE)' | sed -n 's/^INNSEGL_MCP_ADMIN_LISTEN=//p'); \
+	 INNSEGL_MCP_ADMIN_URL=''; INNSEGL_MCP_ADMIN_CREDENTIAL=''; \
+	 if [ -n "$$listen" ]; then \
+	   INNSEGL_MCP_ADMIN_URL="http://innsegl-core:$${listen##*:}"; \
+	   INNSEGL_MCP_ADMIN_CREDENTIAL=$$(docker run --rm --network none --read-only --user 0:0 \
+	     --security-opt no-new-privileges -v $(STACK_PREFIX)-core_innsegl-admin-key:/k:ro \
+	     $(INNSEGL_IMAGE) admin-credential mint -key /k/signing.key -repo '$(DEMO_REPO)') || exit 1; \
+	 fi; \
+	 export INNSEGL_MCP_ADMIN_URL INNSEGL_MCP_ADMIN_CREDENTIAL; \
+	 INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_DEMO_REPO='$(DEMO_REPO)' \
+	  $(INNSEGL_COMPOSE) --profile demo run --rm --no-deps --build \
+	  -e INNSEGL_MCP_ADMIN_URL -e INNSEGL_MCP_ADMIN_CREDENTIAL demo-agent
 
 ## innsegl-retire: end a run an operator knows is over (RUN=<run_id>)
 #

@@ -43,7 +43,7 @@ Every target with a `##` help line:
 | `make rekor-reindex` | backfill the log's search index from the whole log |
 | `make innsegl-verify` | ask Postgres and the object store what the credentials can do |
 | `make innsegl-canary` | SEG-005: the object store refuses to delete a segment |
-| `make innsegl-demo` | register an identity, sign a commit under it, retire it, over the deprecated MCP wire (ADR-0077) |
+| `make innsegl-demo` | register an identity, sign a commit under it, retire it, over the deprecated MCP wire (ADR-0077). Needs a running core (`make start`) and leaves it as it is (`--no-deps`); builds the demo image from this checkout; asks the identity lifecycle's listener with a credential for the demo repository when the core has one, and sends the run token (OPS-230, OPS-233) |
 | `make innsegl-retire` | end a run an operator knows is over, on the core: `RUN=<run_id>` |
 | `make innsegl-init` | run `innsegl init` as a one-shot workload: `REPO=<path> ARGS='...'` |
 | `make innsegl-verify-commit` | verify a commit with no route to the ledger: `COMMIT=<sha>` |

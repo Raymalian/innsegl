@@ -246,7 +246,11 @@ func newPool(t *testing.T, dsn string) *pgxpool.Pool {
 // in a double.
 // ---------------------------------------------------------------------------
 
-type ledgerRuns struct{ store *ledger.Store }
+type ledgerRuns struct {
+	store *ledger.Store
+	// withRepo reads each run's repository, as the shipped directory does.
+	withRepo bool
+}
 
 func (d ledgerRuns) CredentialRun(ctx context.Context, runID string) (mcp.CredentialRun, bool, error) {
 	head, err := d.store.Head(ctx)
@@ -286,6 +290,11 @@ func (d ledgerRuns) CredentialRun(ctx context.Context, runID string) (mcp.Creden
 					fmt.Errorf("run_registered for %q carries the unusable spiffe_id %q", runID, spiffeID)
 			}
 			run.RunID, run.SPIFFEID, run.AgentType, run.TaskID = runID, spiffeID, agentType, taskID
+			// What an admin credential is scoped to (#264), as the shipped
+			// directory reads it: the registration's own repo.
+			if repo, hasRepo := rec[event.FieldRepo].(string); hasRepo && d.withRepo {
+				run.Repo = repo
+			}
 			found = true
 		case event.EventTypeRunRetired:
 			raw, ok := rec[event.FieldTS].(string)
@@ -487,7 +496,7 @@ type fakeConn struct {
 	expiry time.Time
 }
 
-func (c *fakeConn) Invoke(_ context.Context, _ string, _, reply any, _ ...grpc.CallOption) error {
+func (c *fakeConn) Invoke(_ context.Context, _ string, args, reply any, _ ...grpc.CallOption) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.err != nil {
@@ -497,9 +506,16 @@ func (c *fakeConn) Invoke(_ context.Context, _ string, _, reply any, _ ...grpc.C
 	if !ok {
 		return fmt.Errorf("contract harness: unexpected reply type %T", reply)
 	}
-	trustDomain, path, found := strings.Cut(strings.TrimPrefix(c.id, "spiffe://"), "/")
+	// The identity registerRun pinned, else the one asked for: a run
+	// registered by a client other than this package's (OPS-230's demo
+	// agent) has no registerRun to pin it.
+	id := c.id
+	if req, isReq := args.(*svidv1.MintJWTSVIDRequest); id == "" && isReq && req.GetId() != nil {
+		id = "spiffe://" + req.GetId().GetTrustDomain() + req.GetId().GetPath()
+	}
+	trustDomain, path, found := strings.Cut(strings.TrimPrefix(id, "spiffe://"), "/")
 	if !found {
-		return fmt.Errorf("contract harness: %q is not a SPIFFE ID", c.id)
+		return fmt.Errorf("contract harness: %q is not a SPIFFE ID", id)
 	}
 	var expiresAt int64
 	if !c.expiry.IsZero() {
@@ -575,12 +591,32 @@ func newStack(t *testing.T) *stack {
 
 func newStackOn(t *testing.T, dsn string) *stack {
 	t.Helper()
+	return newStackOnWith(t, dsn, false)
+}
+
+// newStackOnWith is newStackOn configured as a deployment is, when deployed:
+//
+//   - a run-token secret, which `serve` derives from the identity secret
+//     (RM-212), so get_credential and sign_commit refuse a run id that comes
+//     without its token;
+//   - a run directory that reads each run's repository, as the shipped one
+//     does, so an admin credential's scope (#264) and sign_commit's own
+//     repository check both apply.
+//
+// Not deployed is the matrix's stack, which pins each class with neither:
+// its sign_commit cells sign in a repository of their own.
+func newStackOnWith(t *testing.T, dsn string, deployed bool) *stack {
+	t.Helper()
+	runTokenSecret := ""
+	if deployed {
+		runTokenSecret = mcp.DeriveRunTokenSecret(testIdentitySecret)
+	}
 
 	store := openLedger(t, dsn)
 	idem := mcp.NewIdempotencyStore(newPool(t, dsn))
 	fake := newFakeSPIRE(testTrustDomain)
 	conn := &fakeConn{token: "contract.jwt.svid", expiry: time.Now().Add(5 * time.Minute)}
-	runs := ledgerRuns{store: store}
+	runs := ledgerRuns{store: store, withRepo: deployed}
 
 	s := &stack{store: store, idem: idem, spire: fake, conn: conn, dsn: dsn}
 
@@ -596,7 +632,7 @@ func newStackOn(t *testing.T, dsn string) *stack {
 	}
 	restoreRegister, err := mcp.ConfigureRegisterAgent(mcp.RegisterAgentConfig{
 		Identities: fake, Ledger: store, Idempotency: idem, ParentID: testParentID,
-		Pseudonyms: pseudonyms,
+		Pseudonyms: pseudonyms, RunTokenSecret: runTokenSecret,
 	})
 	if err != nil {
 		t.Fatalf("ConfigureRegisterAgent: %v", err)
@@ -605,6 +641,7 @@ func newStackOn(t *testing.T, dsn string) *stack {
 
 	if cerr := mcp.ConfigureGetCredential(mcp.CredentialConfig{
 		Runs: runs, Entries: fake, Minter: mcp.NewSPIREMinter(conn), Ledger: store,
+		RunTokenSecret: runTokenSecret,
 	}); cerr != nil {
 		t.Fatalf("ConfigureGetCredential: %v", cerr)
 	}
@@ -645,7 +682,7 @@ func newStackOn(t *testing.T, dsn string) *stack {
 		Credentials: mcp.SignCommitThroughGetCredential{},
 		Signers:     fakeSCSigners{signer: scSigner},
 		AuthorName:  scAuthorName, AuthorEmail: scAuthorEmail,
-		Pseudonyms: pseudonyms,
+		Pseudonyms: pseudonyms, RunTokenSecret: runTokenSecret,
 	})
 	if err != nil {
 		t.Fatalf("ConfigureSignCommit: %v", err)
