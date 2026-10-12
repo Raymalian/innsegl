@@ -1061,16 +1061,25 @@ innsegl-canary: innsegl-trust-volumes
 # more (ADR-0083). It recreates the dev core with -lifecycle-on-agent-listener
 # for the run, then brings the services up again as `make start` would, which
 # recreates the core without it, pass or fail. A live stack refuses.
-# --build (RM-372, #624): the script is copied into the image, and without it
-# an image a machine built once is what every later demo runs.
+# RM-372 (#624). The flag reaches the core through innsegl-here-services, the
+# environment `make start` brings it up with. `compose run` used to recreate
+# the core as the demo's dependency under this target's environment, which
+# lacks INNSEGL_MCP_ALSO and the rest; measured on a dev custody stack, that
+# core never listened and the demo stopped at "dependency failed to start".
+# The demo then runs with --no-deps against it, and --build, because the
+# script is copied into the image and a machine kept whichever it built first.
 innsegl-demo: innsegl-trust-volumes
 	@[ "$$(scripts/stack-mode.sh mode)" = dev ] || { echo 'innsegl-demo: dev stack only (ADR-0083): it serves the identity lifecycle with no credential'; exit 2; }
-	@INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER=true \
+	@INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER=true $(DEMO_FLAG_CORE) && \
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  $(INNSEGL_COMPOSE) --profile demo run --rm --build demo-agent; status=$$?; \
+	  $(INNSEGL_COMPOSE) --profile demo run --rm --no-deps --build demo-agent; status=$$?; \
 	 echo 'innsegl-demo: recreating the core without -lifecycle-on-agent-listener'; \
 	 $(DEMO_RECREATE_CORE) || status=1; \
 	 exit $$status
+
+# The core with the flag, brought up as `make start` would (see DEMO_RECREATE_CORE
+# for why a dry run only prints it).
+DEMO_FLAG_CORE = $(if $(DRY_RUN),echo 'INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER=true make innsegl-here-services',$(MAKE) --no-print-directory innsegl-here-services)
 
 # A recipe line that names $(MAKE) runs even under `make -n`, which would run
 # the demo above for real. Under a dry run the line names no $(MAKE), so it is
