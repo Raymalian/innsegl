@@ -1058,8 +1058,13 @@ innsegl-demo: innsegl-trust-volumes
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
 	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent; status=$$?; \
 	 echo 'innsegl-demo: recreating the core without -lifecycle-on-agent-listener'; \
-	 $(MAKE) --no-print-directory innsegl-here-services || status=1; \
+	 $(DEMO_RECREATE_CORE) || status=1; \
 	 exit $$status
+
+# A recipe line that names $(MAKE) runs even under `make -n`, which would run
+# the demo above for real. Under a dry run the line names no $(MAKE), so it is
+# printed, not run (OPS-215).
+DEMO_RECREATE_CORE = $(if $(DRY_RUN),echo 'make innsegl-here-services',$(MAKE) --no-print-directory innsegl-here-services)
 
 ## innsegl-retire: end a run an operator knows is over (RUN=<run_id>)
 #

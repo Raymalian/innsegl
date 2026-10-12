@@ -4,6 +4,9 @@ package deploy
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"testing"
 	"time"
@@ -47,6 +50,32 @@ func TestOPS215TheStacksRunNoAdminListener(t *testing.T) {
 	for _, p := range cfg.Services["innsegl-core"].Ports {
 		if p.Target == 8090 {
 			t.Errorf("innsegl-core publishes the admin listener's port 8090 on the host (%+v)", p)
+		}
+	}
+}
+
+// OPS-215 (#604) — `make -n innsegl-demo` is a dry run: it starts no demo
+// agent and recreates no core. The demo's recipe line also calls $(MAKE), and
+// make runs such a line even under -n, so a dry run on a host whose docker
+// has compose ran the demo for real against that host's core. A fake docker
+// on PATH records every call; under -n there must be none.
+func TestOPS215DemoDryRunRunsNothing(t *testing.T) {
+	bin := t.TempDir()
+	calls := filepath.Join(t.TempDir(), "calls")
+	fake := "#!/bin/sh\necho \"docker $*\" >> '" + calls + "'\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(fake), 0o755); err != nil { //nolint:gosec // a test's fake docker must be executable
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"dev", "live"} {
+		cmd := exec.CommandContext(t.Context(), "make", "-n", "--no-print-directory", "innsegl-demo")
+		cmd.Dir = deploytest.RepoRoot(t)
+		cmd.Env = deploytest.StackEnv(t.TempDir(), mode, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("make -n innsegl-demo (%s): %v\n%s", mode, err, out)
+		}
+		if b, rerr := os.ReadFile(calls); rerr == nil {
+			t.Fatalf("make -n innsegl-demo (%s) ran docker:\n%s\n%s", mode, b, out)
 		}
 	}
 }
