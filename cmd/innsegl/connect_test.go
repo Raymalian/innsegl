@@ -264,7 +264,8 @@ func TestCLI015ConnectEnrolsWritesFilesSettingsAndService(t *testing.T) {
 		t.Errorf("connect does not say where the machine key is:\n%s", stdout)
 	}
 	for name, mode := range map[string]os.FileMode{
-		keyFile: 0o600, "cert.pem": 0o644, "bundle.pem": 0o644, "gateway-ca.pem": 0o644, "core.json": 0o644,
+		// #597 (CLI-040): every file the client keeps is private to its user.
+		keyFile: 0o600, "cert.pem": 0o600, "bundle.pem": 0o600, "gateway-ca.pem": 0o600, "core.json": 0o600,
 	} {
 		st, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
