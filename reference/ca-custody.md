@@ -208,7 +208,10 @@ On the operator's machine, through the client service and the core:
 5. It prints the new set's size and digest, and that trust-key backups now
    also encrypt to it.
 
-A reseal is four custody calls; it fits in the core's per-machine limit.
+A reseal is four custody calls; it fits in the core's per-machine limit
+(ten, then one every 20 seconds) on its own. Run straight after an unlock,
+with the client service's own calls, it can pass it and answer 429: wait
+two minutes and run it again. Measured on a dev stack (OPS-209).
 The client service must be at least as new as the command: an older one
 refuses the reseal routes with 403 (`restart the client service`).
 
@@ -300,6 +303,22 @@ recipients.
 - `internal/api/unlockkeys_test.go`, `unlockkeys_store_test.go` (AUTH-013 to
   AUTH-018: the dashboard's unlock keys; AUTH-018 applies one by a reseal and
   unlocks a real store after a restart; Docker, `-p 1`)
+- `test/deploy/custody/unlocknetwork_test.go` (OPS-207: `innsegl-api` joins the unlock
+  network, live and dev, and nothing else changes networks)
+- `test/devstack/unlock_test.go` (OPS-208: an in-place `make update` keeps a dev
+  stack's owner, session and passkey, applies migrations 0023 and 0024, and
+  serves the CSP and the unlock keys API; OPS-209: on a dev stack a security
+  key enrolled through the API, applied with `ca-custody reseal --add`,
+  unlocks the restarted store from the dashboard alone). They run only
+  against a running dev stack with `INNSEGL_DEVSTACK_E2E=1`:
+
+  ```
+  INNSEGL_DEVSTACK_E2E=1 INNSEGL_DEVSTACK_STATE=<dir> INNSEGL_DEVSTACK_IDENTITY=<dev identity> \
+    go test ./test/devstack/ -count=1 -p 1 -v
+  ```
+
+  OPS-208 runs twice, `INNSEGL_DEVSTACK_PHASE=before` on the old stack and
+  `after` once it is updated, with the same state directory.
 - `scripts/ca-custody-selftest.sh` (OPS-049 to OPS-051)
 - `scripts/ca-custody-reset-selftest.sh` (OPS-159)
 - `internal/cacustody/store_test.go` OPS-136 also signs the way Fulcio asks, `transit/sign/<key>/sha2-256`

@@ -154,6 +154,120 @@ without the machine you run it on, and a member that is not a recipient.
 If the confirm does not arrive within 10 minutes, the custodian drops the
 staged copy and the old material stands. Run the command again.
 
+## Add a security key — the dashboard, then the operator's machine
+
+A hardware security key can unlock the store from the dashboard when the
+operator's machine is away (ADR-0082). Any FIDO2 key with `hmac-secret`
+works. Every use needs its PIN and a touch. Synced passkeys are refused.
+
+You need: an owner or admin account of the operator organisation, a browser
+with PRF for security keys (Chrome, Edge or Firefox; not Safari), and the
+operator's machine for the first key.
+
+1. Browser: open the dashboard, Account, **Unlock keys**, **Add a security
+   key**. Name it after where it is kept, then **Add the key**. Your sign-in
+   passkey confirms first. Then touch the security key twice, entering its
+   PIN each time.
+
+   **Check:** the key is listed as **Pending**, with its custody recipient
+   (`age1…`) and the command that applies it.
+
+   If the page says the browser or key returned no PRF, nothing was saved.
+   Use another browser or a key with `hmac-secret`.
+
+2. Mac: apply it. Copy the command from the page, or:
+
+   ```sh
+   innsegl ca-custody reseal --add <custody recipient>
+   ```
+
+   Compare the `+` line with the recipient on the page, character by
+   character, then answer `y` and approve Touch ID twice (see "Add a second
+   unlock device" above).
+
+   **Check:** it prints `resealed`, `innsegl ca-custody recipients` lists the
+   key's recipient, and the dashboard shows the key as **Active**.
+
+   Refused with `the store is unsealed and its material has no commitment
+   yet`: the store has not been unlocked from sealed since the core learned
+   to reseal (a fresh store, or the first reseal after the update that
+   brought it). Once only, then run the reseal again:
+
+   ```sh
+   ssh <core> 'docker restart innsegl-ca-store'   # the core
+   innsegl ca-custody unlock                       # Mac, Touch ID
+   ```
+
+   Refused with `429 too many requests`: the core allows a machine ten
+   custody calls, then one every 20 seconds. Wait two minutes and run it
+   again; nothing changed.
+
+3. Prove it before you need it: unlock once with the key alone (next
+   section), at a planned restart of the store.
+
+4. Take a new trust-key backup and drill it with the Mac. New bundles are
+   also encrypted to the key's custody recipient
+   (`runbooks/trust-key-backup.md`).
+
+A second key follows the same steps. Keep the set small: every recipient is
+one more key that opens the material.
+
+## Unlock with the operator machine away — any browser
+
+The store is sealed after any restart. With the Mac away, nothing unlocks
+it on its own, and the dashboard shows **The CA cannot sign** on every page.
+
+1. Browser: from a machine that reaches the dashboard, sign in with your
+   passkey. Use Chrome, Edge or Firefox, ideally a profile with no
+   extensions: the page that opens the material runs in it.
+
+2. Select **Unlock with a security key** in the banner, then **Unlock with a
+   security key** on the page. Touch an **Active** key and enter its PIN.
+
+   The browser opens the sealed material with the key and sends it to the
+   core once. The key's secret never leaves the browser.
+
+3. **Check:** the page says `Unlocked. The CA can sign again.` and the
+   banner is gone. From the Mac, once back, `innsegl ca-custody status`
+   prints `unlocked; the CA can sign`.
+
+If it says `The sealed material is not sealed to this key`, the key is
+still Pending: apply it from the Mac (above). A key that is not yours, a
+revoked key, or a browser without PRF is refused before anything reaches
+the custodian.
+
+## Lost a key — the dashboard, then the operator's machine
+
+A lost key opens nothing without its PIN. Remove it anyway, at once.
+
+1. Browser: Account, **Unlock keys**, **Revoke** on the lost key, then
+   **Revoke with passkey**. It is **Revoked** for good, and refused for any
+   unlock from now on.
+
+2. Mac: seal new copies without it:
+
+   ```sh
+   innsegl ca-custody reseal --remove <its custody recipient>
+   ```
+
+   **Check:** `innsegl ca-custody recipients` no longer lists it.
+
+3. Take a new trust-key backup and drill it. Then delete the older bundles
+   and their copies on the Mac once the new one drills. Copies sealed
+   before the reseal, and bundles written before it, still open with the
+   lost key and its PIN: the reseal does not change the material itself.
+
+4. Add a replacement key (above).
+
+Lost the Mac instead, with an active key in hand: the key unlocks after
+every restart (above). A new Mac cannot add itself: a reseal must be opened
+by a member of the set, and the new Mac's identity is not one. Today that
+member is another enrolled machine already in the set. The dashboard's
+reseal API (`/api/v1/account/ca-custody/reseal/*`, owner only) lets an
+active key do it, but the dashboard has no page for it yet. Until then, keep
+a second member in the set: a second key does not help here, a second
+enrolled machine does.
+
 ## Rollback
 
 **During step 2:** the rotation puts Fulcio back on the file CA on its own
@@ -210,8 +324,10 @@ both machines.
 **Check:** `innsegl ca-custody status` prints `unlocked`, and Fulcio serves the
 root it served before.
 
-Losing the operator's Secure Enclave key loses the unlock. The store's data
-stays unreadable. Recovery is a new store and a new root:
+Losing the operator's Secure Enclave key alone does not lose the unlock when
+an active security key is in the set: unlock from the dashboard (above).
+Losing every member of the set loses it. The store's data stays unreadable.
+Recovery is a new store and a new root:
 
 1. `make ca-custody-back` puts Fulcio on the file CA.
 2. Remove the two custody volumes.

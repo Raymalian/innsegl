@@ -51,7 +51,7 @@ func requireStack(t *testing.T) stack {
 	t.Helper()
 	if os.Getenv("INNSEGL_DEVSTACK_E2E") != "1" {
 		t.Skip("skipping: this case runs against a running dev stack (make dev-stack, custody on); " +
-			"set INNSEGL_DEVSTACK_E2E=1 with one up, as runbooks/ca-custody.md says")
+			"set INNSEGL_DEVSTACK_E2E=1 with one up, as reference/ca-custody.md says")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

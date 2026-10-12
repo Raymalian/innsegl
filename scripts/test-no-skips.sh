@@ -210,7 +210,7 @@ fi
 #       restarts that stack's key store. They skip unless
 #       INNSEGL_DEVSTACK_E2E=1, naming it. Every unit of the path they drive
 #       has its own case that never skips: AUTH-013..018 (the API on a real
-#       store), CLI-052..054 (the reseal), OPS-201..207. runbooks/ca-custody.md
+#       store), CLI-052..054 (the reseal), OPS-201..207. reference/ca-custody.md
 #       carries the command, and the rehearsal that ran them is recorded on
 #       #617.
 #

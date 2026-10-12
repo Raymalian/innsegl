@@ -24,6 +24,6 @@
 //	INNSEGL_DEVSTACK_CORE          [https://localhost:28095]
 //	INNSEGL_DEVSTACK_CA            [~/.innsegl/dev/ca/gateway-ca.pem]
 //
-// Run with the stack up, one package, -p 1. runbooks/ca-custody.md carries
+// Run with the stack up, one package, -p 1. reference/ca-custody.md carries
 // the command.
 package devstack

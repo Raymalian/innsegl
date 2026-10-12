@@ -29,7 +29,7 @@ import (
 // sign-in, a step-up and a minted token behind; `make update` from the new
 // code; phase "after" checks what the update did to that data. The shell
 // half (make update's exit code, every container healthy, signing before
-// and after, a second update a no-op) is in runbooks/ca-custody.md.
+// and after, a second update a no-op) is the rehearsal's own, recorded on #617.
 // ---------------------------------------------------------------------------
 
 func TestOPS208AnInPlaceUpdateKeepsTheDevStacksDataAndServesTheNewSurface(t *testing.T) {
@@ -139,7 +139,23 @@ func TestOPS209AnUnlockKeyAloneUnlocksTheDevStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := startClientService(t, bin, home, listen)
-	code, out := cli(t, bin, home, "y\n", "ca-custody", "reseal", "--add", k.CustodyRecipient)
+	// A store unsealed at its init, or last unlocked by a core older than
+	// the reseal, has no commitment to its material, and the custodian
+	// refuses a reseal until one sealed-store unlock writes it (ADR-0082
+	// decision 7). A fresh dev stack is that store, and so is a live core
+	// the day it is updated onto this: restart it sealed and unlock it from
+	// the machine once, as runbooks/ca-custody.md says.
+	docker(t, "restart", devPrefix+"ca-store")
+	s.waitCustody(t, o, func(st cacustody.CoreStatus) bool { return st.Sealed && st.Error == "" })
+	code, out := cli(t, bin, home, "", "ca-custody", "unlock")
+	if code != 0 {
+		t.Fatalf("ca-custody unlock from the machine: exit %d\n%s", code, out)
+	}
+	// The core allows a machine ten custody calls, then one per 20 seconds.
+	// The unlock (and the client service's own) spent most of them; the
+	// reseal needs four. Measured: without this wait it answers 429.
+	time.Sleep(2 * time.Minute)
+	code, out = cli(t, bin, home, "y\n", "ca-custody", "reseal", "--add", k.CustodyRecipient)
 	if code != 0 || !strings.Contains(out, "resealed") {
 		t.Fatalf("ca-custody reseal --add: exit %d\n%s\nclient service:\n%s", code, out, svc.log.String())
 	}
@@ -156,7 +172,7 @@ func TestOPS209AnUnlockKeyAloneUnlocksTheDevStack(t *testing.T) {
 
 	// 3. The store restarts sealed.
 	docker(t, "restart", devPrefix+"ca-store")
-	st := s.waitCustody(t, o, func(st cacustody.CoreStatus) bool { return st.Sealed })
+	st := s.waitCustody(t, o, func(st cacustody.CoreStatus) bool { return st.Sealed && st.Error == "" })
 	if st.CanSign {
 		t.Fatalf("a sealed store says the CA can sign: %+v", st)
 	}
