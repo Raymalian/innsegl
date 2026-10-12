@@ -352,7 +352,7 @@ func TestENF009NotWritablePrintsTheAdminCommand(t *testing.T) {
 	if !errors.As(err, &nw) {
 		t.Fatalf("err = %v, want a NotWritableError", err)
 	}
-	if !strings.Contains(nw.Command, "sudo mkdir -p") || !strings.Contains(nw.Command, "sudo install -m 0644") {
+	if !strings.HasPrefix(nw.Command, "sudo sh -c ") || !strings.Contains(nw.Command, "mkdir -p") || !strings.Contains(nw.Command, "install -m 0644") {
 		t.Errorf("command = %q", nw.Command)
 	}
 	staged, rerr := os.ReadFile(nw.Staged)

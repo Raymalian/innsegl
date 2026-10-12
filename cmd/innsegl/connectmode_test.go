@@ -141,7 +141,7 @@ func TestRM312ConnectUpdatePrintsTheAdminCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, stderr := f.connect("--update", "--managed-settings", filepath.Join(blocker, "managed-settings.json"))
-	if code == exitOK || !strings.Contains(stderr, "sudo install -m 0644") || !strings.Contains(stderr, "--update") {
+	if code == exitOK || !strings.Contains(stderr, "sudo sh -c ") || !strings.Contains(stderr, "install -m 0644") || !strings.Contains(stderr, "--update") {
 		t.Fatalf("--update on a file it cannot write = %d: %s", code, stderr)
 	}
 }
