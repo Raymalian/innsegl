@@ -422,6 +422,10 @@ func TestCLI039DoctorOnlyTightensInnseglsOwnFiles(t *testing.T) {
 	d := newDoctorRun(t, healthyDoctorCore())
 	d.uid = os.Getuid()
 	p := client.ClientPaths(d.f.home)
+	// RM-357: on a Mac the machine key is the Secure Enclave's handle, key.se.
+	if _, err := os.Stat(p.EnclaveKey); err == nil {
+		p.Key = p.EnclaveKey
+	}
 	outside := filepath.Join(d.f.home, "notes.txt")
 	write := func(path string, m os.FileMode) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

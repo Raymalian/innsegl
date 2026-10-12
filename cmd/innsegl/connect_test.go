@@ -251,8 +251,20 @@ func TestCLI015ConnectEnrolsWritesFilesSettingsAndService(t *testing.T) {
 	}
 
 	dir := filepath.Join(f.home, ".innsegl", "client")
+	// RM-357: the machine key is the Secure Enclave's handle (key.se) on a
+	// Mac, a file (key.pem) elsewhere; one or the other, never both.
+	keyFile := "key.pem"
+	if _, err := os.Stat(filepath.Join(dir, "key.se")); err == nil {
+		keyFile = "key.se"
+		if _, err := os.Stat(filepath.Join(dir, "key.pem")); err == nil {
+			t.Error("both key.se and key.pem were written")
+		}
+	}
+	if !strings.Contains(stdout, "the machine key is") {
+		t.Errorf("connect does not say where the machine key is:\n%s", stdout)
+	}
 	for name, mode := range map[string]os.FileMode{
-		"key.pem": 0o600, "cert.pem": 0o644, "bundle.pem": 0o644, "gateway-ca.pem": 0o644, "core.json": 0o644,
+		keyFile: 0o600, "cert.pem": 0o644, "bundle.pem": 0o644, "gateway-ca.pem": 0o644, "core.json": 0o644,
 	} {
 		st, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {

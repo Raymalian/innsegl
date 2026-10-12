@@ -401,7 +401,7 @@ func readSealed(t *testing.T, dir string) []clientjournal.Sealed {
 
 func enrolledHTTPClient(t *testing.T, paths client.Paths, ca *x509.Certificate) *http.Client {
 	t.Helper()
-	cert, err := tls.LoadX509KeyPair(paths.Cert, paths.Key)
+	cert, err := client.LoadClientCertificate(paths)
 	if err != nil {
 		t.Fatal(err)
 	}

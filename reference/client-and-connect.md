@@ -173,12 +173,14 @@ Under `~/.innsegl/client/` (`internal/client/files.go:50`):
 
 | File | Holds |
 |---|---|
-| `key.pem`, `cert.pem`, `bundle.pem` | the machine's key, certificate and trust bundle |
+| `key.se` | macOS: the Secure Enclave's handle to the machine key (below), 0600 |
+| `key.pem` | the machine key as a file, 0600: Linux, a macOS build without cgo, or a Mac not yet renewed since the key moved to the Enclave |
+| `cert.pem`, `bundle.pem` | the machine's certificate and trust bundle |
 | `gateway-ca.pem` | the core's gateway CA |
 | `core.json` | core URL, installation id, listen address, provider URL |
 | `revoked` | present when the core revoked this installation |
 | `outbox/` | the signed client journal, for what the core could not record (ADR-0068) |
-| `proxy-ca.pem`, `proxy-ca-key.pem` | the local proxy CA |
+| `proxy-ca.pem`, `proxy-ca-key.pem` | the local proxy CA, valid one year (below) |
 | `session-processes.json` | the harness process of each watched session |
 | `client.sock` | the CLI socket (0600; the folder is 0700): the CLI's calls to the core, and the service's status (below) |
 | `unrouted-sessions.json` | sessions whose model traffic bypassed innsegl (below) |
@@ -248,6 +250,64 @@ harness's traffic; on the CLI socket, `GET /_client/status` and
 `/_core/unrouted-session`.
 
 The certificate is renewed at half-life.
+
+### The machine key
+
+The machine key signs every TLS handshake to the core and seals every
+journal entry. `GET /_client/status` says where it is: `"machine_key":
+"secure-enclave"` or `"file"`.
+
+**On macOS it is in the Secure Enclave.** `innsegl connect` generates a
+P-256 key there that cannot be exported. On disk is only `key.se`, the
+Enclave's wrapped handle to the key. Only this Mac's Enclave can use it, so
+copying the file copies nothing usable. `--disconnect` deletes the folder,
+and with it the only handle: the key is gone.
+
+- **No Touch ID per use.** The client service runs unattended and signs a
+  handshake for every connection to the core; a prompt each time would stop
+  recording. The key is usable after the first unlock since boot and never
+  on another device.
+- **No keychain item, no entitlement.** The key is not stored in a keychain,
+  so the binary needs no keychain entitlement or provisioning profile. The
+  Developer ID signature that `make build` adds (`scripts/codesign-cli.sh`)
+  is enough, and so is an unsigned build.
+- **It needs cgo.** `make build` on a Mac uses cgo. A macOS build without cgo
+  (`CGO_ENABLED=0`, as the release workflow cross-compiles) has no Enclave
+  support: it enrols with a file key, and refuses to start on a machine whose
+  key is already in the Enclave, saying to build with `make build`.
+- A Mac with no Secure Enclave (an Intel Mac without a T2 chip) keeps a file
+  key.
+
+**On Linux it is a file**, `key.pem`, 0600 in a 0700 folder. The service
+refuses a key file that group or other can read. A TPM is not used.
+
+**A Mac enrolled before this moves by itself.** At the next renewal (half the
+certificate's life, about 6 hours) the service makes a new key in the
+Enclave, asks the core for a certificate for it, writes `key.se` and the new
+certificate, then overwrites and deletes `key.pem`. Its log says
+`renewed the client certificate with a new machine key in the Secure Enclave`.
+Nothing changes for the operator, and the core needs no change: it renews
+whatever key the request is from, for the same installation.
+
+- If the renewal fails, the file key stays in use and the next try moves it.
+- While the outbox holds journal entries sealed by the file key, the move
+  waits: the core checks each entry against the certificate the delivery
+  presents. The log says so; the key moves at a renewal after they are
+  delivered.
+- A move cut short is finished at the next start: the service uses whichever
+  key the certificate names and removes the other.
+- On an SSD, overwriting `key.pem` does not guarantee its old blocks are gone.
+
+### The proxy CA
+
+The proxy CA is valid for one year. Claude Code reads it once, at start, so it
+is replaced only where Claude Code is told to restart:
+
+- `innsegl connect --update` replaces it when less than 30 days are left, or
+  when it is a ten-year CA from an older version. It prints `replaced the
+  client's proxy CA` and says to restart running Claude Code sessions.
+- The running service picks up the new CA itself, with no restart.
+- The service replaces the CA on its own only once it has expired.
 
 ### Sessions that bypass innsegl
 
@@ -389,6 +449,16 @@ terminal, changes nothing: the command says so and exits 24.
   sudo line, a changed build refused, nothing run without a terminal);
   `scripts/client-restart-selftest.sh` (OPS-170h, PROPOSED: the installed
   copy of this build counts as it)
+- `internal/client/machinekey_test.go` (CLI-055 to CLI-057, PROPOSED: a
+  0600 file key where there is no Enclave, and a group-readable one refused;
+  on a Mac the key in the Secure Enclave, reloaded from its handle, signing
+  the mutual TLS handshake and journal entries; a file key moved into the
+  Enclave at renewal, held back by waiting journal entries, finished after a
+  crash, the old file overwritten). CLI-056 and the Enclave half of CLI-057
+  run on a Mac with cgo and skip elsewhere, saying why.
+- `internal/client/proxyca_test.go` (CLI-058, PROPOSED: the proxy CA lives a
+  year; `--update` replaces a due or ten-year one; the running service mints
+  from the new one without a restart)
 - `internal/client/settingshooks_test.go` (CLI-034, CLI-035, CLI-036,
   PROPOSED: connect replaces stale innsegl hook entries and keeps foreign
   ones; disconnect removes every innsegl entry; the administrator command

@@ -135,11 +135,16 @@ func readJournal(t *testing.T, paths Paths, key *ecdsa.PublicKey) []clientjourna
 	return out
 }
 
-func installationKey(t *testing.T, paths Paths) *ecdsa.PrivateKey {
+// installationKey is the enrolled machine's key, file or hardware.
+func installationKey(t *testing.T, paths Paths) MachineKey {
 	t.Helper()
-	k, err := loadKey(paths.Key)
+	pair, err := LoadClientCertificate(paths)
 	if err != nil {
 		t.Fatal(err)
+	}
+	k, ok := pair.PrivateKey.(MachineKey)
+	if !ok {
+		t.Fatalf("the machine key is %T", pair.PrivateKey)
 	}
 	return k
 }
@@ -172,7 +177,7 @@ func TestJRN002CoreDownForwardsToTheProviderAndJournals(t *testing.T) {
 	}
 
 	key := installationKey(t, paths)
-	entries := readJournal(t, paths, &key.PublicKey)
+	entries := readJournal(t, paths, publicOf(t, key))
 	if len(entries) != 1 {
 		t.Fatalf("%d journal entries, want 1", len(entries))
 	}
@@ -219,8 +224,8 @@ func TestJRN002CoreDownForwardsToTheProviderAndJournals(t *testing.T) {
 	if status, _, _ := postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnHomeSession)); status != http.StatusOK {
 		t.Fatalf("a session outside any repository: %d", status)
 	}
-	if p.hits.Load() != 2 || len(readJournal(t, paths, &key.PublicKey)) != 1 {
-		t.Fatalf("provider hits %d, entries %d; want 2 and still 1", p.hits.Load(), len(readJournal(t, paths, &key.PublicKey)))
+	if p.hits.Load() != 2 || len(readJournal(t, paths, publicOf(t, key))) != 1 {
+		t.Fatalf("provider hits %d, entries %d; want 2 and still 1", p.hits.Load(), len(readJournal(t, paths, publicOf(t, key))))
 	}
 	if !strings.Contains(logs.String(), jrnHomeSession) {
 		t.Errorf("the bypass is not in the log: %s", logs.String())
@@ -306,7 +311,7 @@ func TestJRN008WhatTheCoreDidNotRecordIsJournaled(t *testing.T) {
 	if status, _, body := postJSON(t, front.URL+"/v1/messages", `{"messages":[]}`, modelHeaders(jrnRepoSession)); status != http.StatusOK || body != jrnSSE {
 		t.Fatalf("not recorded: %d %q", status, body)
 	}
-	entries := readJournal(t, paths, &key.PublicKey)
+	entries := readJournal(t, paths, publicOf(t, key))
 	if len(entries) != 1 || entries[0].Reason != clientjournal.ReasonCoreNotRecorded || string(entries[0].ResponseBody) != jrnSSE {
 		t.Fatalf("entries %+v, want one core-not-recorded entry with the relayed reply", entries)
 	}
@@ -318,7 +323,7 @@ func TestJRN008WhatTheCoreDidNotRecordIsJournaled(t *testing.T) {
 		answer.Store(v)
 		postJSON(t, front.URL+"/v1/messages", `{"messages":[]}`, modelHeaders(jrnRepoSession))
 	}
-	if n := len(readJournal(t, paths, &key.PublicKey)); n != 1 {
+	if n := len(readJournal(t, paths, publicOf(t, key))); n != 1 {
 		t.Fatalf("%d entries after recorded and repository-less replies, want still 1", n)
 	}
 
@@ -338,7 +343,7 @@ func TestJRN008WhatTheCoreDidNotRecordIsJournaled(t *testing.T) {
 	if status, _, body := postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession)); status != http.StatusOK || body != jrnSSE {
 		t.Fatalf("core 503: %d %q, want the provider's reply", status, body)
 	}
-	entries = readJournal(t, paths, &key.PublicKey)
+	entries = readJournal(t, paths, publicOf(t, key))
 	if len(entries) != 2 || entries[1].Reason != clientjournal.ReasonCoreUnreachable || entries[1].Prev == "" {
 		t.Fatalf("entries %+v, want a second, chained, core-unreachable entry", entries)
 	}
@@ -413,7 +418,7 @@ func TestJRN009UploadDeletesOnlyAcknowledgedEntries(t *testing.T) {
 		postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession))
 	}
 	key := installationKey(t, paths)
-	if n := len(readJournal(t, paths, &key.PublicKey)); n != 3 {
+	if n := len(readJournal(t, paths, publicOf(t, key))); n != 3 {
 		t.Fatalf("%d entries, want 3", n)
 	}
 
@@ -425,7 +430,7 @@ func TestJRN009UploadDeletesOnlyAcknowledgedEntries(t *testing.T) {
 	if res.Delivered != 1 || res.Rejected == nil {
 		t.Fatalf("upload result %+v, want one acknowledged and a rejection", res)
 	}
-	left := readJournal(t, paths, &key.PublicKey)
+	left := readJournal(t, paths, publicOf(t, key))
 	if len(left) != 2 || left[0].Seq != 2 {
 		t.Fatalf("left %d entries starting at %d, want 2 starting at 2", len(left), left[0].Seq)
 	}
@@ -445,12 +450,12 @@ func TestJRN009UploadDeletesOnlyAcknowledgedEntries(t *testing.T) {
 	if _, uerr := srv2.Drain(context.Background()); uerr != nil {
 		t.Fatal(uerr)
 	}
-	if n := len(readJournal(t, paths, &key.PublicKey)); n != 0 {
+	if n := len(readJournal(t, paths, publicOf(t, key))); n != 0 {
 		t.Fatalf("%d entries left after a clean upload", n)
 	}
 	im.mu.Lock()
 	defer im.mu.Unlock()
-	last, err := im.received[len(im.received)-1].Open(&key.PublicKey)
+	last, err := im.received[len(im.received)-1].Open(publicOf(t, key))
 	if err != nil {
 		t.Fatal(err)
 	}

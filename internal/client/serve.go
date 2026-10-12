@@ -55,10 +55,12 @@ type Server struct {
 	// Now is the clock renewal decisions read; tests replace it.
 	Now func() time.Time
 
-	paths     Paths
-	core      CoreConfig
-	target    *url.URL
-	key       *ecdsa.PrivateKey
+	paths  Paths
+	core   CoreConfig
+	target *url.URL
+	// key is the machine key; renewMu guards replacing it (RM-357).
+	key       MachineKey
+	hardware  atomic.Bool
 	cert      atomic.Pointer[tls.Certificate]
 	revoked   atomic.Bool
 	transport *http.Transport
@@ -144,13 +146,15 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 	if err != nil || target.Scheme != "https" {
 		return nil, fmt.Errorf("%s: core_url %q is not an https URL", paths.Core, core.CoreURL)
 	}
-	key, err := loadKey(paths.Key)
-	if err != nil {
-		return nil, fmt.Errorf("reading the client key: %w", err)
-	}
 	chain, err := loadCerts(paths.Cert)
 	if err != nil {
 		return nil, fmt.Errorf("reading the client certificate: %w", err)
+	}
+	// The key the certificate names: the Enclave's or the file's, and a
+	// move into the Enclave cut short is finished here (RM-357).
+	key, err := loadMachineKey(paths, chain[0].PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("reading the client key: %w", err)
 	}
 	cas, err := loadCerts(paths.CA)
 	if err != nil {
@@ -173,6 +177,7 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 		outboxKick: make(chan struct{}, 1), bypassed: newSeenSet(DefaultMaxStatements),
 		unrecorded: newSeenSet(DefaultMaxStatements), awaited: newSeenSet(DefaultMaxStatements),
 	}
+	s.hardware.Store(key.Hardware())
 	if s.providerClient == nil {
 		s.providerClient = &http.Client{Transport: providerTransport()}
 	}
@@ -185,7 +190,7 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 	if err = s.setCert(chain); err != nil {
 		return nil, err
 	}
-	if s.proxyCA, err = loadOrCreateProxyCA(paths.ProxyCA, paths.ProxyCAKey); err != nil {
+	if s.proxyCA, err = loadOrCreateProxyCA(paths.ProxyCA, paths.ProxyCAKey, time.Now()); err != nil {
 		return nil, err
 	}
 	s.initProxy()
@@ -358,9 +363,12 @@ func (s *Server) logStatementRefusal(req *http.Request, status int) {
 		"its model requests are forwarded, unrecorded where the core cannot record them", session, status, class)
 }
 
-func (s *Server) setCert(chain []*x509.Certificate) error {
+func (s *Server) setCert(chain []*x509.Certificate) error { return s.setCertFor(s.key, chain) }
+
+// setCertFor presents chain, whose leaf must be key's, from now on.
+func (s *Server) setCertFor(key MachineKey, chain []*x509.Certificate) error {
 	pub, ok := chain[0].PublicKey.(*ecdsa.PublicKey)
-	if !ok || !pub.Equal(&s.key.PublicKey) {
+	if !ok || !pub.Equal(key.Public()) {
 		return errors.New("the client certificate is not for the client key")
 	}
 	if len(chain[0].URIs) != 1 {
@@ -370,7 +378,7 @@ func (s *Server) setCert(chain []*x509.Certificate) error {
 	for i, c := range chain {
 		ders[i] = c.Raw
 	}
-	s.cert.Store(&tls.Certificate{Certificate: ders, PrivateKey: s.key, Leaf: chain[0]})
+	s.cert.Store(&tls.Certificate{Certificate: ders, PrivateKey: key, Leaf: chain[0]})
 	return nil
 }
 
@@ -482,6 +490,9 @@ type Status struct {
 	// Version is the build this service runs, so `innsegl doctor` can tell
 	// a service still running an old binary (#588).
 	Version string `json:"version,omitempty"`
+	// MachineKey is where the machine key is held (RM-357):
+	// MachineKeyEnclave or MachineKeyFile.
+	MachineKey string `json:"machine_key,omitempty"`
 }
 
 // countRecorded notes one answer of the core to a model request.
@@ -512,7 +523,10 @@ func (s *Server) Status(ctx context.Context) Status {
 	st := Status{
 		InstallationID: s.core.InstallationID, CoreURL: s.core.CoreURL,
 		CertificateExpiresAt: s.Leaf().NotAfter, RenewAt: s.RenewAt(), Revoked: s.revoked.Load(),
-		Outbox: s.outbox.status(), Version: version.String(),
+		Outbox: s.outbox.status(), Version: version.String(), MachineKey: MachineKeyFile,
+	}
+	if s.hardware.Load() {
+		st.MachineKey = MachineKeyEnclave
 	}
 	st.Recorded = s.recordedCounts()
 	st.Unrouted = s.unroutedFindings()
@@ -559,14 +573,20 @@ func (s *Server) MaybeRenew(ctx context.Context) (bool, error) {
 	if s.Now().Before(s.RenewAt()) {
 		return false, nil
 	}
+	// A file key moves into the hardware store at this renewal (RM-357):
+	// the request comes from a new key there.
+	key, handle := s.key, []byte(nil)
+	if moving, h := s.newHardwareKey(); moving != nil {
+		key, handle = moving, h
+	}
 	// The renewal names the same installation: the same single SAN.
 	uri := s.Leaf().URIs[0]
-	csr, err := newCSR(s.key, uri)
+	csr, err := newCSR(key, uri)
 	if err != nil {
 		return false, err
 	}
 	c := &http.Client{Transport: s.transport, Timeout: 30 * time.Second}
-	got, err := requestCertificate(ctx, c, strings.TrimSuffix(s.core.CoreURL, "/")+RenewPath, map[string]string{"csr": csr}, s.key, uri)
+	got, err := requestCertificate(ctx, c, strings.TrimSuffix(s.core.CoreURL, "/")+RenewPath, map[string]string{"csr": csr}, key, uri)
 	if errors.Is(err, errStatus401) {
 		s.revoked.Store(true)
 		// #nosec G306 -- a marker; its presence is the whole content.
@@ -580,6 +600,9 @@ func (s *Server) MaybeRenew(ctx context.Context) (bool, error) {
 		s.log.Printf("renewing the client certificate: %v", err)
 		return false, err
 	}
+	if handle != nil {
+		return s.commitMovedKey(key, handle, got)
+	}
 	if err := writeFileAtomic(s.paths.Cert, got.ChainPEM, 0o644); err != nil {
 		return false, fmt.Errorf("writing the renewed certificate: %w", err)
 	}
@@ -592,6 +615,73 @@ func (s *Server) MaybeRenew(ctx context.Context) (bool, error) {
 	// Connections already open still carry the old certificate.
 	s.transport.CloseIdleConnections()
 	s.log.Printf("renewed the client certificate; it expires %s", got.Chain[0].NotAfter.UTC().Format(time.RFC3339))
+	return true, nil
+}
+
+// newHardwareKey is a new key in the hardware store and its handle when the
+// machine key is still a file and can move now; nil otherwise. A journal
+// entry still held under the file key holds the move back: the core opens an
+// entry under the certificate its delivery presents, so it would refuse it.
+func (s *Server) newHardwareKey() (MachineKey, []byte) {
+	if s.key.Hardware() || hardwareVault == nil {
+		return nil, nil
+	}
+	if s.outbox.exchangesHeld() {
+		s.log.Printf("the machine key stays a file at this renewal: journal entries sealed by it wait for the core; "+
+			"it moves into the %s at a renewal after they are delivered", hardwareVault.name())
+		return nil, nil
+	}
+	key, handle, err := hardwareVault.generate()
+	if err != nil {
+		s.log.Printf("the machine key stays a file: %v", err)
+		return nil, nil
+	}
+	return key, handle
+}
+
+// commitMovedKey makes key, new in the hardware store, the machine key with
+// its new certificate got: the handle first (a start that finds it beside
+// the old certificate sets it aside), then the certificate, then the swap,
+// then key.pem shredded (a start that finds key.pem beside the new
+// certificate finishes that). Deliveries wait meanwhile, and the outbox seals
+// with the new key from the swap on; if an entry was sealed by the file key
+// while the certificate was requested, nothing is committed and the file key
+// stays in use under its still-valid certificate.
+func (s *Server) commitMovedKey(key MachineKey, handle []byte, got issued) (bool, error) {
+	s.deliverMu.Lock()
+	defer s.deliverMu.Unlock()
+	err := s.outbox.rekey(key, func() error {
+		path, data, err := machineKeyFile(s.paths, key, handle)
+		if err != nil {
+			return err
+		}
+		if err = writeFileAtomic(path, data, 0o600); err != nil {
+			return fmt.Errorf("writing the machine key's handle: %w", err)
+		}
+		if err = writeFileAtomic(s.paths.Cert, got.ChainPEM, 0o644); err != nil {
+			_ = os.Remove(path)
+			return fmt.Errorf("writing the renewed certificate: %w", err)
+		}
+		if err = s.setCertFor(key, got.Chain); err != nil {
+			return err
+		}
+		s.key = key
+		s.hardware.Store(true)
+		return nil
+	})
+	if err != nil {
+		s.log.Printf("the machine key stays a file at this renewal: %v", err)
+		return false, err
+	}
+	if err = writeFileAtomic(s.paths.Bundle, got.BundlePEM, 0o644); err != nil {
+		s.log.Printf("writing the renewed bundle: %v", err)
+	}
+	if err = shredFile(s.paths.Key); err != nil {
+		s.log.Printf("removing %s after the key moved: %v; the next start removes it", s.paths.Key, err)
+	}
+	s.transport.CloseIdleConnections()
+	s.log.Printf("renewed the client certificate with a new machine key in the %s; %s is removed; it expires %s",
+		hardwareVault.name(), s.paths.Key, got.Chain[0].NotAfter.UTC().Format(time.RFC3339))
 	return true, nil
 }
 

@@ -104,8 +104,10 @@ type Sealed struct {
 	Signature []byte `json:"signature"`
 }
 
-// Seal signs e with key. e.Version is set to Version.
-func Seal(e Entry, key *ecdsa.PrivateKey) (Sealed, error) {
+// Seal signs e with key: an ECDSA P-256 key, in memory or held by hardware
+// (the Secure Enclave), signing the SHA-256 digest into an ASN.1 signature.
+// e.Version is set to Version.
+func Seal(e Entry, key crypto.Signer) (Sealed, error) {
 	e.Version = Version
 	raw, err := json.Marshal(e)
 	if err != nil {
@@ -114,12 +116,18 @@ func Seal(e Entry, key *ecdsa.PrivateKey) (Sealed, error) {
 	return sealRaw(raw, key)
 }
 
-func sealRaw(raw []byte, key *ecdsa.PrivateKey) (Sealed, error) {
+func sealRaw(raw []byte, key crypto.Signer) (Sealed, error) {
 	if key == nil {
 		return Sealed{}, errors.New("clientjournal: no key to seal with")
 	}
+	if k, ok := key.(*ecdsa.PrivateKey); ok && k == nil {
+		return Sealed{}, errors.New("clientjournal: no key to seal with")
+	}
+	if _, ok := key.Public().(*ecdsa.PublicKey); !ok {
+		return Sealed{}, errors.New("clientjournal: the sealing key is not an ECDSA key")
+	}
 	sum := sha256.Sum256(raw)
-	sig, err := ecdsa.SignASN1(rand.Reader, key, sum[:])
+	sig, err := key.Sign(rand.Reader, sum[:], crypto.SHA256)
 	if err != nil {
 		return Sealed{}, fmt.Errorf("clientjournal: signing the entry: %w", err)
 	}

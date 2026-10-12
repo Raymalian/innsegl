@@ -24,7 +24,7 @@ package client
 // the one request this service refuses.
 
 import (
-	"crypto/ecdsa"
+	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,7 +84,7 @@ func parseItemName(name string) (uint64, string, bool) {
 type outbox struct {
 	dir          string
 	maxBytes     int64
-	key          *ecdsa.PrivateKey
+	key          crypto.Signer
 	installation string
 	logf         func(string, ...any)
 
@@ -101,7 +101,7 @@ type outbox struct {
 // openOutbox opens the outbox at dir, creating it 0700. An outbox that
 // cannot be opened is kept with its error: every request that would need
 // it is then refused, and no other.
-func openOutbox(dir, installation string, key *ecdsa.PrivateKey, maxBytes int64, logf func(string, ...any)) *outbox {
+func openOutbox(dir, installation string, key crypto.Signer, maxBytes int64, logf func(string, ...any)) *outbox {
 	if maxBytes <= 0 {
 		maxBytes = DefaultOutboxMaxBytes
 	}
@@ -383,6 +383,36 @@ func (o *outbox) removeLocked(it outboxItem) error {
 	}
 	return nil
 }
+
+// errEntriesHeld is rekey's refusal: journal entries sealed by the current
+// key are still held.
+var errEntriesHeld = errors.New("journal entries sealed by the current key are still waiting for the core")
+
+// rekey seals every later entry with key, but only when no entry sealed by
+// the current one is held: the core opens an entry under the certificate the
+// delivery presents, so an entry left under the old key would never be taken
+// (RM-357). commit runs under the same lock, before the swap, so no entry is
+// sealed between the check and the new certificate; its error stops the swap.
+func (o *outbox) rekey(key crypto.Signer, commit func() error) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.openErr != nil {
+		return fmt.Errorf("the outbox cannot be read, so it may hold entries under the current key: %w", o.openErr)
+	}
+	for _, it := range o.items {
+		if it.kind == KindExchange {
+			return errEntriesHeld
+		}
+	}
+	if err := commit(); err != nil {
+		return err
+	}
+	o.key = key
+	return nil
+}
+
+// exchangesHeld reports whether a journal entry is waiting for the core.
+func (o *outbox) exchangesHeld() bool { return o.count(KindExchange) > 0 || o.openErr != nil }
 
 func (o *outbox) count(kind string) int {
 	o.mu.Lock()

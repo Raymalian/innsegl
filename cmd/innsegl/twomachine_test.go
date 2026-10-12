@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/accounts"
+	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/gateway"
 )
 
@@ -208,7 +209,9 @@ func postThrough(ctx context.Context, t *testing.T, listen, path string) int {
 // endpoint.
 func renewWith(ctx context.Context, t *testing.T, coreAddr, clientDir string) int {
 	t.Helper()
-	pair, err := tls.LoadX509KeyPair(filepath.Join(clientDir, "cert.pem"), filepath.Join(clientDir, "key.pem"))
+	// The machine key as the shipped binary wrote it: on a Mac the Secure
+	// Enclave's handle, opened here in another process (RM-357).
+	pair, err := client.LoadClientCertificate(client.ClientPaths(filepath.Dir(filepath.Dir(clientDir))))
 	if err != nil {
 		t.Fatal(err)
 	}

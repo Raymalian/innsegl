@@ -20,12 +20,19 @@ const DefaultListen = "127.0.0.1:28195"
 // The harness sandbox denies ~/.innsegl to an agent's shell (only
 // ~/.innsegl/ca is readable), so the key is not readable from it.
 type Paths struct {
-	Dir    string
-	Key    string // the machine's private key, 0600
-	Cert   string // the client certificate chain, leaf first
-	Bundle string // the deployment's trust bundle
-	CA     string // the core's own CA, the only root the client trusts for the core
-	Core   string // core.json
+	Dir string
+	// Key is the machine's private key as a file, 0600: where the platform
+	// has no hardware key store (Linux; a macOS build without cgo), and on
+	// a Mac enrolled before RM-357 until its next renewal moves the key.
+	Key string
+	// EnclaveKey is, on macOS, the Secure Enclave's wrapped handle to the
+	// machine key (RM-357), 0600. It is not a private key: only this Mac's
+	// Enclave can use it, and nothing can export the key from it.
+	EnclaveKey string
+	Cert       string // the client certificate chain, leaf first
+	Bundle     string // the deployment's trust bundle
+	CA         string // the core's own CA, the only root the client trusts for the core
+	Core       string // core.json
 	// Revoked exists once the core has refused a renewal.
 	Revoked string
 	// Outbox holds what the core did not take (ADR-0068): journal entries,
@@ -56,6 +63,7 @@ func ClientPaths(home string) Paths {
 	return Paths{
 		Dir:        dir,
 		Key:        filepath.Join(dir, "key.pem"),
+		EnclaveKey: filepath.Join(dir, "key.se"),
 		Cert:       filepath.Join(dir, "cert.pem"),
 		Bundle:     filepath.Join(dir, "bundle.pem"),
 		CA:         filepath.Join(dir, "gateway-ca.pem"),
@@ -113,8 +121,9 @@ func ReadCoreConfig(p Paths) (CoreConfig, error) {
 }
 
 // WriteEnrolment writes everything an enrolment produced. The directory is
-// created 0700 and the key 0600; nothing is written before the core has
-// answered, so a refused enrolment leaves no state.
+// created 0700 and the key 0600 (a file key as key.pem, an Enclave key's
+// handle as key.se); nothing is written before the core has answered, so a
+// refused enrolment leaves no state.
 func WriteEnrolment(p Paths, e *Enrolment, listen string) error {
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
 		return err
@@ -122,7 +131,7 @@ func WriteEnrolment(p Paths, e *Enrolment, listen string) error {
 	if err := TightenState(p.Dir); err != nil {
 		return err
 	}
-	keyDER, err := x509.MarshalECPrivateKey(e.Key)
+	keyPath, keyPEM, err := machineKeyFile(p, e.Key, e.keyBlob)
 	if err != nil {
 		return err
 	}
@@ -139,7 +148,7 @@ func WriteEnrolment(p Paths, e *Enrolment, listen string) error {
 		data []byte
 		mode os.FileMode
 	}{
-		{p.Key, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600},
+		{keyPath, keyPEM, 0o600},
 		{p.Cert, e.ChainPEM, 0o600},
 		{p.Bundle, e.BundlePEM, 0o600},
 		{p.CA, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.CA.Raw}), 0o600},

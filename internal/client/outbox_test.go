@@ -412,7 +412,7 @@ func TestOutboxMigratesTheOldLayoutOnce(t *testing.T) {
 	core.Close()
 	postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession))
 	key := installationKey(t, paths)
-	entries := readJournal(t, paths, &key.PublicKey)
+	entries := readJournal(t, paths, publicOf(t, key))
 	if len(entries) != 1 || entries[0].Seq != 3 || entries[0].Prev != sealed[1].Hash() {
 		t.Fatalf("the next entry is %+v, want seq 3 after the migrated head", entries)
 	}
@@ -487,7 +487,7 @@ func TestOutboxMigrationKeepsTheChainOfAnEmptyOldJournal(t *testing.T) {
 	core.Close()
 	postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession))
 	key := installationKey(t, paths)
-	entries := readJournal(t, paths, &key.PublicKey)
+	entries := readJournal(t, paths, publicOf(t, key))
 	if len(entries) != 1 || entries[0].Seq != 8 || entries[0].Prev != prev {
 		t.Fatalf("the next entry is %+v, want seq 8 after the old head", entries)
 	}

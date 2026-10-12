@@ -503,7 +503,7 @@ func tightenedMode(m os.FileMode) os.FileMode { return m.Perm() &^ 0o077 }
 func (d *doctor) innseglPrivatePaths() []string {
 	p := d.paths
 	out := []string{p.Dir, p.Outbox, p.TrustBackups, filepath.Dir(p.TrustIdentity),
-		p.Key, p.ProxyCAKey, p.TrustIdentity, p.Authors}
+		p.Key, p.EnclaveKey, p.ProxyCAKey, p.TrustIdentity, p.Authors}
 	if backups, err := filepath.Glob(filepath.Join(p.TrustBackups, "*.age")); err == nil {
 		out = append(out, backups...)
 	}

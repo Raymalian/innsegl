@@ -576,9 +576,16 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 		again = "`innsegl connect --update --hardened`"
 	}
 	// RM-329: the settings name the proxy CA; it exists before they do.
-	if err = client.EnsureProxyCA(paths, deps.uid, deps.underSudo); err != nil {
+	// RM-357: one near the end of its year, or from before the one-year
+	// life, is replaced here; the running service picks it up by itself.
+	rotated, err := client.EnsureProxyCA(paths, deps.uid, deps.underSudo)
+	if err != nil {
 		fprintf(stderr, "innsegl connect: the client's proxy CA: %v\n", err)
 		return exitConnectFailed
+	}
+	if rotated {
+		fprintf(stdout, "innsegl connect: replaced the client's proxy CA (%s); Claude Code sessions already "+
+			"running trust the old one: restart them\n", paths.ProxyCA)
 	}
 	recheckServerCertificate(ctx, paths, stdout, stderr)
 	err = client.InstallSettings(f.settings, settings, deps.now, stdout)
@@ -754,9 +761,14 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 	}
 	fprintf(stdout, "innsegl connect: enrolled as installation %s; the certificate expires %s\n",
 		enrolment.InstallationID, enrolment.ExpiresAt.UTC().Format(time.RFC3339))
+	if enrolment.Key.Hardware() {
+		fprintf(stdout, "innsegl connect: the machine key is in the Secure Enclave; it cannot be copied off this Mac\n")
+	} else {
+		fprintf(stdout, "innsegl connect: the machine key is %s (0600)\n", paths.Key)
+	}
 
 	// RM-329: the settings name the proxy CA; it exists before they do.
-	if err = client.EnsureProxyCA(paths, deps.uid, false); err != nil {
+	if _, err = client.EnsureProxyCA(paths, deps.uid, false); err != nil {
 		fprintf(stderr, "innsegl connect: the client's proxy CA: %v\n", err)
 		return exitConnectFailed
 	}

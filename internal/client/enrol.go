@@ -5,8 +5,8 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -65,8 +65,12 @@ type EnrolOptions struct {
 type Enrolment struct {
 	CoreURL        string
 	InstallationID string
-	Key            *ecdsa.PrivateKey
-	CA             *x509.Certificate
+	// Key is the machine key: in the Secure Enclave on a Mac that has one,
+	// otherwise in memory until WriteEnrolment writes it as a file.
+	Key MachineKey
+	// keyBlob is the hardware store's handle to Key; nil for a file key.
+	keyBlob []byte
+	CA      *x509.Certificate
 	// PublicServer is true when the core's server certificate is publicly
 	// trusted (#473); recorded in core.json.
 	PublicServer bool
@@ -94,7 +98,7 @@ func Enrol(ctx context.Context, opts EnrolOptions) (*Enrolment, error) {
 	if opts.CA == nil {
 		return nil, errors.New("no CA for the core")
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, blob, err := newMachineKey()
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +153,7 @@ func Enrol(ctx context.Context, opts EnrolOptions) (*Enrolment, error) {
 	}
 	return &Enrolment{
 		CoreURL: coreURL, InstallationID: got.InstallationID,
-		Key: key, CA: opts.CA, PublicServer: public, issued: got,
+		Key: key, keyBlob: blob, CA: opts.CA, PublicServer: public, issued: got,
 	}, nil
 }
 
@@ -195,7 +199,7 @@ func newInstallationID() (string, error) {
 }
 
 // newCSR is a request from key naming exactly one SAN, uri.
-func newCSR(key *ecdsa.PrivateKey, uri *url.URL) (string, error) {
+func newCSR(key crypto.Signer, uri *url.URL) (string, error) {
 	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{URIs: []*url.URL{uri}}, key)
 	if err != nil {
 		return "", err
@@ -219,7 +223,7 @@ type issueResponse struct {
 // requestCertificate posts body to url and checks the answer: a 32-hex
 // installation id, a chain whose leaf carries this machine's own public key,
 // a bundle, and an expiry, the leaf naming exactly the SAN asked for.
-func requestCertificate(ctx context.Context, c *http.Client, endpoint string, body any, key *ecdsa.PrivateKey, uri *url.URL) (issued, error) {
+func requestCertificate(ctx context.Context, c *http.Client, endpoint string, body any, key crypto.Signer, uri *url.URL) (issued, error) {
 	var out issued
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -263,7 +267,7 @@ func requestCertificate(ctx context.Context, c *http.Client, endpoint string, bo
 		return out, fmt.Errorf("the core's certificate: %w", err)
 	}
 	pub, ok := chain[0].PublicKey.(*ecdsa.PublicKey)
-	if !ok || !pub.Equal(&key.PublicKey) {
+	if !ok || !pub.Equal(key.Public()) {
 		return out, errors.New("the core issued a certificate for a key other than this machine's")
 	}
 	if len(chain[0].URIs) != 1 || chain[0].URIs[0].String() != uri.String() {

@@ -163,7 +163,7 @@ func (c *Core) Fingerprint() string {
 // SetRevoked marks the installation revoked: renew answers 401.
 func (c *Core) SetRevoked(v bool) { c.locked(func() { c.revoked = v }) }
 
-// SetUnavailable makes enrolment answer 503, spending nothing.
+// SetUnavailable makes enrolment and renewal answer 503, spending nothing.
 func (c *Core) SetUnavailable(v bool) { c.locked(func() { c.unavailable = v }) }
 
 // SetIDTaken makes the next n enrolments answer 400 "id in use".
@@ -338,10 +338,14 @@ func (c *Core) renew(w http.ResponseWriter, r *http.Request) {
 	}
 	c.mu.Lock()
 	c.renewCalls++
-	revoked := c.revoked
+	revoked, unavailable := c.revoked, c.unavailable
 	c.mu.Unlock()
 	if revoked {
 		refuse(w)
+		return
+	}
+	if unavailable {
+		http.Error(w, "identity authority unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	csr, ok := parseCSR(req.CSR)
