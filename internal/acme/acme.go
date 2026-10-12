@@ -97,9 +97,12 @@ type Config struct {
 
 // Status is what `innsegl status` shows about the server certificate.
 type Status struct {
-	Source   string    `json:"source"`
-	Names    []string  `json:"names"`
-	NotAfter time.Time `json:"not_after"`
+	Source string   `json:"source"`
+	Names  []string `json:"names"`
+	// NotBefore with NotAfter is the certificate's lifetime, which doctor
+	// judges expiry against.
+	NotBefore time.Time `json:"not_before,omitempty"`
+	NotAfter  time.Time `json:"not_after"`
 	// Problem is why a public certificate asked for is not being served.
 	Problem string `json:"problem,omitempty"`
 }
@@ -288,7 +291,7 @@ func (m *Manager) Status() Status {
 	defer m.mu.RUnlock()
 	st := Status{Source: SourceACME, Names: append([]string(nil), m.cfg.Names...)}
 	if c := m.certs[kindGateway]; c != nil {
-		st.NotAfter = c.Leaf.NotAfter
+		st.NotBefore, st.NotAfter = c.Leaf.NotBefore, c.Leaf.NotAfter
 	}
 	return st
 }

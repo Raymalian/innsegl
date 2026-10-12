@@ -30,11 +30,12 @@ func WarningFor(notAfter, now time.Time) Warning {
 
 // Expiry is one CA in use and when it expires.
 type Expiry struct {
-	Name     string    `json:"name"`
-	Kind     Kind      `json:"kind"`
-	KeyID    string    `json:"key_id"`
-	NotAfter time.Time `json:"not_after"`
-	Warning  Warning   `json:"warning,omitempty"`
+	Name      string    `json:"name"`
+	Kind      Kind      `json:"kind"`
+	KeyID     string    `json:"key_id"`
+	NotBefore time.Time `json:"not_before,omitempty"`
+	NotAfter  time.Time `json:"not_after"`
+	Warning   Warning   `json:"warning,omitempty"`
 }
 
 // caNames are the CAs whose expiry is watched, in the order they are shown.
@@ -64,7 +65,7 @@ func Expiries(h *History, now time.Time) []Expiry {
 			continue
 		}
 		out = append(out, Expiry{Name: c.name, Kind: c.kind, KeyID: e.KeyID,
-			NotAfter: cert.NotAfter.UTC(), Warning: WarningFor(cert.NotAfter, now)})
+			NotBefore: cert.NotBefore.UTC(), NotAfter: cert.NotAfter.UTC(), Warning: WarningFor(cert.NotAfter, now)})
 	}
 	return out
 }

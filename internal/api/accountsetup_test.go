@@ -147,8 +147,8 @@ func TestRecoverWithAnEmptyCodeIsRefused(t *testing.T) {
 // dash.
 func TestRecoverAcceptsACodeWithOrWithoutItsDashAndCase(t *testing.T) {
 	srv, _, authStore := testServerConfigured(t)
-	cookie := signInTestUser(t, srv.URL, authStore)
-	regen := do(t, http.MethodPost, srv.URL+"/api/v1/account/recovery-codes", "", cookie)
+	u := newStepUpUserOn(t, srv.URL, authStore)
+	regen := u.regenerate(t)
 	if regen.status != http.StatusOK {
 		t.Fatalf("POST /api/v1/account/recovery-codes: %d: %s", regen.status, regen.body)
 	}
@@ -169,16 +169,16 @@ func TestRecoverAcceptsACodeWithOrWithoutItsDashAndCase(t *testing.T) {
 // Regenerating recovery codes voids every earlier one.
 func TestRegeneratingRecoveryCodesVoidsTheOldOnes(t *testing.T) {
 	srv, _, authStore := testServerConfigured(t)
-	cookie := signInTestUser(t, srv.URL, authStore)
+	u := newStepUpUserOn(t, srv.URL, authStore)
 
-	first := do(t, http.MethodPost, srv.URL+"/api/v1/account/recovery-codes", "", cookie)
+	first := u.regenerate(t)
 	if first.status != http.StatusOK {
 		t.Fatalf("first POST /api/v1/account/recovery-codes: %d: %s", first.status, first.body)
 	}
 	var firstCodes RecoveryCodes
 	decodeBody(t, first, &firstCodes)
 
-	second := do(t, http.MethodPost, srv.URL+"/api/v1/account/recovery-codes", "", cookie)
+	second := u.regenerate(t)
 	if second.status != http.StatusOK {
 		t.Fatalf("second POST /api/v1/account/recovery-codes: %d: %s", second.status, second.body)
 	}

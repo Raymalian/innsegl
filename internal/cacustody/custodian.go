@@ -28,6 +28,13 @@ const (
 	PathStatus   = "/status"
 	PathMaterial = "/material"
 	PathUnlock   = "/unlock"
+	// PathReseal stages the material sealed to a new set, by POST
+	// (ResealRequest, answered ResealStaged).
+	PathReseal = "/reseal"
+	// PathResealConfirm swaps the staged copy in, by POST (ResealConfirm).
+	PathResealConfirm = "/reseal/confirm"
+	// PathRecipients lists the set the material is sealed to (RecipientSet).
+	PathRecipients = "/recipients"
 )
 
 // MaterialFile is the unlock material's ciphertext, in the custodian's
@@ -91,6 +98,13 @@ type Custodian struct {
 	// snapshotToken takes the store's snapshot. Memory only: a restart
 	// leaves it empty until the next unlock, when the store is sealed anyway.
 	snapshotToken string
+
+	// resealMu orders reseals; staged is the copy a reseal waits to have
+	// confirmed. Memory only: a restart drops it and keeps the old copy.
+	resealMu sync.Mutex
+	staged   *stagedReseal
+	// now is time.Now unless a test moves the clock.
+	now func() time.Time
 }
 
 // Seal encrypts m to recipients.
@@ -98,10 +112,15 @@ func Seal(m Material, recipients []age.Recipient) ([]byte, error) {
 	if !m.Valid() {
 		return nil, ErrIncomplete
 	}
+	return sealValue(m, recipients)
+}
+
+// sealValue encrypts v, as JSON, to recipients.
+func sealValue(v any, recipients []age.Recipient) ([]byte, error) {
 	if len(recipients) == 0 {
 		return nil, errors.New("ca custody: no recipient to seal the unlock material to")
 	}
-	plain, err := json.Marshal(m)
+	plain, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +193,7 @@ func (c *Custodian) Init(ctx context.Context) error {
 		return fmt.Errorf("ca custody: keeping the unlock material: %w. The store is initialised "+
 			"and its material is lost; remove the store's volume and init again", err)
 	}
+	c.recordInit(m)
 	if err := c.login(ctx, m); err != nil {
 		return err
 	}
@@ -343,6 +363,12 @@ func (c *Custodian) Unlock(ctx context.Context, m Material) error {
 		}
 		return err
 	}
+	if st.Sealed {
+		// The store accepted every part of m: this is the material.
+		if err := c.writeMaterialCommitment(m); err != nil {
+			c.logf("the material's commitment was not written (%v); a reseal of the unsealed store is refused until it is", err)
+		}
+	}
 	if err := c.Snapshot(ctx); err != nil {
 		c.logf("the snapshot after the unlock failed (%v); the next scheduled one tries again", err)
 	}
@@ -492,7 +518,78 @@ func (c *Custodian) Handler() http.Handler {
 			writeError(w, http.StatusServiceUnavailable, "ca custody: the store did not answer; retry")
 		}
 	})
+	mux.HandleFunc(PathRecipients, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "only GET")
+			return
+		}
+		set, err := c.CurrentRecipients()
+		if err != nil {
+			c.logf("listing the recipients: %v", err)
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, set)
+	})
+	mux.HandleFunc(PathReseal, func(w http.ResponseWriter, r *http.Request) {
+		var req ResealRequest
+		if !decodePost(w, r, &req) {
+			return
+		}
+		staged, err := c.Reseal(r.Context(), req)
+		if err != nil {
+			c.writeResealError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, staged)
+	})
+	mux.HandleFunc(PathResealConfirm, func(w http.ResponseWriter, r *http.Request) {
+		var req ResealConfirm
+		if !decodePost(w, r, &req) {
+			return
+		}
+		if err := c.ConfirmReseal(r.Context(), req); err != nil {
+			c.writeResealError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	return mux
+}
+
+// decodePost reads a bounded JSON body from a POST, or answers the error.
+func decodePost(w http.ResponseWriter, r *http.Request, v any) bool {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "only POST")
+		return false
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxUnlockBody)).Decode(v); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "ca custody: the request is too large")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "ca custody: the request is not readable")
+		return false
+	}
+	return true
+}
+
+// writeResealError answers a refused reseal step. No answer repeats the
+// material.
+func (c *Custodian) writeResealError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrIncomplete), errors.Is(err, ErrEmptySet), errors.Is(err, ErrOpenerNotInSet),
+		errors.Is(err, ErrBadRecipient):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrSetMismatch), errors.Is(err, ErrNothingStaged), errors.Is(err, ErrNoMaterialCommitment):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, errNotAccepted), errors.Is(err, ErrNotOpened):
+		writeError(w, http.StatusForbidden, err.Error())
+	default:
+		c.logf("reseal failed: %v", err)
+		writeError(w, http.StatusServiceUnavailable, "ca custody: the reseal did not complete; retry")
+	}
 }
 
 func (c *Custodian) materialPath() string { return filepath.Join(c.Dir, "material", MaterialFile) }

@@ -96,14 +96,15 @@ maintainer ask "why is it like this?"
 | [0071](0071-the-projects-mount-tools-are-deprecated-and-their-implementation-removed.md) | The projects-mount tools are deprecated and their implementation removed | accepted | 2026-10-05 |
 | [0072](0072-a-development-stack-is-never-the-live-one.md) | A development stack is never the live one | accepted | 2026-10-05 |
 | [0073](0073-trust-roots-are-kept-as-an-append-only-history.md) | Trust roots are kept as an append-only history | accepted | 2026-10-07 |
-| [0074](0074-trust-keys-are-backed-up-encrypted-and-off-the-host.md) | Trust keys are backed up encrypted, and off the host | accepted | 2026-10-07 |
+| [0074](0074-trust-keys-are-backed-up-encrypted-and-off-the-host.md) | Trust keys are backed up encrypted, and off the host | accepted; amended by [0082](0082-a-second-unlock-device-a-hardware-security-key-through-the-dashboard.md) | 2026-10-07 |
 | [0075](0075-each-host-has-its-own-ca-password-and-the-ca-rotates-by-script.md) | Each host has its own CA password, and the CA rotates by script | accepted | 2026-10-07 |
-| [0076](0076-the-ca-key-store-is-unlocked-by-the-operators-machine.md) | The CA key store is unlocked by the operator's machine | accepted | 2026-10-07 |
+| [0076](0076-the-ca-key-store-is-unlocked-by-the-operators-machine.md) | The CA key store is unlocked by the operator's machine | accepted; amended by [0082](0082-a-second-unlock-device-a-hardware-security-key-through-the-dashboard.md) | 2026-10-07 |
 | [0077](0077-the-mcp-wire-surface-is-deprecated.md) | The MCP wire surface is deprecated | accepted; decision 2 superseded in part by [0083](0083-the-identity-lifecycle-is-served-on-no-listener-by-default.md) | 2026-10-08 |
 | [0078](0078-every-service-credential-is-generated-per-host-and-read-from-a-file.md) | Every service credential is generated per host and read from a file | accepted | 2026-10-09 |
 | [0079](0079-adoption-runs-on-the-commit-path.md) | Adoption runs on the commit path | accepted | 2026-10-09 |
 | [0080](0080-schema-version-5-records-repository-and-branch-as-keyed-pseudonyms.md) | Schema version 5 records repository and branch as keyed pseudonyms, resolved through an erasable alias table | accepted | 2026-10-10 |
 | [0081](0081-the-core-can-serve-a-publicly-trusted-server-certificate-obtained-through-acme-dns-01.md) | The core can serve a publicly trusted server certificate, obtained through ACME DNS-01 | accepted | 2026-10-10 |
+| [0082](0082-a-second-unlock-device-a-hardware-security-key-through-the-dashboard.md) | A second unlock device: a hardware security key through the dashboard | accepted | 2026-10-11 |
 | [0083](0083-the-identity-lifecycle-is-served-on-no-listener-by-default.md) | The identity lifecycle is served on no listener by default | accepted | 2026-10-12 |
 
 ## Open items

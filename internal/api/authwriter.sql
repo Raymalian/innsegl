@@ -54,6 +54,12 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA innsegl_auth GRANT USAGE, SELECT ON SEQUENCES
 -- table exists here. Migration 0010 also puts a trigger on it.
 REVOKE UPDATE, DELETE, TRUNCATE ON innsegl_auth.audit FROM %[1]s;
 
+-- Unlock keys (migration 0023, ADR-0082 decision 8): a key is revoked, never
+-- removed, so this role may insert one and update its counter or revocation,
+-- and may not delete one. The migration's trigger refuses it for every role
+-- as well.
+REVOKE DELETE, TRUNCATE ON innsegl_auth.unlock_keys FROM %[1]s;
+
 -- No path to privilege of its own -- the same posture readonly.sql and
 -- appendonly.sql both hold their roles to.
 ALTER ROLE %[1]s NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;

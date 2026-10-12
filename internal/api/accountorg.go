@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
@@ -236,20 +235,8 @@ type pendingConfirmation struct {
 // beginConfirmation asks the user's own passkeys for a fresh assertion and
 // stores request with the challenge.
 func (s *Server) beginConfirmation(ctx context.Context, w http.ResponseWriter, kind, userID string, request any) {
-	user, err := loadUser(ctx, s.authStore, userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, codeInternal, "could not load the account")
-		return
-	}
-	if len(user.credentials) == 0 {
-		writeError(w, http.StatusForbidden, codeForbidden, confirmNeedsPasskey)
-		return
-	}
-	assertion, sessionData, err := s.webAuthn.BeginLogin(user,
-		webauthn.WithUserVerification(protocol.VerificationRequired))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, codeInternal, "could not begin the "+
-			"confirmation ceremony: "+err.Error())
+	assertion, sessionData, ok := s.beginStepUp(ctx, w, userID)
+	if !ok {
 		return
 	}
 	req, err := json.Marshal(request)
@@ -298,22 +285,7 @@ func (s *Server) finishConfirmation(w http.ResponseWriter, r *http.Request, kind
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not read the saved ceremony")
 		return false
 	}
-	user, err := loadUser(ctx, s.authStore, userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, codeInternal, "could not load the account")
-		return false
-	}
-	cred, err := s.webAuthn.FinishLogin(user, pending.Session, credentialHTTPRequest(req.Credential))
-	if err != nil {
-		s.recordAuth(ctx, AuthEventConfirmationRefused, userID, kind+": the passkey did not verify: "+err.Error())
-		writeError(w, http.StatusUnauthorized, codeUnauthorized, "the passkey did not confirm this: "+err.Error())
-		return false
-	}
-	if uerr := s.authStore.UpdatePasskey(ctx, *cred); uerr != nil {
-		writeError(w, http.StatusInternalServerError, codeInternal, "could not update the passkey")
-		return false
-	}
-	return true
+	return s.verifyStepUp(ctx, w, kind, userID, pending.Session, req.Credential)
 }
 
 // ---------------------------------------------------------------------------

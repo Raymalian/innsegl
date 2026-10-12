@@ -17,8 +17,15 @@ import (
 // (exit 37), because signing is about to fail or already has.
 
 const (
-	// doctorExpiryWarn is how close to expiring a certificate is warned.
+	// doctorExpiryWarn is the longest a certificate is warned ahead of
+	// expiry: a long-lived root is warned a week out.
 	doctorExpiryWarn = 7 * 24 * time.Hour
+	// doctorRenewalFraction is the part of its lifetime a self-renewing
+	// certificate may have left before renewal counts as overdue. The core
+	// renews its server certificate with a quarter of the lifetime left
+	// (internal/gateway/tls.go), so a warning below that means the renewal
+	// did not happen.
+	doctorRenewalFraction = 4
 	// doctorClientCertWarn is the client certificate's own threshold: it lives
 	// hours and the service renews it, so seven days would always warn. Under
 	// an hour left means the renewal is stuck.
@@ -64,8 +71,21 @@ func (d *doctor) tokenLine(left int64) {
 	}
 }
 
+// expiryWarn is how much time must be left on a certificate before it is
+// warned: a quarter of its own lifetime, never more than a week. A short-lived
+// certificate its owner renews warns only when renewal is overdue; a root
+// that lives years warns a week out. Without a NotBefore (an older core) the
+// lifetime is unknown and the week applies.
+func expiryWarn(notBefore, notAfter time.Time) time.Duration {
+	if notBefore.IsZero() || !notAfter.After(notBefore) {
+		return doctorExpiryWarn
+	}
+	return min(notAfter.Sub(notBefore)/doctorRenewalFraction, doctorExpiryWarn)
+}
+
 // certLine reports one certificate. It says whether it has expired.
-func (d *doctor) certLine(check string, notAfter time.Time, warn time.Duration, note string) (expired bool) {
+func (d *doctor) certLine(check string, notBefore, notAfter time.Time, note string) (expired bool) {
+	warn := expiryWarn(notBefore, notAfter)
 	if notAfter.IsZero() {
 		d.line(check, "not reported", "the core does not say when it expires")
 		return false
@@ -100,10 +120,10 @@ func (d *doctor) expiries(st coreStatus) (expired bool) {
 		if st.ServerCertificate.Problem != "" {
 			note = "; " + st.ServerCertificate.Problem
 		}
-		expired = d.certLine("server certificate", st.ServerCertificate.NotAfter, doctorExpiryWarn, note) || expired
+		expired = d.certLine("server certificate", st.ServerCertificate.NotBefore, st.ServerCertificate.NotAfter, note) || expired
 	}
 	for _, e := range st.TrustExpiries {
-		expired = d.certLine(e.Name, e.NotAfter, doctorExpiryWarn, "; see runbooks/ca-custody.md") || expired
+		expired = d.certLine(e.Name, e.NotBefore, e.NotAfter, "; see runbooks/ca-custody.md") || expired
 	}
 	return expired
 }

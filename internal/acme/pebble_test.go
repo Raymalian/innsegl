@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,11 +29,31 @@ import (
 // real certificate authority.
 
 const (
-	pebbleImage     = "ghcr.io/letsencrypt/pebble:2.8.0"
+	// pebbleImage is built from testdata/pebble.Dockerfile, which says why
+	// no released image will do; the tag names the upstream commit.
+	pebbleImage     = "innsegl-test-pebble:755eb89b230a"
 	challtestImage  = "ghcr.io/letsencrypt/pebble-challtestsrv:2.8.0"
 	pebbleTestRoot  = "/test/certs/pebble.minica.pem"
 	pebbleContainer = "/app"
 )
+
+var (
+	pebbleBuild    sync.Once
+	pebbleBuildErr error
+)
+
+// buildPebble builds pebbleImage once per test binary; Docker's build cache
+// makes every build after the first on a machine immediate.
+func buildPebble(t *testing.T) {
+	t.Helper()
+	pebbleBuild.Do(func() {
+		_, pebbleBuildErr = dockertest.Docker(context.Background(), "build", "-q",
+			"-t", pebbleImage, "-f", filepath.Join("testdata", "pebble.Dockerfile"), "testdata")
+	})
+	if pebbleBuildErr != nil {
+		t.Fatalf("build the ACME test server: %v", pebbleBuildErr)
+	}
+}
 
 // pebble is a running local ACME server.
 type pebble struct {
@@ -67,6 +88,7 @@ func startPebble(t *testing.T) *pebble {
 	if err := dockertest.Usable(ctx); err != nil {
 		t.Skipf("docker: %v", err)
 	}
+	buildPebble(t)
 	n, err := rand.Int(rand.Reader, big.NewInt(200))
 	if err != nil {
 		t.Fatal(err)

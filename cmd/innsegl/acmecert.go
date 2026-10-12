@@ -83,7 +83,7 @@ func (o ownCACerts) WriteDashboardCert(dir string) (time.Time, error) {
 func (o ownCACerts) Status() serverCertStatus {
 	st := serverCertStatus{Source: serverCertOwnCA, Names: o.names}
 	if c, err := o.ca.GetCertificate(nil); err == nil && c.Leaf != nil {
-		st.NotAfter = c.Leaf.NotAfter
+		st.NotBefore, st.NotAfter = c.Leaf.NotBefore, c.Leaf.NotAfter
 	}
 	return st
 }

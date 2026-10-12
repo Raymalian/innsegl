@@ -422,3 +422,53 @@ func TestTrustBackupARequiredValueThatIsUnsetIsStillRefused(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q: an unset required value must refuse", code, errOut.String())
 	}
 }
+
+// BAK-037: the backup also encrypts to the recipients file the custody reseal
+// writes beside the unlock material; a malformed file writes no bundle.
+func TestTrustBackupCreateEncryptsToTheCustodyRecipientsFile(t *testing.T) {
+	env, args := trustVolumes(t)
+	root := filepath.Dir(env["TEST_BACKUP_DIR"])
+	second, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondFile := filepath.Join(root, "second.txt")
+	if err := os.WriteFile(secondFile, []byte(second.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	material := filepath.Join(root, "ca-custody", "material")
+	if err := os.MkdirAll(material, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	recipients := filepath.Join(material, trustbackup.RecipientsFile)
+	if err := os.WriteFile(recipients, []byte("# enrolled\n"+second.Recipient().String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args = append(args, "--path", trustItemCAMaterial+"="+material)
+	deps := trustBackupDeps{exportMySQL: fakeExport, getenv: getenvFrom(env)}
+	var out, errOut bytes.Buffer
+	if code := runTrustBackup(t.Context(), append([]string{"create"}, args...), &out, &errOut, deps); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	for name, idf := range map[string]string{"env": env["TEST_IDENTITY_FILE"], "file": secondFile} {
+		out.Reset()
+		errOut.Reset()
+		if code := runTrustBackup(t.Context(), []string{"drill", "--dir", env["TEST_BACKUP_DIR"], "--identity", idf}, &out, &errOut, deps); code != exitOK {
+			t.Fatalf("%s identity cannot open the bundle: exit %d: %s", name, code, errOut.String())
+		}
+	}
+	// A malformed file refuses the run; no new bundle.
+	if err := os.WriteFile(recipients, []byte("age1garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := &trustbackup.Store{Dir: env["TEST_BACKUP_DIR"]}
+	before := len(must(store.List())(t))
+	errOut.Reset()
+	code := runTrustBackup(t.Context(), append([]string{"create"}, args...), &out, &errOut, deps)
+	if code != exitTrustBackupFailed || !strings.Contains(errOut.String(), trustbackup.RecipientsFile+":1") {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if after := len(must(store.List())(t)); after != before {
+		t.Fatalf("a bundle was written for a malformed recipients file: %d -> %d", before, after)
+	}
+}

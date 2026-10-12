@@ -16,8 +16,9 @@
 // time, rather than a fixed spec test vector — a fixed vector's challenge
 // cannot match a live BeginRegistration/BeginLogin call.
 //
-// It reports userVerification unconditionally (attestation flags and
-// assertion flags both set FlagUserVerified) — the property AUTH-003 exists
+// It reports userVerification unless WithoutUserVerification is set
+// (attestation flags and assertion flags both set FlagUserVerified) — the
+// property AUTH-003 exists
 // to prove is enforced SERVER-SIDE (userVerification: required in the
 // options a server sends), not that this fake authenticator could be
 // coerced into skipping it; a real authenticator that omits UV is refused by
@@ -35,6 +36,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -48,6 +50,17 @@ type Authenticator struct {
 	key          *ecdsa.PrivateKey
 	credentialID []byte
 	signCount    uint32
+
+	// BackupEligible sets the backup-eligible flag on everything it answers:
+	// a synced passkey rather than a hardware key (ADR-0082 decision 3).
+	BackupEligible bool
+	// WithoutUserVerification clears the user-verified flag: a touch with
+	// no PIN (ADR-0082 decision 2).
+	WithoutUserVerification bool
+	// Extensions are the client extension outputs it reports, as a browser
+	// would beside the authenticator's own response: PRF enabled at
+	// registration, say, or PRF results at an assertion.
+	Extensions protocol.AuthenticationExtensionsClientOutputs
 }
 
 // New mints a fresh P-256 key and a random credential id.
@@ -62,6 +75,10 @@ func New() (*Authenticator, error) {
 	}
 	return &Authenticator{key: key, credentialID: id}, nil
 }
+
+// CredentialID is the credential id it registers and asserts with, as a
+// browser holds it to pick the PRF salt the server named for it.
+func (a *Authenticator) CredentialID() []byte { return append([]byte(nil), a.credentialID...) }
 
 // coseEC2Key is RFC 9053's COSE_Key for an EC2 (elliptic curve) key,
 // P-256/ES256: kty=2 (EC2), alg=-7 (ES256), crv=1 (P-256). Integer map keys,
@@ -100,6 +117,7 @@ func (a *Authenticator) coseKeyBytes() ([]byte, error) {
 const (
 	flagUP byte = 0x01
 	flagUV byte = 0x04
+	flagBE byte = 0x08
 	flagAT byte = 0x40
 )
 
@@ -112,6 +130,12 @@ func (a *Authenticator) authData(rpID string, withAttestedCredential bool) ([]by
 	rpIDHash := sha256.Sum256([]byte(rpID))
 
 	flags := flagUP | flagUV
+	if a.WithoutUserVerification {
+		flags &^= flagUV
+	}
+	if a.BackupEligible {
+		flags |= flagBE
+	}
 	var attested []byte
 	if withAttestedCredential {
 		flags |= flagAT
@@ -198,7 +222,8 @@ func (a *Authenticator) Register(creation *protocol.CredentialCreation, origin s
 				ID:   protocol.URLEncodedBase64(a.credentialID).String(),
 				Type: "public-key",
 			},
-			RawID: protocol.URLEncodedBase64(a.credentialID),
+			RawID:                  protocol.URLEncodedBase64(a.credentialID),
+			ClientExtensionResults: a.Extensions,
 		},
 		AttestationResponse: protocol.AuthenticatorAttestationResponse{
 			AuthenticatorResponse: protocol.AuthenticatorResponse{
@@ -245,7 +270,8 @@ func (a *Authenticator) Assert(assertion *protocol.CredentialAssertion, origin, 
 				ID:   protocol.URLEncodedBase64(a.credentialID).String(),
 				Type: "public-key",
 			},
-			RawID: protocol.URLEncodedBase64(a.credentialID),
+			RawID:                  protocol.URLEncodedBase64(a.credentialID),
+			ClientExtensionResults: a.Extensions,
 		},
 		AssertionResponse: protocol.AuthenticatorAssertionResponse{
 			AuthenticatorResponse: protocol.AuthenticatorResponse{
@@ -261,4 +287,43 @@ func (a *Authenticator) Assert(assertion *protocol.CredentialAssertion, origin, 
 		return nil, fmt.Errorf("webauthntest: encoding the assertion response: %w", err)
 	}
 	return body, nil
+}
+
+// exported is an Authenticator as Export writes it.
+type exported struct {
+	Key          []byte `json:"key"`
+	CredentialID []byte `json:"credential_id"`
+	SignCount    uint32 `json:"sign_count"`
+}
+
+// Export writes the authenticator's private key, credential id and sign
+// counter, so a later process can be the same passkey (#617: a dev stack's
+// owner enrolled before `make update` signs in after it). The output holds a
+// private key: a test's own temporary file, never anything shipped.
+func (a *Authenticator) Export() ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(a.key)
+	if err != nil {
+		return nil, fmt.Errorf("webauthntest: encoding the private key: %w", err)
+	}
+	return json.Marshal(exported{Key: der, CredentialID: a.credentialID, SignCount: a.signCount})
+}
+
+// Import is the authenticator Export wrote.
+func Import(raw []byte) (*Authenticator, error) {
+	var e exported
+	if err := json.Unmarshal(raw, &e); err != nil {
+		return nil, fmt.Errorf("webauthntest: reading an export: %w", err)
+	}
+	if len(e.CredentialID) == 0 {
+		return nil, fmt.Errorf("webauthntest: the export has no credential id")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(e.Key)
+	if err != nil {
+		return nil, fmt.Errorf("webauthntest: reading the private key: %w", err)
+	}
+	key, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("webauthntest: the export's key is a %T, not a P-256 key", parsed)
+	}
+	return &Authenticator{key: key, credentialID: e.CredentialID, signCount: e.SignCount}, nil
 }

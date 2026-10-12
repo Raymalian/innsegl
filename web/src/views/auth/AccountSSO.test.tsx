@@ -50,9 +50,9 @@ function install(view: Record<string, unknown>) {
       if (url.includes("/account/sso?organisation_id=org-1")) return ok({ organisation_id: "org-1", ...view });
       if (url.endsWith("/begin")) return ok({ ceremony_id: "cer-1", publicKey: { challenge: "abc" } });
       if (url.endsWith("/configure/finish")) return ok({ organisation_id: "org-1", configured: true, can_manage: true });
+      if (url.endsWith("/account/sso/link/finish")) return ok({ redirect_url: "https://idp.example.test/authorize?state=s" });
+      if (url.endsWith("/account/sign-ins/unlink/finish")) return ok({});
       if (url.endsWith("/finish")) return ok({ sessions_revoked: 2 });
-      if (url.endsWith("/account/sso/link")) return ok({ redirect_url: "https://idp.example.test/authorize?state=s" });
-      if (url.includes("/account/sign-ins/")) return ok({});
       throw new Error(`unexpected fetch ${url}`);
     }),
   );
@@ -115,7 +115,9 @@ describe("FE-150 the organisation sign-in section", () => {
     expect(within(region).queryByLabelText(a.ssoIssuerLabel)).not.toBeInTheDocument();
     await userEvent.click(within(region).getByRole("button", { name: a.ssoConnectButton }));
     await waitFor(() => expect(go).toHaveBeenCalledWith("https://idp.example.test/authorize?state=s"));
-    expect(calls.find((c) => c.url.endsWith("/account/sso/link"))?.body).toEqual({ organisation_id: "org-1" });
+    // FE-157 (#602): the link is begun only after a fresh passkey.
+    expect(calls.find((c) => c.url.endsWith("/account/sso/link/begin"))?.body).toEqual({ organisation_id: "org-1" });
+    expect(calls.find((c) => c.url.endsWith("/account/sso/link/finish"))?.body).toHaveProperty("credential");
   });
 
   it("lists connected sign-ins and disconnects one", async () => {
@@ -139,7 +141,9 @@ describe("FE-150 the organisation sign-in section", () => {
     expect(within(region).queryByRole("button", { name: a.ssoConnectButton })).not.toBeInTheDocument();
     await userEvent.click(within(region).getByRole("button", { name: a.ssoDisconnectButton }));
     await waitFor(() => expect(reload).toHaveBeenCalled());
-    expect(calls.find((c) => c.url.includes("/account/sign-ins/7"))?.method).toBe("DELETE");
+    // FE-157 (#602): disconnecting is confirmed with a passkey.
+    expect(calls.find((c) => c.url.endsWith("/account/sign-ins/unlink/begin"))?.body).toEqual({ id: 7 });
+    expect(calls.find((c) => c.url.endsWith("/account/sign-ins/unlink/finish"))?.body).toHaveProperty("credential");
   });
 
   it("lets a person in no organisation yet connect one by its sign-in name", async () => {
@@ -150,7 +154,7 @@ describe("FE-150 the organisation sign-in section", () => {
     await userEvent.type(within(region).getByLabelText(a.ssoJoinLabel), " example-org ");
     await userEvent.click(within(region).getByRole("button", { name: a.ssoJoinButton }));
     await waitFor(() => expect(go).toHaveBeenCalledWith("https://idp.example.test/authorize?state=s"));
-    expect(calls.find((c) => c.url.endsWith("/account/sso/link"))?.body).toEqual({ sign_in_name: "example-org" });
+    expect(calls.find((c) => c.url.endsWith("/account/sso/link/begin"))?.body).toEqual({ sign_in_name: "example-org" });
   });
 
   it("says plainly when no organisation sign-in is set up", async () => {

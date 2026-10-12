@@ -70,6 +70,15 @@ hardware-held identity asks to be unlocked. Nothing is written.
 
 **Check:** `check  ok  every checksum matches`, and no `MISSING` line. Exit 0.
 
+**After any change to the CA custody set** (`runbooks/ca-custody.md`: a
+security key added or lost, a device added or removed): wait for the next
+bundle, or restart `innsegl-trust-backup` on the core, then fetch and drill
+it. Each bundle is encrypted to `INNSEGL_TRUST_BACKUP_RECIPIENTS` and to the
+custody set the custodian's `recipients.txt` lists, so new bundles follow
+the set. A security key's member of that set is its custody recipient; no
+command here opens a bundle with a security key, so drill with the Mac. Older bundles keep the recipients they were written to: a
+lost key still opens those, so delete them once the new one drills.
+
 ## 4. Restore — a throwaway stack first
 
 Rehearse on a throwaway stack before a real one, the way `cutover.md` was

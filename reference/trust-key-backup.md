@@ -47,6 +47,14 @@ Recipients may be X25519, post-quantum, tagged P-256 (`age1tag1…`) or
 plugin recipients with a tagged P-256 payload (`age1se1…`). The core runs no
 age plugin.
 
+The bundle is also encrypted to every recipient in `recipients.txt`, the public
+recipient list the CA custody reseal writes in the custody material directory
+(the `ca-custody` path given to `create`): one recipient per line, blank lines
+and `#` comments allowed. The list is read on every run and joined with
+`INNSEGL_TRUST_BACKUP_RECIPIENTS`, each recipient once. A missing file means
+the env list only. A line that is not a supported recipient fails the run with
+the file and line, and no bundle is written (BAK-037).
+
 ## Files, volumes, containers
 
 | Item | Holds |

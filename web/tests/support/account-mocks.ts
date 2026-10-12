@@ -212,6 +212,45 @@ export const ORGANISATION_SIGN_IN = {
   updated_at: "2026-09-30T12:00:00Z",
 };
 
+/** #616: the unlock-keys section's read, as an owner sees it: one active
+ * key of theirs and one pending key of an admin's. */
+export const UNLOCK_KEYS = {
+  custody: { enabled: true, reachable: true, set_digest: "sha256:5f0c" },
+  keys: [
+    {
+      id: "uk-1",
+      label: "Desk key",
+      state: "active",
+      mine: true,
+      owner: "Dev Operator",
+      custody_recipient: "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq",
+      custody_fingerprint: "SHA256:3vY8c2m1QXk",
+      backup_recipient: "age1zvkyg2lqzraa2lnjvqej32nkuu0ues2s82hzrye869xeexvn73equnujwj",
+      backup_fingerprint: "SHA256:Q1n7Lw0aPfE",
+      created_at: "2026-10-02T00:00:00Z",
+      last_used_at: "2026-10-09T00:00:00Z",
+      revoked_at: null,
+    },
+    {
+      id: "uk-2",
+      label: "Safe key",
+      state: "pending",
+      mine: false,
+      owner: "Grace Hopper",
+      custody_recipient: "age1cy0su9fwf3gf9mw868g5yut09p6nytfmmnktexz2ya5uqg9vl9sss4euqm",
+      custody_fingerprint: "SHA256:k9TzR4bWcXo",
+      backup_recipient: "age1h0r5wxqfs3vr3g0n4xq6f6a2rmyt4n0fmn0e6s6x3xl3w6dq2gqsk7xgk4",
+      backup_fingerprint: "SHA256:Hq2mPz7sJdY",
+      created_at: "2026-10-08T00:00:00Z",
+      last_used_at: null,
+      revoked_at: null,
+    },
+  ],
+};
+
+/** #616: the custodian's status: the CA can sign, so no banner. */
+export const CA_CUSTODY = { enabled: true, initialized: true, sealed: false, can_sign: true };
+
 function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({
     status: 200,
@@ -257,6 +296,14 @@ export async function answerAccountRoute(
   }
   if (p === "/api/v1/account/sso") {
     await json(route, ORGANISATION_SIGN_IN);
+    return true;
+  }
+  if (p === "/api/v1/account/unlock-keys" && method === "GET") {
+    await json(route, UNLOCK_KEYS);
+    return true;
+  }
+  if (p === "/api/v1/account/ca-custody" && method === "GET") {
+    await json(route, CA_CUSTODY);
     return true;
   }
   if (p.endsWith("/begin") && method === "POST" && p.startsWith("/api/v1/account/")) {

@@ -118,7 +118,9 @@ func TestRM333LedgerReadFailuresAreServerErrors(t *testing.T) {
 
 func TestRM333SignOutOthersReportsAFailure(t *testing.T) {
 	h := newOrgHarness(t, roleOwner, true)
+	// #602: every request moves last_seen_at, so only revoked_at is taken.
 	h.ownerExec(t, `REVOKE UPDATE ON innsegl_auth.sessions FROM `+AuthWriterRole)
+	h.ownerExec(t, `GRANT UPDATE (last_seen_at) ON innsegl_auth.sessions TO `+AuthWriterRole)
 	a := do(t, http.MethodPost, h.srv.URL+"/api/v1/account/sessions/sign-out-others", "{}", h.cookie)
 	if a.status != http.StatusInternalServerError {
 		t.Errorf("sign out others = %d: %s", a.status, a.body)

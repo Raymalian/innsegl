@@ -152,6 +152,94 @@ func (c coreConn) unlockCAFrom(ctx context.Context, st cacustody.CoreStatus,
 	return true, nil
 }
 
+// The reseal's routes pass through the client service like the unlock's
+// (ADR-0082 decision 7): the set, the staged reseal and its confirm.
+func init() {
+	CorePassRoutes = append(CorePassRoutes,
+		CoreRoute{http.MethodGet, cacustody.CoreRecipientsPath},
+		CoreRoute{http.MethodPost, cacustody.CoreResealPath},
+		CoreRoute{http.MethodPost, cacustody.CoreResealConfirmPath},
+	)
+}
+
+// ErrStagedSetDiffers is a staged copy sealed to a set other than the one
+// the operator confirmed. It is never confirmed, and expires unapplied.
+var ErrStagedSetDiffers = errors.New("ca custody: the custodian staged a set that is not the one confirmed; " +
+	"nothing was applied")
+
+// CARecipients answers the set the core's CA unlock material is sealed to,
+// through the client service.
+func CARecipients(ctx context.Context, paths Paths) (cacustody.RecipientSet, error) {
+	c, err := cliConn(paths)
+	if err != nil {
+		return cacustody.RecipientSet{}, err
+	}
+	var set cacustody.RecipientSet
+	err = c.custodyCall(ctx, http.MethodGet, cacustody.CoreRecipientsPath, nil, func(b []byte) error {
+		return json.Unmarshal(b, &set)
+	})
+	return set, err
+}
+
+// ResealCA re-seals the core's CA unlock material to set, which the
+// operator has confirmed, in the custodian's two steps: it opens the
+// material with identities (Touch ID), sends it with opener (this
+// machine's own recipient, a member of set) and the set's digest, opens the
+// staged copy with the same identities to read its check, and confirms. A
+// staged copy for any other set is not confirmed.
+func ResealCA(ctx context.Context, paths Paths, opener string, set []string,
+	identities func() ([]age.Identity, error)) (cacustody.ResealStaged, error) {
+	c, err := cliConn(paths)
+	if err != nil {
+		return cacustody.ResealStaged{}, err
+	}
+	digest := cacustody.SetDigest(set)
+	var sealed []byte
+	if err = c.custodyCall(ctx, http.MethodGet, cacustody.CoreMaterialPath, nil, func(b []byte) error {
+		sealed = b
+		return nil
+	}); err != nil {
+		return cacustody.ResealStaged{}, err
+	}
+	ids, err := identities()
+	if err != nil {
+		return cacustody.ResealStaged{}, fmt.Errorf("ca custody: %w", err)
+	}
+	m, err := cacustody.Open(sealed, ids)
+	if err != nil {
+		return cacustody.ResealStaged{}, err
+	}
+	body, err := json.Marshal(cacustody.ResealRequest{Material: m, Opener: opener, Recipients: set, SetDigest: digest})
+	if err != nil {
+		return cacustody.ResealStaged{}, err
+	}
+	var staged cacustody.ResealStaged
+	if err = c.custodyCall(ctx, http.MethodPost, cacustody.CoreResealPath, body, func(b []byte) error {
+		return json.Unmarshal(b, &staged)
+	}); err != nil {
+		return cacustody.ResealStaged{}, err
+	}
+	if staged.SetDigest != digest || cacustody.SetDigest(staged.Recipients) != digest {
+		return cacustody.ResealStaged{}, ErrStagedSetDiffers
+	}
+	again, check, err := cacustody.OpenStaged(staged.Sealed, ids)
+	if err != nil {
+		return cacustody.ResealStaged{}, err
+	}
+	if again != m {
+		return cacustody.ResealStaged{}, errors.New("ca custody: the staged copy holds other material; nothing was applied")
+	}
+	body, err = json.Marshal(cacustody.ResealConfirm{Material: m, Check: check, SetDigest: digest})
+	if err != nil {
+		return cacustody.ResealStaged{}, err
+	}
+	if err = c.custodyCall(ctx, http.MethodPost, cacustody.CoreResealConfirmPath, body, nil); err != nil {
+		return cacustody.ResealStaged{}, err
+	}
+	staged.Sealed = nil
+	return staged, nil
+}
+
 // RunCAUnlock checks every interval and unlocks a sealed store. After a
 // failure it waits backoff before trying again: a declined Touch ID prompt
 // is the operator's answer, not something to ask again in a minute.
