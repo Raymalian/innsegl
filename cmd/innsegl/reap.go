@@ -434,7 +434,7 @@ func writeReapJSON(out, stderr io.Writer, report *spire.SweepReport) {
 // openReaper is the production wiring: the process's own SVID from the Workload
 // API, an admin client dialled with it, the ledger, and a reaper over both.
 //
-// The admin credential is not a file. IP §1 and doc 05 §1 make innsegl-mcp the
+// The admin credential is not a file. IP §1 and doc 05 §1 make innsegl-core the
 // holder of SPIRE admin, and "holding it" means being the container SPIRE
 // attests — so the reaper fetches its identity through the Workload API like
 // any other workload, and a process that cannot attest gets no credential and

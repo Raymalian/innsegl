@@ -3,11 +3,11 @@
 package deploy
 
 import (
-	"context"
 	"slices"
 	"strings"
 	"testing"
-	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,10 +27,6 @@ import (
 // probes every port from that network.
 // ---------------------------------------------------------------------------
 
-// objectStoreService is the one object-store service, by its compose name.
-// The name is the gateway's old one: every client addresses innsegl-s3:8333.
-const objectStoreService = "innsegl-s3"
-
 // objectStoreAdvertisedName is the name the process advertises to itself. It
 // is the old storage container's name, kept so that the master's saved state
 // on an existing volume still names this node (see the compose file).
@@ -40,20 +36,8 @@ const objectStoreAdvertisedName = "innsegl-object-store"
 // by its index digest.
 const shippedObjectStorePin = "chrislusf/seaweedfs:4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d"
 
-// objectStoreConfig interpolates the shipped stack, or skips when compose is
-// absent (#101: an absent tool is a skip, never a pass).
-func objectStoreConfig(t *testing.T) composeConfig {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	if err := composeUsable(ctx); err != nil {
-		t.Skipf("skipping: %v", err)
-	}
-	return interpolateCompose(ctx, t, "innsegl-segments", "deploy/compose/innsegl.yml")
-}
-
 func TestTheObjectStoreIsOneProcess(t *testing.T) {
-	cfg := objectStoreConfig(t)
+	cfg := deploytest.ObjectStoreConfig(t)
 
 	for _, gone := range []string{"innsegl-object-store", "innsegl-object-filer"} {
 		if _, ok := cfg.Services[gone]; ok {
@@ -63,21 +47,21 @@ func TestTheObjectStoreIsOneProcess(t *testing.T) {
 		}
 	}
 
-	svc := cfg.service(t, objectStoreService)
+	svc := cfg.Service(t, deploytest.ObjectStoreService)
 	if len(svc.Command) == 0 || svc.Command[0] != "server" {
-		t.Fatalf("%s runs %v; the one process is `weed server`", objectStoreService, svc.Command)
+		t.Fatalf("%s runs %v; the one process is `weed server`", deploytest.ObjectStoreService, svc.Command)
 	}
 	for _, flag := range []string{"-filer", "-s3"} {
 		if !slices.Contains(svc.Command, flag) {
 			t.Errorf("%s's command has no %s: the one process must run it, or nothing does",
-				objectStoreService, flag)
+				deploytest.ObjectStoreService, flag)
 		}
 	}
 }
 
 func TestTheObjectStoreRunsTheReleaseThatClosesTheFiler(t *testing.T) {
-	root := repoRoot(t)
-	if got := shippedObjectStoreImage(t, root); got != shippedObjectStorePin {
+	root := deploytest.RepoRoot(t)
+	if got := deploytest.ShippedObjectStoreImage(t, root); got != shippedObjectStorePin {
 		t.Errorf("deploy/compose/innsegl.yml pins the object store to\n  %s\nwant\n  %s\n\n"+
 			"-filer.disableHttp first shipped in 4.48. An older release refuses the flag, and "+
 			"a newer one has not been measured against OPS-029 and SEG-005.",
@@ -88,7 +72,7 @@ func TestTheObjectStoreRunsTheReleaseThatClosesTheFiler(t *testing.T) {
 // TestOnlyS3ListensBeyondTheObjectStoresLoopback is the static half of
 // OPS-029: the flags that put every unauthenticated API on loopback.
 func TestOnlyS3ListensBeyondTheObjectStoresLoopback(t *testing.T) {
-	svc := objectStoreConfig(t).service(t, objectStoreService)
+	svc := deploytest.ObjectStoreConfig(t).Service(t, deploytest.ObjectStoreService)
 
 	for _, want := range []struct{ flag, why string }{
 		{"-ip.bind=127.0.0.1", "the master, volume server and Filer listen on this address, " +
@@ -106,14 +90,14 @@ func TestOnlyS3ListensBeyondTheObjectStoresLoopback(t *testing.T) {
 		{"-master.telemetry=false", "the master reports cluster statistics upstream by default"},
 	} {
 		if !slices.Contains(svc.Command, want.flag) {
-			t.Errorf("%s's command lacks %s: %s", objectStoreService, want.flag, want.why)
+			t.Errorf("%s's command lacks %s: %s", deploytest.ObjectStoreService, want.flag, want.why)
 		}
 	}
 
 	if !slices.Contains(svc.ExtraHosts, objectStoreAdvertisedName+"=127.0.0.1") {
 		t.Errorf("%s maps no %s to 127.0.0.1 (extra_hosts %v). The parts dial each other by "+
 			"that name and listen only on loopback; without the mapping they cannot connect.",
-			objectStoreService, objectStoreAdvertisedName, svc.ExtraHosts)
+			deploytest.ObjectStoreService, objectStoreAdvertisedName, svc.ExtraHosts)
 	}
 
 	// S3's gRPC port binds where S3 does, so it is reachable from
@@ -125,7 +109,7 @@ func TestOnlyS3ListensBeyondTheObjectStoresLoopback(t *testing.T) {
 // these two volumes, so the one process mounts the same ones, where its data
 // already is.
 func TestTheObjectStoreKeepsItsDataVolumes(t *testing.T) {
-	svc := objectStoreConfig(t).service(t, objectStoreService)
+	svc := deploytest.ObjectStoreConfig(t).Service(t, deploytest.ObjectStoreService)
 
 	mounts := map[string]string{}
 	for _, v := range svc.Volumes {
@@ -137,7 +121,7 @@ func TestTheObjectStoreKeepsItsDataVolumes(t *testing.T) {
 	} {
 		if got := mounts[target]; got != source {
 			t.Errorf("%s mounts %q at %s; want %s. That volume holds the segment %s of "+
-				"every existing deployment.", objectStoreService, got, target, source,
+				"every existing deployment.", deploytest.ObjectStoreService, got, target, source,
 				map[string]string{"/data": "bytes", "/data/filerldb2": "metadata"}[target])
 		}
 	}
@@ -148,18 +132,18 @@ func TestTheObjectStoreKeepsItsDataVolumes(t *testing.T) {
 	if dir, ok := svc.Environment["WEED_LEVELDB2_DIR"]; !ok || dir == nil || *dir != "/data/filerldb2/filerldb2" {
 		t.Errorf("%s does not point the Filer's store at /data/filerldb2/filerldb2, where "+
 			"innsegl-object-filer-data keeps it. The metadata would start empty and every "+
-			"sealed segment would be bytes nothing can address.", objectStoreService)
+			"sealed segment would be bytes nothing can address.", deploytest.ObjectStoreService)
 	}
 }
 
 func TestOnlyTheObjectNetworkReachesTheObjectStore(t *testing.T) {
-	cfg := objectStoreConfig(t)
+	cfg := deploytest.ObjectStoreConfig(t)
 
-	if got := cfg.service(t, objectStoreService).networkNames(); strings.Join(got, ",") != "innsegl-objects" {
-		t.Errorf("%s is on %v; want only innsegl-objects", objectStoreService, got)
+	if got := cfg.Service(t, deploytest.ObjectStoreService).NetworkNames(); strings.Join(got, ",") != "innsegl-objects" {
+		t.Errorf("%s is on %v; want only innsegl-objects", deploytest.ObjectStoreService, got)
 	}
 	for name, svc := range cfg.Services {
-		if slices.Contains(svc.networkNames(), "innsegl-object-backend") {
+		if slices.Contains(svc.NetworkNames(), "innsegl-object-backend") {
 			t.Errorf("%s is on innsegl-object-backend; that network is gone with the "+
 				"containers it isolated", name)
 		}

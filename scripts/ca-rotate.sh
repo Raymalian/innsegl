@@ -55,7 +55,7 @@
 #   INNSEGL_ROTATE_FULCIO_URL    default: where Docker says Fulcio's port is
 #                                published (`docker port`)
 #   INNSEGL_ROTATE_FULCIO_CONTAINER  default <prefix>-sigstore-fulcio
-#   INNSEGL_ROTATE_CORE_CONTAINER    default <prefix>-mcp; empty: none
+#   INNSEGL_ROTATE_CORE_CONTAINER    default <prefix>-core; empty: none
 #   INNSEGL_ROTATE_HISTORY_CMD   default `docker exec -i <core> innsegl
 #                                trust-history`
 #   INNSEGL_ROTATE_PROOF_CMD     default deploy/compose/sigstore/verify.sh
@@ -80,7 +80,7 @@ ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 SIG="${ROOT}/deploy/compose/sigstore"
 PREFIX="${INNSEGL_STACK_PREFIX:-innsegl}"
 FULCIO="${INNSEGL_ROTATE_FULCIO_CONTAINER-${PREFIX}-sigstore-fulcio}"
-CORE="${INNSEGL_ROTATE_CORE_CONTAINER-${PREFIX}-mcp}"
+CORE="${INNSEGL_ROTATE_CORE_CONTAINER-${PREFIX}-core}"
 FULCIO_URL="${INNSEGL_ROTATE_FULCIO_URL:-}"
 HISTORY_CMD="${INNSEGL_ROTATE_HISTORY_CMD:-docker exec -i ${CORE} innsegl trust-history}"
 PROOF_CMD="${INNSEGL_ROTATE_PROOF_CMD:-${SIG}/verify.sh}"

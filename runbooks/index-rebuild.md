@@ -541,9 +541,9 @@ reasonably expect to exist and does not.
 
 | Wanted | Status |
 |---|---|
-| `innsegl seal` | **implemented (#112).** Runs as a loop by default, `-once` for a single cycle. Exit `0` sealed and anchored, `9` UNANCHORED, `10` INCONCLUSIVE. A production deployment now produces segments, and by default it runs inside `innsegl-mcp` (ADR-0056); `innsegl-sealer` is the separate-container form. §6 below was written against the format before the sealer existed; it has since been exercised against real segments, and the roots it re-derives were independently confirmed against a live Rekor entry. |
+| `innsegl seal` | **implemented (#112).** Runs as a loop by default, `-once` for a single cycle. Exit `0` sealed and anchored, `9` UNANCHORED, `10` INCONCLUSIVE. A production deployment now produces segments, and by default it runs inside `innsegl-core` (ADR-0056); `innsegl-sealer` is the separate-container form. §6 below was written against the format before the sealer existed; it has since been exercised against real segments, and the roots it re-derives were independently confirmed against a live Rekor entry. |
 | `innsegl migrate` | absent. Apply `migrations/*.sql` with `psql`, or start `innsegl serve -migrate`. |
 | `innsegl verify-segment` / an anchor check | absent. §6.3 is a manual `curl`. |
 | a rebuild/import subcommand | absent. §4.1 is `psql`. |
 | carrying `chain_id` across a fresh migrate | impossible today — see §4.1. |
-| object storage in the reference stack | shipped. `deploy/compose/innsegl.yml` runs it as `innsegl-s3`, with Postgres, `innsegl-mcp` (which also runs the sealer, reconciler and reaper in-process by default, ADR-0056) and `innsegl-backup`. Commands here that name a bucket or a DSN assume your deployment's own values. |
+| object storage in the reference stack | shipped. `deploy/compose/innsegl.yml` runs it as `innsegl-s3`, with Postgres, `innsegl-core` (which also runs the sealer, reconciler and reaper in-process by default, ADR-0056) and `innsegl-backup`. Commands here that name a bucket or a DSN assume your deployment's own values. |

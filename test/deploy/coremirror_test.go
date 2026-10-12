@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // P1: the core reads repositories only from its mirror (ADR-0065 decision 1,
@@ -24,18 +26,18 @@ import (
 func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(repoRoot(t), "deploy/compose/innsegl.workrepo.yml")); err == nil {
+	if _, err := os.Stat(filepath.Join(deploytest.RepoRoot(t), "deploy/compose/innsegl.workrepo.yml")); err == nil {
 		t.Error("deploy/compose/innsegl.workrepo.yml still ships; the core has no projects overlay")
 	}
 
 	// Every profile, so no service escapes the check by being opt-in.
 	const projects = "/srv/host-projects"
 	t.Setenv("INNSEGL_PROJECTS", projects)
-	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments",
+	cfg := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments",
 		[]string{"init", "separate", "demo", "canary"}, "deploy/compose/innsegl.yml")
 
 	for name, svc := range cfg.Services {
@@ -59,7 +61,7 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 
 	// The readers: the mirror, read-only, and told where it is.
 	for _, name := range []string{"innsegl-api", "innsegl-reconciler"} {
-		svc := cfg.service(t, name)
+		svc := cfg.Service(t, name)
 		var mounted, readOnly bool
 		for _, v := range svc.Volumes {
 			if v.Type == "volume" && v.Source == "innsegl-mirror" && v.Target == "/mirror" {
@@ -73,9 +75,9 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 			t.Errorf("%s does not mount the innsegl-mirror volume at /mirror", name)
 		}
 		if mounted && !readOnly {
-			t.Errorf("%s mounts the mirror read-write; only innsegl-mcp, which receives pushes, may", name)
+			t.Errorf("%s mounts the mirror read-write; only innsegl-core, which receives pushes, may", name)
 		}
-		if dir, _ := cfg.env(name, "INNSEGL_MIRROR_DIR"); dir != "/mirror" {
+		if dir, _ := cfg.Env(name, "INNSEGL_MIRROR_DIR"); dir != "/mirror" {
 			t.Errorf("%s has INNSEGL_MIRROR_DIR=%q, want /mirror", name, dir)
 		}
 	}
@@ -84,14 +86,14 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 	// and a plain `up` of the one file has it: the bodies and the query
 	// API's read of them. Not the session markers: they need a projects
 	// folder (TestTheCoreSetsNoSessionFolderWithoutAProjectsFolder).
-	plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
+	plain := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", nil, "deploy/compose/innsegl.yml")
 	for service, want := range map[string]map[string]bool{
 		// target -> read-only
-		"innsegl-mcp": {"/agentlog": false, "/harness-log": true},
-		"innsegl-api": {"/agentlog": true, "/message-key": true, "/mirror": true},
+		"innsegl-core": {"/agentlog": false, "/harness-log": true},
+		"innsegl-api":  {"/agentlog": true, "/message-key": true, "/mirror": true},
 	} {
 		got := map[string]bool{}
-		for _, v := range plain.service(t, service).Volumes {
+		for _, v := range plain.Service(t, service).Volumes {
 			got[v.Target] = v.ReadOnly
 		}
 		for target, ro := range want {
@@ -105,18 +107,18 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 		}
 	}
 	for service, keys := range map[string][]string{
-		"innsegl-mcp": {"INNSEGL_MCP_LOG_DIR"},
-		"innsegl-api": {"INNSEGL_API_LOG_DIR", "INNSEGL_API_MESSAGE_KEY_DIR"},
+		"innsegl-core": {"INNSEGL_MCP_LOG_DIR"},
+		"innsegl-api":  {"INNSEGL_API_LOG_DIR", "INNSEGL_API_MESSAGE_KEY_DIR"},
 	} {
 		for _, key := range keys {
-			if v, ok := plain.env(service, key); !ok || v == "" {
+			if v, ok := plain.Env(service, key); !ok || v == "" {
 				t.Errorf("a plain up of innsegl.yml gives %s no %s", service, key)
 			}
 		}
 	}
 	// API-038: the run page reads snapshot trees from the mirror; the
 	// gateway's snapshot store is no longer named to the API.
-	if v, ok := plain.env("innsegl-api", "INNSEGL_API_SNAPSHOT_DIR"); ok {
+	if v, ok := plain.Env("innsegl-api", "INNSEGL_API_SNAPSHOT_DIR"); ok {
 		t.Errorf("innsegl-api is still given INNSEGL_API_SNAPSHOT_DIR=%q; it reads snapshots from the mirror", v)
 	}
 }
@@ -127,10 +129,10 @@ func TestTheCoreReadsRepositoriesOnlyFromTheMirror(t *testing.T) {
 func TestTheCoreCarriesNoProjectsMountOrSessionVolume(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping: %v", err)
 	}
-	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments",
+	cfg := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments",
 		[]string{"init", "separate", "demo", "canary"}, "deploy/compose/innsegl.yml")
 	for name, svc := range cfg.Services {
 		for _, key := range []string{"INNSEGL_MCP_SESSION_DIR", "INNSEGL_HOST_PROJECTS",
@@ -146,7 +148,7 @@ func TestTheCoreCarriesNoProjectsMountOrSessionVolume(t *testing.T) {
 		}
 	}
 	for _, file := range []string{"deploy/compose/innsegl.yml", "Dockerfile"} {
-		raw, err := os.ReadFile(filepath.Join(repoRoot(t), file))
+		raw, err := os.ReadFile(filepath.Join(deploytest.RepoRoot(t), file))
 		if err != nil {
 			t.Fatal(err)
 		}

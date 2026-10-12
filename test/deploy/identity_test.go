@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"innsegl.dev/innsegl/test/deploy/deploytest"
+
 	"innsegl.dev/innsegl/internal/identity"
 )
 
@@ -43,9 +45,9 @@ const identityInitScript = "deploy/compose/innsegl/identity-init.sh"
 const identitySecretEnv = "INNSEGL_IDENTITY_SECRET_FILE"
 
 func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	stackPath := filepath.Join(root, "deploy", "compose", "innsegl.yml")
-	stack := readFile(t, stackPath)
+	stack := deploytest.ReadFile(t, stackPath)
 
 	t.Run("the one-shot ships and is a service", func(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, identityInitScript)); err != nil {
@@ -53,7 +55,7 @@ func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
 				"own, and without it `docker compose up` needs a manual step (#124): %v",
 				identityInitScript, err)
 		}
-		services := composeServices(t, stackPath)
+		services := deploytest.ComposeServices(t, stackPath)
 		if !containsString(services, "innsegl-identity-init") {
 			t.Fatalf("deploy/compose/innsegl.yml declares no innsegl-identity-init "+
 				"service; it declares %v", services)
@@ -61,7 +63,7 @@ func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
 	})
 
 	t.Run("the MCP gates on it and reads the file it wrote", func(t *testing.T) {
-		mcp := composeService(t, stack, "innsegl-mcp")
+		mcp := composeService(t, stack, "innsegl-core")
 		for _, want := range []struct{ needle, why string }{
 			{"innsegl-identity-init",
 				"the MCP must gate on the one-shot's completion: starting before the " +
@@ -74,7 +76,7 @@ func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
 					"so the MCP is told the PATH — the INNSEGL_MCP_SVID_FILE convention"},
 		} {
 			if !strings.Contains(mcp, want.needle) {
-				t.Errorf("the innsegl-mcp service never mentions %q: %s", want.needle, want.why)
+				t.Errorf("the innsegl-core service never mentions %q: %s", want.needle, want.why)
 			}
 		}
 	})
@@ -106,7 +108,7 @@ func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
 	// within one run, which are secrets of nothing. What may not carry a
 	// constant is the artifact somebody else deploys.
 	t.Run("nothing an adopter runs carries a constant secret", func(t *testing.T) {
-		for _, file := range shippedFiles(t, root) {
+		for _, file := range deploytest.ShippedFiles(t, root) {
 			body, err := os.ReadFile(filepath.Join(root, file))
 			if err != nil {
 				t.Fatalf("reading tracked file %s: %v", file, err)
@@ -127,7 +129,7 @@ func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
 	})
 
 	t.Run("the generator draws from a CSPRNG", func(t *testing.T) {
-		script := readFile(t, filepath.Join(root, identityInitScript))
+		script := deploytest.ReadFile(t, filepath.Join(root, identityInitScript))
 		if !strings.Contains(script, "openssl rand") {
 			t.Errorf("%s does not call `openssl rand`. The secret keys an HMAC whose "+
 				"32-bit output is published, so its own entropy is what protects every "+
@@ -145,7 +147,7 @@ func TestOPS011TheStackGeneratesItsOwnIdentitySecret(t *testing.T) {
 // one-shot container runs, at the cost of neither a container nor one of
 // #100's twenty-nine networks.
 func TestOPS012TheIdentitySecretIsPerDeploymentAndSurvivesARestart(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	script := filepath.Join(root, identityInitScript)
 
 	// #101's rule: an ABSENT dependency is a skip, a dependency that is
@@ -295,28 +297,6 @@ func constantIdentitySecret(line string) (string, bool) {
 	return "", false
 }
 
-// shippedFiles is every tracked file an adopter runs: the compose stack and
-// its scripts, the image build, the operator entry points and the runbooks.
-// Test harnesses are excluded; see the case that calls this for why.
-func shippedFiles(t *testing.T, root string) []string {
-	t.Helper()
-	out, err := exec.CommandContext(t.Context(),
-		"git", "-C", root, "ls-files", "deploy", "runbooks", "Dockerfile", "Makefile").Output()
-	if err != nil {
-		t.Fatalf("listing the shipped files: %v", err)
-	}
-	var files []string
-	for _, f := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if f != "" {
-			files = append(files, f)
-		}
-	}
-	if len(files) == 0 {
-		t.Fatal("no shipped files were listed; the guard would pass vacuously")
-	}
-	return files
-}
-
 // composeService returns the block of a compose file belonging to one service:
 // its key line and every line indented beneath it.
 func composeService(t *testing.T, stack, name string) string {
@@ -324,7 +304,7 @@ func composeService(t *testing.T, stack, name string) string {
 	var block []string
 	inBlock := false
 	for _, line := range strings.Split(stack, "\n") {
-		if m := serviceLine.FindStringSubmatch(line); m != nil {
+		if m := deploytest.ServiceLine.FindStringSubmatch(line); m != nil {
 			inBlock = m[1] == name
 			if inBlock {
 				block = append(block, line)

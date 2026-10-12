@@ -3,7 +3,7 @@
 #
 # Generate THIS DEPLOYMENT's pseudonymisation secret (RM-084, #124).
 #
-# Runs to completion before innsegl-mcp starts, in the shape
+# Runs to completion before innsegl-core starts, in the shape
 # sigstore/bootstrap.sh established: one container, no network at all, the only
 # place the secret is ever writable, and then it exits.
 #
@@ -14,7 +14,7 @@
 # 16 bytes. #119 introduced that refusal deliberately — #116 chose it over a
 # silent fall back to literal values, which would have read as "private" while
 # every ticket reference went into Rekor — and the shipped compose stack was
-# not updated to supply one. innsegl-mcp crashlooped on a clean `up` (#124).
+# not updated to supply one. innsegl-core crashlooped on a clean `up` (#124).
 #
 # WHY IT IS NOT A CONSTANT IN innsegl.yml
 # ---------------------------------------
@@ -55,7 +55,7 @@ set -eu
 # the process that reads it cannot be configured to disagree.
 SECRET_FILE="${INNSEGL_IDENTITY_SECRET_FILE:-}"
 
-# The uid innsegl-mcp runs as (innsegl.yml: `user: "1000:1000"`, one of the
+# The uid innsegl-core runs as (innsegl.yml: `user: "1000:1000"`, one of the
 # five selectors register.sh registers). Docker creates a named volume
 # root-owned, so what the MCP must read is chowned here rather than by running
 # the MCP as root.

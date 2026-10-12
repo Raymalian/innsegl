@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // Every named volume a runtime-image service writes as uid 1000 is created in
@@ -25,11 +27,11 @@ import (
 func TestRuntimeImageOwnsEveryVolumeItsServicesWrite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping: %v", err)
 	}
-	runtime := dockerfileStage(t, readFile(t, filepath.Join(repoRoot(t), "Dockerfile")), "runtime")
-	cfg := interpolateComposeProfiles(ctx, t, "innsegl-segments",
+	runtime := deploytest.DockerfileStage(t, deploytest.ReadFile(t, filepath.Join(deploytest.RepoRoot(t), "Dockerfile")), "runtime")
+	cfg := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments",
 		[]string{"init", "separate", "demo", "canary"}, "deploy/compose/innsegl.yml")
 
 	// Written by another stack's service, not by the one that mounts it.

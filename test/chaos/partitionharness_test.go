@@ -1451,7 +1451,7 @@ func (b *prtBuffer) String() string {
 
 // writeAdminPEMs mints the admin SVID and puts it where a subprocess can read
 // it. In a deployment the MCP is an attested workload and takes none of these
-// three flags; there is no attested innsegl-mcp on this host.
+// three flags; there is no attested innsegl-core on this host.
 func (w *prtWorld) writeAdminPEMs(t *testing.T) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

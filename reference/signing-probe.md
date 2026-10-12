@@ -33,7 +33,7 @@ Exits 0 on a pass, 35 when the CA did not issue a certificate that passed,
 Inside the core's container, the variables are already set:
 
 ```
-docker exec innsegl-mcp innsegl signing-probe
+docker exec innsegl-core innsegl signing-probe
 ```
 
 It prints one line: `signing: ok — the CA issued a certificate at <time>`, or
@@ -62,7 +62,7 @@ the probe is not running`. Before the first probe finishes, the report is
 
 ## Files, volumes, containers
 
-Runs inside `innsegl-mcp` (`innsegl serve`). No file, no volume. The client
+Runs inside `innsegl-core` (`innsegl serve`). No file, no volume. The client
 service reads it from `/_core/status` every minute.
 
 ## Exit codes and error classes

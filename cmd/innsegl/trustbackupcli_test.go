@@ -312,7 +312,7 @@ func TestTrustBackupDrillRefusesWhatItCannotOpen(t *testing.T) {
 
 func TestTrustBackupDrillNamesAMissingItem(t *testing.T) {
 	env, _ := trustVolumes(t)
-	id, err := trustbackup.LoadIdentities(env["TEST_IDENTITY_FILE"], nil)
+	id, err := trustbackup.LoadIdentities(env["TEST_IDENTITY_FILE"], nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

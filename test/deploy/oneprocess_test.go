@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // RM-207 (#333), RM-211 (#339). One-process mode must not lose what the folded
@@ -25,7 +27,7 @@ import (
 func TestRM207OneProcessKeepsWhatTheFoldedServicesHad(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := composeUsable(ctx); err != nil {
+	if err := deploytest.ComposeUsable(ctx); err != nil {
 		t.Skipf("skipping RM-207: %v", err)
 	}
 	t.Setenv("INNSEGL_REBASE_BRANCH", "main")
@@ -33,16 +35,16 @@ func TestRM207OneProcessKeepsWhatTheFoldedServicesHad(t *testing.T) {
 	t.Setenv("INNSEGL_WRITES_REPOS", "example.test/org/name")
 	t.Setenv("INNSEGL_MCP_ALSO", "")
 	files := []string{"deploy/compose/innsegl.yml"}
-	separate := interpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, files...)
-	plain := interpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
+	separate := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", []string{"separate"}, files...)
+	plain := deploytest.InterpolateComposeProfiles(ctx, t, "innsegl-segments", nil, files...)
 
-	mcp := plain.service(t, "innsegl-mcp")
+	mcp := plain.Service(t, "innsegl-core")
 	targets := map[string]bool{}
 	for _, v := range mcp.Volumes {
 		targets[v.Target] = true
 	}
 	for _, folded := range []string{"innsegl-sealer", "innsegl-reconciler"} {
-		svc := separate.service(t, folded)
+		svc := separate.Service(t, folded)
 		var missing, differ []string
 		for key, want := range svc.Environment {
 			got, ok := mcp.Environment[key]
@@ -66,7 +68,7 @@ func TestRM207OneProcessKeepsWhatTheFoldedServicesHad(t *testing.T) {
 				t.Errorf("by default the MCP lacks %s's mount at %s", folded, v.Target)
 			}
 		}
-		for _, n := range svc.networkNames() {
+		for _, n := range svc.NetworkNames() {
 			if _, ok := mcp.Networks[n]; !ok {
 				t.Errorf("by default the MCP is not on %s's network %s", folded, n)
 			}
@@ -74,7 +76,7 @@ func TestRM207OneProcessKeepsWhatTheFoldedServicesHad(t *testing.T) {
 	}
 	// The reason this is the default: the reconciler's SPIRE pass runs only
 	// with an admin identity, and the MCP's is the only one there is.
-	if addr, _ := plain.env("innsegl-mcp", "INNSEGL_SPIRE_ADDRESS"); addr == "" {
+	if addr, _ := plain.Env("innsegl-core", "INNSEGL_SPIRE_ADDRESS"); addr == "" {
 		t.Error("the MCP has no INNSEGL_SPIRE_ADDRESS, so the reconciler's SPIRE pass stays off")
 	}
 }

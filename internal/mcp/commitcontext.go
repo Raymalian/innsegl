@@ -28,7 +28,7 @@ import (
 //	host lowercase, org not      the server knows how it stores them
 //
 // It found the run id by reading a hook log and the last rule by running
-// `docker exec innsegl-mcp find /work`. That is good debugging, and needing it
+// `docker exec innsegl-core find /work`. That is good debugging, and needing it
 // is a defect in this server rather than a gap in anybody's documentation —
 // none of the six refusals was about a rule.
 //

@@ -35,8 +35,8 @@ services:
     container_name: innsegl-dev-identity-init
   innsegl-admin-credential-init:
     container_name: innsegl-dev-admin-credential-init
-  innsegl-mcp:
-    container_name: innsegl-dev-mcp
+  innsegl-core:
+    container_name: innsegl-dev-core
   innsegl-init:
     container_name: innsegl-dev-init
   innsegl-reconciler:

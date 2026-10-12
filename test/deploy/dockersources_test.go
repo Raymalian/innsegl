@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -22,7 +24,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestOPS162TheImageBuildCopiesEverySourceFolderItCompiles(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skipf("go is not on PATH: %v", err)
 	}
@@ -40,8 +42,8 @@ func TestOPS162TheImageBuildCopiesEverySourceFolderItCompiles(t *testing.T) {
 			need[strings.SplitN(rest, "/", 2)[0]] = true
 		}
 	}
-	df := readFile(t, filepath.Join(root, "Dockerfile"))
-	ignore := readFile(t, filepath.Join(root, ".dockerignore"))
+	df := deploytest.ReadFile(t, filepath.Join(root, "Dockerfile"))
+	ignore := deploytest.ReadFile(t, filepath.Join(root, ".dockerignore"))
 	for dir := range need {
 		if !regexp.MustCompile(`(?m)^COPY ` + regexp.QuoteMeta(dir) + ` \./` + regexp.QuoteMeta(dir) + `$`).MatchString(df) {
 			t.Errorf("the binaries compile from %s/, and the Dockerfile's build stage does not COPY %s ./%s", dir, dir, dir)

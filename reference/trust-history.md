@@ -43,7 +43,7 @@ end date or reason where it was unset.
 
 ## Files, volumes, containers
 
-On the trust volume `<prefix>-history` (mounted in `innsegl-mcp` at
+On the trust volume `<prefix>-history` (mounted in `innsegl-core` at
 `/run/innsegl/trust/`):
 
 | File | Written by | Holds |
@@ -72,7 +72,7 @@ Verdict `pre-history` and `innsegl verify` exit 7: see [verify.md](verify.md).
 - `internal/trustwatch/watch_test.go`
 - `cmd/innsegl/trusthistorycli_test.go`, `reconciletrust_test.go`
 - `internal/verify/carotation_test.go` (OPS-133)
-- `test/deploy/trustroot_test.go` (OPS-031 to OPS-036, OPS-044, OPS-045, OPS-047)
+- `test/deploy/custody/trustroot_test.go` (OPS-031 to OPS-036, OPS-044, OPS-045, OPS-047)
 
 ## Decisions
 

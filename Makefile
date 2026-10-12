@@ -409,7 +409,7 @@ smoke:
 # `make smoke` owns the shipped compose projects for the length of a run, and
 # since RM-076 (#109) there are THREE of them rather than two.
 #
-# MEASURED, and it is why this prerequisite exists: `innsegl-mcp` mounts
+# MEASURED, and it is why this prerequisite exists: `innsegl-core` mounts
 # spire.yml's Workload API socket volume, because doc 05 §1 makes it an
 # attested workload. A container holding that volume — running or merely
 # stopped — makes the SPIRE project's `down -v` unable to remove it, and
@@ -487,7 +487,7 @@ DEMO_REPO ?= github.com/innsegl-demo/scratch
 # test/deploy/buildonce_test.go holds this list to the compose file.
 # innsegl-api has an image of its own (the runtime plus the built UI, #475),
 # so a dashboard change rebuilds and restarts it alone.
-INNSEGL_BUILD_SERVICES := innsegl-mcp innsegl-backup innsegl-api
+INNSEGL_BUILD_SERVICES := innsegl-core innsegl-backup innsegl-api
 
 # DEPLOY_COMMIT names what a checkout is: HEAD, with "-dirty" when the
 # tracked files differ from it. `make update` records the one it deployed in
@@ -778,7 +778,7 @@ update:
 	@docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-spire-server && docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-sigstore-rekor || \
 	  { echo "make update: SPIRE or Rekor is not running; run make start"; exit 2; }
 	@deployed=$$(cat '$(DEPLOYED_FILE)' 2>/dev/null); \
-	 down=""; for c in $(STACK_PREFIX)-mcp $(if $(CA_CUSTODY),$(STACK_PREFIX)-ca-store $(STACK_PREFIX)-ca-custodian); do \
+	 down=""; for c in $(STACK_PREFIX)-core $(if $(CA_CUSTODY),$(STACK_PREFIX)-ca-store $(STACK_PREFIX)-ca-custodian); do \
 	   st=$$(docker inspect -f '{{.State.Status}} restarting={{.State.Restarting}}' $$c 2>/dev/null); \
 	   [ "$$st" = "running restarting=false" ] || down="$$down $$c"; \
 	 done; \
@@ -929,7 +929,7 @@ innsegl-acme-credential:
 	@# an unchanged checkout: bring the services up here, so the changed volume
 	@# recreates the core now (scripts/compose-up.py). A stack that is not up
 	@# is left alone; `make start` reads it.
-	@if docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-mcp; then \
+	@if docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-core; then \
 	   INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services; fi
 	@echo 'innsegl-acme-credential: stored; with INNSEGL_ACME=on and the INNSEGL_ACME_* settings in the compose .env, the core uses it'
 
@@ -1053,23 +1053,23 @@ innsegl-demo: innsegl-trust-volumes
 innsegl-retire:
 	@test -n "$(RUN)" || { echo 'usage: make innsegl-retire RUN=<run_id>'; exit 2; }
 	@INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  $(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl retire '$(RUN)'
+	  $(INNSEGL_COMPOSE) exec -T innsegl-core innsegl retire '$(RUN)'
 
 ## innsegl-ledger-lease: say which core holds the writer lease, and whether the ledger is frozen
 #
 # RM-326: run inside the core's container, with its own ledger credential. A
 # core waiting for the lease or for a thaw is still running, so this reaches it.
 innsegl-ledger-lease:
-	@$(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl ledger lease
+	@$(INNSEGL_COMPOSE) exec -T innsegl-core innsegl ledger lease
 
 ## innsegl-freeze: freeze the ledger before copying it (REASON=<why>); no core serves it until thawed
 innsegl-freeze:
 	@test -n "$(REASON)" || { echo 'usage: make innsegl-freeze REASON=<why>'; exit 2; }
-	@$(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl ledger freeze -reason '$(REASON)'
+	@$(INNSEGL_COMPOSE) exec -T innsegl-core innsegl ledger freeze -reason '$(REASON)'
 
 ## innsegl-thaw: end a freeze; the waiting core takes the writer lease and serves
 innsegl-thaw:
-	@$(INNSEGL_COMPOSE) exec -T innsegl-mcp innsegl ledger thaw
+	@$(INNSEGL_COMPOSE) exec -T innsegl-core innsegl ledger thaw
 
 ## innsegl-init: run `innsegl init` as a one-shot workload on the admin network
 #

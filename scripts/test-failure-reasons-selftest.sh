@@ -55,6 +55,57 @@ else
   ok "and nothing in the report is a broken pipe"
 fi
 
+# MEASURED in CI on 2026-10-11 (PR #620): test/deploy hit go test's ten-minute
+# timeout. The panic names the tests that were running, but go test -json files
+# it as output of whichever test was running, and NO test gets a "fail" action:
+# only the package does. The report said "fail test/deploy" and nothing else.
+# This is the shape go 1.27 writes, captured from a real timeout.
+T="$WORK/timeout.json"
+{
+  printf '{"Action":"pass","Package":"p","Test":"TestQuick","Elapsed":0.4}\n'
+  printf '{"Action":"pass","Package":"p","Test":"TestBuildsAnImage","Elapsed":212.5}\n'
+  printf '{"Action":"pass","Package":"p","Test":"TestBuildsAnImage/sub","Elapsed":200.1}\n'
+  out TestStack "=== RUN   TestStack"
+  out TestStack "    s_test.go:12: compose up"
+  out TestStack "panic: test timed out after 10m0s"
+  out TestStack "\\trunning tests:"
+  out TestStack "\\t\\tTestStack (6m2s)"
+  out TestStack "\\t\\tTestOther (1m1s)"
+  out TestStack ""
+  out TestStack "goroutine 7 [running]:"
+  for i in $(seq 1 60); do out TestStack "\\tframe$i"; done
+  printf '{"Action":"output","Package":"p","Output":"FAIL\\tp\\t600.037s\\n"}\n'
+  printf '{"Action":"fail","Package":"p","Elapsed":600.037}\n'
+  printf '{"Action":"pass","Package":"r","Elapsed":3.1}\n'
+} > "$T"
+
+got="$("$SUMMARY" "$T" 2>&1)"
+if printf '%s' "$got" | grep -q "panic: test timed out after 10m0s"; then
+  ok "a package that timed out says so"
+else
+  bad "the timeout panic was not reported:\n$got"
+fi
+if printf '%s' "$got" | grep -q "TestStack (6m2s)" && printf '%s' "$got" | grep -q "TestOther (1m1s)"; then
+  ok "and names every test that was still running"
+else
+  bad "the running tests were not named:\n$got"
+fi
+if printf '%s' "$got" | grep -q "212.5.*TestBuildsAnImage"; then
+  ok "and lists where the package's time went before it"
+else
+  bad "the slowest finished tests were not listed:\n$got"
+fi
+if printf '%s' "$got" | grep -q "TestBuildsAnImage/sub"; then
+  bad "a subtest was listed among the slowest, counting its time twice"
+else
+  ok "and lists top-level tests only"
+fi
+if printf '%s' "$got" | grep -q "frame60"; then
+  bad "the goroutine dump was printed in full"
+else
+  ok "and leaves out the goroutine dump"
+fi
+
 : > "$WORK/none.json"
 if [ -z "$("$SUMMARY" "$WORK/none.json" 2>&1)" ]; then
   ok "no failure prints nothing"

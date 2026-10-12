@@ -6,7 +6,7 @@ package main
 // function that restates RM-237's own derived agent-message key to a file
 // the run page's query API reads and verifies with, never mints with — see
 // writeMessageKeyFile's own doc comment in gateway.go for why 0400 is
-// enough (innsegl-mcp and innsegl-api run as the identical uid:gid in
+// enough (innsegl-core and innsegl-api run as the identical uid:gid in
 // every deployment this project ships).
 
 import (

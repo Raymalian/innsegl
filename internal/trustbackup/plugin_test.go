@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,7 +43,15 @@ func TestASecureEnclaveIdentityOpensABundle(t *testing.T) {
 	if _, err = WriteBundle(&buf, rs, []Source{ValueSource("a", "f", []byte("sealed"))}, testNow); err != nil {
 		t.Fatal(err)
 	}
-	ids, err := LoadIdentities(identity, nil)
+	pin, err := PinPlugin("se", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins := filepath.Join(t.TempDir(), "age-plugins.json")
+	if err = WritePluginPins(pins, []PluginPin{pin}); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := LoadIdentities(identity, nil, pins)
 	if err != nil {
 		t.Fatal(err)
 	}

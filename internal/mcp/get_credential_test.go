@@ -1377,7 +1377,7 @@ func credStackPrefix() string {
 
 // credStack is the running compose stack plus the two things the harness has
 // to add to talk to it: a TCP proxy onto the admin network (ADR-0011 gives
-// that network no published port, and innsegl-mcp is its only future member),
+// that network no published port, and innsegl-core is its only future member),
 // and an admin SVID minted on the unauthenticated local socket, which is the
 // operator path ADR-0011 describes.
 type credStack struct {
@@ -1452,7 +1452,7 @@ func (s *credStack) mintAdmin(ctx context.Context, id string) (credMintedSVID, e
 }
 
 // adminConn dials the admin API with a freshly minted admin SVID, exactly as
-// innsegl-mcp will: mTLS over SPIFFE identities, the server authorized by ID.
+// innsegl-core will: mTLS over SPIFFE identities, the server authorized by ID.
 func (s *credStack) adminConn(t *testing.T) *grpc.ClientConn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

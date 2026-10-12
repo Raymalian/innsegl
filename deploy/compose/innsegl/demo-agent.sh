@@ -41,7 +41,7 @@ readonly TOOL_RETIRE="retire_agent"
 # one Fulcio will not accept.
 readonly AUDIENCE="sigstore"
 
-MCP_URL="${INNSEGL_MCP_URL:-http://innsegl-mcp:8080}"
+MCP_URL="${INNSEGL_MCP_URL:-http://innsegl-core:8080}"
 WORKSPACE="${INNSEGL_WORKSPACE:-/work}"
 # doc 02 §5's host/org/name. It is an IDENTIFIER, not a path: the MCP resolves
 # it beneath its own workspace root, and this script stages into the same tree

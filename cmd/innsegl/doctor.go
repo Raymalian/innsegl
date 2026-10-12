@@ -328,7 +328,7 @@ func (d *doctor) core(ctx context.Context) (coreStatus, time.Time, bool) {
 	body, at, err := client.FetchCoreStatusAt(ctx, d.paths, d.local)
 	if err != nil {
 		d.line("core", "UNREACHABLE", err.Error())
-		d.vm("docker logs --tail 50 innsegl-mcp")
+		d.vm("docker logs --tail 50 innsegl-core")
 		return coreStatus{}, time.Time{}, false
 	}
 	var st coreStatus
@@ -446,7 +446,7 @@ func (d *doctor) components(st coreStatus) {
 		if cmd, ok := doctorVMRepair[c.Name]; ok {
 			d.vm(cmd)
 		} else {
-			d.vm("docker logs --tail 50 innsegl-mcp")
+			d.vm("docker logs --tail 50 innsegl-core")
 		}
 	}
 }
@@ -486,7 +486,7 @@ func (d *doctor) signing(ctx context.Context, st coreStatus, coreAt time.Time, u
 		}
 		if time.Now().After(deadline) {
 			d.line("signing", "FAILING", "no probe passed within "+wait.String()+" of the repair: "+detail)
-			d.vm("docker exec innsegl-mcp innsegl signing-probe")
+			d.vm("docker exec innsegl-core innsegl signing-probe")
 			return exitDoctorFailing
 		}
 		select {

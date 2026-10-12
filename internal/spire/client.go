@@ -24,7 +24,7 @@ import (
 // Source supplies the client's own X509-SVID and the trust bundle it verifies
 // the server with. In the deployment it is a *workloadapi.X509Source: the MCP
 // is an attested workload like any other, and "holding the admin credential"
-// means being the container SPIRE attests as innsegl-mcp — not holding a file.
+// means being the container SPIRE attests as innsegl-core — not holding a file.
 type Source interface {
 	x509svid.Source
 	x509bundle.Source

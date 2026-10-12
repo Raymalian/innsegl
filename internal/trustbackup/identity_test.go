@@ -54,14 +54,14 @@ func TestLoadIdentitiesReadsAFile(t *testing.T) {
 	if err := os.WriteFile(p, []byte(id.String()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ids, err := LoadIdentities(p, nil)
+	ids, err := LoadIdentities(p, nil, "")
 	if err != nil || len(ids) != 1 {
 		t.Fatalf("LoadIdentities = %v, %v", ids, err)
 	}
 	if _, ok := ids[0].(*age.X25519Identity); !ok {
 		t.Fatalf("identity type %T", ids[0])
 	}
-	if _, err := LoadIdentities(filepath.Join(t.TempDir(), "absent"), nil); err == nil {
+	if _, err := LoadIdentities(filepath.Join(t.TempDir(), "absent"), nil, ""); err == nil {
 		t.Fatal("LoadIdentities read a missing file")
 	}
 }

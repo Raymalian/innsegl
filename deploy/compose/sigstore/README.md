@@ -147,7 +147,7 @@ written at each declaration in `../sigstore.yml`.
    host ──▶ 127.0.0.1:5555 ┐                                 │
    host ──▶ 127.0.0.1:3000 ┴─ innsegl-sigstore-published ─── fulcio, rekor
                                                              │
-   innsegl-mcp, sealer,  ─── innsegl-sigstore (internal) ──── fulcio, rekor
+   innsegl-core, sealer,  ─── innsegl-sigstore (internal) ──── fulcio, rekor
    reconciler, dashboard                                     │
    (when they land)                                          │
                                                              ├─ rekor-log ── trillian-log-server

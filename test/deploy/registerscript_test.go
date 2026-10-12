@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // register.sh runs under `set -o pipefail`. Piping a command into `grep -q`
@@ -23,7 +25,7 @@ func TestRegisterScriptHasNoPipeIntoGrepQ(t *testing.T) {
 		t.Log("this machine did not reproduce SIGPIPE this run; the static check below still applies")
 	}
 
-	src, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "compose", "spire", "register.sh"))
+	src, err := os.ReadFile(filepath.Join(deploytest.RepoRoot(t), "deploy", "compose", "spire", "register.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}

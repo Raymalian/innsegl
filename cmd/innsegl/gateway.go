@@ -1632,7 +1632,7 @@ func configureGatewayAgentMessages(
 // or two different derivations, claiming the same id) and never a rotation
 // -- a rotation deploys a NEW key id (ADR-0061's 2026-09-28 amendment).
 //
-// 0400: read-only, owner only. innsegl-mcp and innsegl-api run as the
+// 0400: read-only, owner only. innsegl-core and innsegl-api run as the
 // IDENTICAL uid:gid in every deployment this project ships (both "1000:1000"
 // in deploy/compose/innsegl.yml), so owner-read is sufficient for the
 // reader on the other side of the read-only volume mount without widening
