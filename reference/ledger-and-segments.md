@@ -88,7 +88,10 @@ it, export, import on the new host and start it. The new core waits, frozen.
 Check the copy, then `make innsegl-thaw` on the new host only. The old host
 stays frozen, so it never writes again.
 - `make innsegl-backup` runs `pg_dump`, restores it into a throwaway
-  database and checks it against the sealed segments before keeping it.
+  database and checks it against the sealed segments before keeping it. It
+  runs the backup service's image with the service's own `command`, so it
+  reads the segments with the same object-store credential the scheduled run
+  uses (BAK-045, #623).
 - `make backup-freshness` reports the age of the last verified backup and
   whether its host copy landed.
 - `make innsegl-verify` asks Postgres and the object store what this
@@ -129,8 +132,9 @@ how long the writer lease lasts unrenewed [`15s`].
 Compose defaults: bucket `innsegl-segments`, prefix `segments/`. Backup
 service: `INNSEGL_BACKUP_INTERVAL` [`86400` s], `INNSEGL_BACKUP_WINDOW`
 [`172800` s], `INNSEGL_BACKUP_RETRY` [`60`], `INNSEGL_BACKUP_RETRY_MAX`
-[`900`], `INNSEGL_BACKUP_HOST_DIR` [`~/innsegl-backups`], `INNSEGL_BACKUP_DIR`
-for `make innsegl-backup` [`backups`].
+[`900`], `INNSEGL_BACKUP_HOST_DIR` [`~/innsegl-backups`]. `make innsegl-backup`
+writes where the service does: the `innsegl-backups` volume, with a copy in
+`INNSEGL_BACKUP_HOST_DIR`.
 
 ## Files, volumes, containers
 

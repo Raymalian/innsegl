@@ -31,9 +31,15 @@ itself before it is trusted.
 ## Run it
 
 ```bash
-make innsegl-backup                    # dumps to ./backups by default
-INNSEGL_BACKUP_DIR=/mnt/ledger-backups make innsegl-backup
+make innsegl-backup
 ```
+
+It runs the backup service's image with the service's own arguments, so it
+reads the sealed segments with the service's object-store credential and
+writes where the service does: the `innsegl-backups` volume, copied to
+`INNSEGL_BACKUP_HOST_DIR` (default `~/innsegl-backups`). Before #623 the target
+passed arguments of its own, which replaced the service's, and every manual
+backup was UNVERIFIED.
 
 To check later that the service's backups are recent and copied off the container
 runtime, run `make backup-freshness`. It reports the age of the last verified
