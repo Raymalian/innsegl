@@ -27,15 +27,21 @@ wire surface is deprecated (ADR-0077): every description begins with the
 same notice, the tools keep working, and the binding is removed at the next
 major release.
 
+The main listener serves only `get_credential` and `sign_commit`. The other
+six are the identity lifecycle: served on `-admin-listen` when it is set, and
+on no listener when it is not, which is the default for `make start` and
+`make update` (ADR-0083). The gateway and `innsegl retire` call the engine
+in process, so neither needs a listener.
+
 | Tool | Listener | Note |
 |---|---|---|
-| `register_agent` | admin (`-admin-listen`) when set | creates the run and its SPIRE entry |
-| `retire_agent` | admin when set | records `run_retired`, then deletes the entry |
+| `register_agent` | admin (`-admin-listen`) if set, else none | creates the run and its SPIRE entry |
+| `retire_agent` | admin if set, else none | records `run_retired`, then deletes the entry |
+| `record_event` | admin if set, else none | appends an event |
+| `observe_tool_call` | admin if set, else none | stores a body locally, appends the tool call |
+| `describe_workspace`, `observe_session` | admin if set, else none | deprecated (ADR-0071); bound, refuse every call |
 | `get_credential` | main (`-listen`) | a JWT-SVID for one audience |
-| `record_event` | main | appends an event |
 | `sign_commit` | main | signs in `-workspace` |
-| `observe_tool_call` | main | stores a body locally, appends the tool call |
-| `describe_workspace`, `observe_session` | main | deprecated (ADR-0071); bound, refuse every call |
 
 `innsegl retire` runs on the core, inside the `innsegl-core` container, and
 calls the retirement engine the gateway uses, in process, under the core's
@@ -55,7 +61,8 @@ the one-time code for the first passkey (see [dashboard-api.md](dashboard-api.md
 | Flag | Variable | Meaning |
 |---|---|---|
 | `-listen` | `INNSEGL_MCP_LISTEN` | MCP transport [`127.0.0.1:8080`] |
-| `-admin-listen` | `INNSEGL_MCP_ADMIN_LISTEN` | identity lifecycle listener; empty serves all tools on `-listen` |
+| `-admin-listen` | `INNSEGL_MCP_ADMIN_LISTEN` | identity lifecycle listener; empty serves the lifecycle on no listener (ADR-0083) |
+| `-lifecycle-on-agent-listener` | `INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER` | serves the lifecycle on `-listen` with no credential; tests and `make innsegl-demo` only; refused with `-admin-listen`; warns at start |
 | `-admin-jwks` | `INNSEGL_MCP_ADMIN_JWKS_FILE` | public key set; required with `-admin-listen` |
 | `-health-listen` | `INNSEGL_MCP_HEALTH_LISTEN` | `/healthz`, `/readyz` [`127.0.0.1:8081`] |
 | `-also` | `INNSEGL_MCP_ALSO` | companions in this process: `seal`, `reconcile`, `reap`, `gateway` |
@@ -103,7 +110,7 @@ Fulcio and Rekor answer, not that the CA can sign.
 
 | Item | Holds |
 |---|---|
-| `innsegl-core` container | `innsegl serve`; host ports `127.0.0.1:28080` (MCP), `28081` (health), `28090` (admin) |
+| `innsegl-core` container | `innsegl serve`; host ports `127.0.0.1:28080` (MCP), `28081` (health); no host port for the admin listener (ADR-0083) |
 | `innsegl-admin-credential-init` | mints the admin key set at bring-up |
 | `innsegl-identity-init` | generates the identity secret |
 | volumes `innsegl-admin-jwks`, `innsegl-admin-key` | public key set, private signing key |
@@ -136,7 +143,7 @@ MCP error classes (`internal/mcp/errors.go`, protected): `ATTESTATION_FAILED`,
 
 - `internal/mcp/*_test.go` (MCP-001 to MCP-100, PRI-003, PRI-004)
 - `internal/mcp/admincred_test.go`, `adminscope_test.go` (MCP-078 to MCP-093)
-- `cmd/innsegl/retire_test.go` (MCP-086, on a real Postgres)
+- `cmd/innsegl/retire_test.go` (MCP-086, on a real Postgres), `lifecyclesurface_test.go` (OPS-214)
 - `cmd/innsegl/admincred_test.go` (MCP-090), `adminenrolcode_test.go` (AUTH-002)
 - `cmd/innsegl/serve_test.go`, `servewiring_test.go` (MCP-058 to MCP-060),
   `servealso_test.go` (CLI-011, CLI-012)
@@ -158,6 +165,7 @@ MCP error classes (`internal/mcp/errors.go`, protected): `ATTESTATION_FAILED`,
 - [ADR-0056](../docs/adr/0056-a-single-machine-deployment-runs-the-loops-in-the-mcp.md) loops run in the MCP
 - [ADR-0058](../docs/adr/0058-an-agents-identity-lifecycle-is-driven-by-its-traffic.md) lifecycle driven by traffic
 - [ADR-0077](../docs/adr/0077-the-mcp-wire-surface-is-deprecated.md) the MCP wire surface is deprecated; retire runs on the core
+- [ADR-0083](../docs/adr/0083-the-identity-lifecycle-is-served-on-no-listener-by-default.md) the identity lifecycle is served on no listener by default
 - [ADR-0079](../docs/adr/0079-adoption-runs-on-the-commit-path.md) an ended run's uncommitted work is adopted on the commit path; its identity never signs again (see [commit-path.md](commit-path.md))
 
 ## Runbooks

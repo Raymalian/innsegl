@@ -98,6 +98,10 @@ func TestMain(m *testing.M) {
 	// No test asks the developer's own client service whether signing is
 	// down; the one that tests the asking points HOME at a stand-in.
 	signingOutageNow = func() (signingOutage, bool) { return signingOutage{}, false }
+	// The test binary sits in a build folder the user owns, so the
+	// installed-copy rule (#599) would refuse every link; tests that check
+	// that rule set linkBinary themselves (linkrelease_test.go).
+	linkBinary = innseglBinaryPath
 	code := m.Run()
 	if apiPGShared != nil {
 		if err := apiPGShared.remove(); err != nil {

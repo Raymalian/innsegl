@@ -18,9 +18,10 @@
 #
 #   1. pg_dump the whole `innsegl` schema OVER THE NETWORK, as a role that
 #      can read it and cannot write it.
-#   2. Restore that dump into a throwaway database on the SAME server -- never
-#      the live one (runbooks/index-rebuild.md §2.2) -- which proves the dump
-#      actually restores rather than merely that pg_dump exited 0.
+#   2. Restore that dump into a private Postgres this run starts and stops --
+#      never the ledger's server (runbooks/index-rebuild.md §2.2, RM-356) --
+#      which proves the dump actually restores rather than merely that pg_dump
+#      exited 0. The backup role needs no CREATEDB for it.
 #   3. Extract the restored event_hash column, in chain_position order.
 #   4. Adjudicate it against the sealed segments with the gate this repository
 #      already ships and already self-tests: runbooks/verify-rebuilt-index.sh.
@@ -106,6 +107,9 @@
 # and the scripts/*.sh gates. No mapfile, no arrays, no ${var,,}.
 
 set -euo pipefail
+
+# RM-349: dumps hold the whole ledger and are for the operator alone (CLI-040).
+umask 077
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -258,27 +262,40 @@ warn() { printf '%s\n' "$*" >&2; }
 
 mkdir -p "${out_dir}"
 
-# THE TWO WAYS THIS TALKS TO THE LEDGER, and the difference between them is
-# the whole of what the backup role may do.
-#
-# pg_ro is the role as it is: internal/api/readonly.sql leaves it with
-# default_transaction_read_only = on, so a session that never turns that off
-# cannot write anywhere, and the dump does not need to.
-#
-# pg_rw turns it off, which the restore must, because a restore writes. That is
-# safe because the setting is NOT the boundary: the ACL is, and
-# verify-backup-role.sh proves it by issuing SET TRANSACTION READ WRITE and
-# still being refused 42501 on every ledger write. With it off this credential
-# can write exactly one place -- a database it created and owns.
+# THE LEDGER IS ONLY EVER READ. pg_ro is the backup role as it is:
+# internal/api/readonly.sql leaves it with default_transaction_read_only = on
+# and no CREATEDB (RM-356, #604), and the dump needs neither.
 pg_ro() {
   cmd="$1"; shift
   "${cmd}" -h "${pg_host}" -p "${pg_port}" -U "${role}" "$@"
 }
-pg_rw() {
+
+# THE RESTORE RUNS ON A SERVER OF ITS OWN (RM-356, #604). Proving a dump
+# restores needs a database to restore it into. That used to be a throwaway
+# database on the ledger's own server, so the backup's credential -- the one
+# that leaves the core every night -- could create databases there. Now the
+# check starts a private Postgres in this run's work directory: no TCP
+# listener, a Unix socket in a directory only this user can open, stopped and
+# removed when the run ends. The ledger's server is never written.
+local_pg_dir=""
+local_pg_started=""
+pg_local() {
   cmd="$1"; shift
-  PGOPTIONS='-c default_transaction_read_only=off' \
-    "${cmd}" -h "${pg_host}" -p "${pg_port}" -U "${role}" "$@"
+  "${cmd}" -h "${local_pg_dir}" -p 5432 -U innsegl_restore "$@"
 }
+local_pg_stop() {
+  if [ -n "${local_pg_started}" ]; then
+    pg_ctl -D "${local_pg_dir}/data" -m immediate -w stop >/dev/null 2>&1 || true
+    local_pg_started=""
+  fi
+}
+for tool in pg_dump pg_restore psql initdb pg_ctl; do
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    printf 'backup-ledger: %s is not on PATH. The dump is proven by restoring it into a\n' "${tool}" >&2
+    printf '  private Postgres this run starts, so the server tools are needed as well.\n' >&2
+    exit "${EXIT_USAGE}"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # What is at risk while this keeps failing (RM-163, #267).
@@ -442,12 +459,9 @@ if ! ledger_reachable; then
 fi
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/innsegl-backup.XXXXXX")"
-cleanup_scratch_db=""
 cleanup() {
   status=$?
-  if [ -n "${cleanup_scratch_db}" ]; then
-    pg_rw dropdb --if-exists "${cleanup_scratch_db}" >/dev/null 2>&1 || true
-  fi
+  local_pg_stop
   rm -rf "${work}"
   exit "${status}"
 }
@@ -495,26 +509,38 @@ fi
 say "    wrote ${dumpfile} ($(wc -c <"${dumpfile}" | tr -d ' ') bytes)"
 
 # ---------------------------------------------------------------------------
-# 2. Restore into a throwaway database in the SAME container, never the live
-#    one (runbooks/index-rebuild.md §2.2 -- restoring over a live database is
-#    the one action here whose failure mode is silent). This is the check that
-#    the dump is a dump and not just a file pg_dump happened to exit 0 on.
+# 2. Restore into a private Postgres this run starts, never the ledger's
+#    server (runbooks/index-rebuild.md §2.2 -- restoring over a live database
+#    is the one action here whose failure mode is silent). This is the check
+#    that the dump is a dump and not just a file pg_dump happened to exit 0 on.
 # ---------------------------------------------------------------------------
-scratch_db="innsegl_backup_verify_${timestamp}_$$"
-say "==> restoring into throwaway database ${scratch_db}"
-if ! pg_rw createdb "${scratch_db}" 2>"${work}/createdb.err"; then
-  warn "FAIL: could not create ${scratch_db}:"
+local_pg_dir="${work}/pg"
+mkdir -p "${local_pg_dir}"
+chmod 0700 "${local_pg_dir}"
+say "==> restoring into a private Postgres in ${local_pg_dir}"
+if ! initdb -D "${local_pg_dir}/data" -U innsegl_restore --auth=trust --no-sync \
+    --no-instructions -E UTF8 --locale=C >"${work}/initdb.log" 2>&1; then
+  warn "FAIL: could not create the private Postgres the restore runs in:"
+  sed 's/^/    /' "${work}/initdb.log" >&2 || true
+  end_dump_failure
+fi
+if ! pg_ctl -D "${local_pg_dir}/data" -l "${work}/restore-server.log" -w -t 60 \
+    -o "-c listen_addresses= -k ${local_pg_dir} -p 5432 -c fsync=off -c shared_buffers=16MB -c max_connections=5" \
+    start >/dev/null 2>"${work}/pg_ctl.err"; then
+  warn "FAIL: the private Postgres the restore runs in did not start:"
+  sed 's/^/    /' "${work}/pg_ctl.err" "${work}/restore-server.log" >&2 || true
+  end_dump_failure
+fi
+local_pg_started=1
+if ! pg_local createdb verify 2>"${work}/createdb.err"; then
+  warn "FAIL: could not create the restore database:"
   sed 's/^/    /' "${work}/createdb.err" >&2 || true
   end_dump_failure
 fi
-cleanup_scratch_db="${scratch_db}"
-# --no-owner --no-acl, MEASURED and not defensive. The dump's objects belong to
-# the schema owner, and this role is not a superuser, so it cannot SET SESSION
-# AUTHORIZATION to become them: without these two flags every ALTER ... OWNER TO
-# and every GRANT in the dump fails and --exit-on-error stops the restore. With
-# them the objects are owned by the backup role inside a database only it can
-# see, which is all the restore has to prove.
-if ! pg_rw pg_restore -d "${scratch_db}" --no-owner --no-acl --exit-on-error \
+# --no-owner --no-acl: the dump names the ledger's roles, and none of them
+# exist in this private server. Its one user owns everything restored, which
+# is all the restore has to prove.
+if ! pg_local pg_restore -d verify --no-owner --no-acl --exit-on-error \
     "${dumpfile}" 2>"${work}/restore.err"; then
   warn "FAIL: the dump does not restore -- it is not a usable backup:"
   sed 's/^/    /' "${work}/restore.err" >&2 || true
@@ -526,7 +552,7 @@ say "    restore held"
 # 3. Extract the restored chain, in chain_position order -- exactly the query
 #    runbooks/index-rebuild.md §6.2 documents for a rebuilt index.
 # ---------------------------------------------------------------------------
-if ! pg_ro psql -d "${scratch_db}" -X -q -A -t -c \
+if ! pg_local psql -d verify -X -q -A -t -c \
     'SELECT event_hash FROM innsegl.events ORDER BY chain_position' \
     >"${work}/index.hashes" 2>"${work}/select.err"; then
   warn "FAIL: could not read innsegl.events back from the restore:"
@@ -536,8 +562,7 @@ fi
 event_count="$(grep -c . "${work}/index.hashes" || true)"
 say "    restored ${event_count} event(s)"
 
-pg_rw dropdb "${scratch_db}" >/dev/null 2>&1 || true
-cleanup_scratch_db=""
+local_pg_stop
 
 # ---------------------------------------------------------------------------
 # 4. The sealed segments. Fetched read-only from object storage unless a

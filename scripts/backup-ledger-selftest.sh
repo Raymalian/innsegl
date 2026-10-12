@@ -25,6 +25,9 @@
 #            usable dump -- which is on disk and needs no database
 #   BAK-008  the measurement is cleared by a run that succeeds, so a stale
 #            number is never reported as a current one
+#   OPS-213  a role with no CREATEDB still takes a verified backup, and the
+#            ledger's server ends the run with the databases it began with
+#            (RM-356, #604)
 #
 # WHY A REAL POSTGRES CONTAINER
 # ------------------------------
@@ -193,9 +196,18 @@ run_backup_nopass() {
   INNSEGL_BACKUP_PASSWORD="" run_backup "$@"
 }
 
+# A NAME FOR THIS MACHINE'S UID INSIDE THE IMAGE. The script runs as the host's
+# uid so the files it writes stay the host's, and the private Postgres it starts
+# for the restore (RM-356) refuses a uid with no passwd entry. The deployment
+# runs as the image's own user, which has one.
+selftest_passwd="${workdir}/passwd"
+printf 'root:x:0:0:root:/root:/bin/sh\nselftest:x:%s:%s:selftest:/tmp:/bin/sh\n' \
+  "$(id -u)" "$(id -g)" >"${selftest_passwd}"
+
 run_backup() {
   docker run --rm --network "container:${PG}" \
     --user "$(id -u):$(id -g)" \
+    -v "${selftest_passwd}:/etc/passwd:ro" \
     -e INNSEGL_BACKUP_PASSWORD="${INNSEGL_BACKUP_PASSWORD}" \
     -v "${REPO_ROOT}:${REPO_ROOT}:ro" \
     -v "${workdir}:${workdir}" \
@@ -328,6 +340,16 @@ if [ "${n_dumps_before_check}" -lt 1 ]; then
   fail=$((fail + 1))
 else
   printf '  ok    BAK-003 kept the dump despite being unverified   %s file(s)\n' "${n_dumps_before_check}"
+  pass=$((pass + 1))
+fi
+
+# CLI-040: a dump holds the whole ledger, so it is readable by its owner alone.
+loose_dumps="$(find "${outdir}" -maxdepth 1 -name 'innsegl-*.dump' ! -perm 600 | wc -l | tr -d ' ')"
+if [ "${loose_dumps}" -ne 0 ] || [ "${n_dumps_before_check}" -lt 1 ]; then
+  printf '  FAIL  CLI-040 every dump is mode 600   %s loose\n' "${loose_dumps}"
+  fail=$((fail + 1))
+else
+  printf '  ok    CLI-040 every dump is mode 600\n'
   pass=$((pass + 1))
 fi
 
@@ -575,6 +597,42 @@ check "RM-190 a failed copy is logged" "${g}" "${out}"
 grep -qE '^[0-9]+ failed ' "${copy_out}/.host-copy" 2>/dev/null && g=0 || g=1
 check "RM-190 a failed copy is left for make start to report" "${g}" \
   "$(cat "${copy_out}/.host-copy" 2>/dev/null || echo absent)"
+
+printf '\n-- OPS-213: a role that cannot create databases still takes a verified backup --\n'
+# RM-356 (#604): the deployment's backup role has the reader's grants and no
+# CREATEDB, so the restore that proves a dump runs in a throwaway server of the
+# backup's own, never on the ledger's server. This role is that shape: not a
+# superuser, NOCREATEDB, read-only by default, SELECT on the ledger and nothing
+# else. The ledger server must end the run with exactly the databases it began
+# with.
+load_fixtures 0
+docker exec "${PG}" psql -v ON_ERROR_STOP=1 -U innsegl -d innsegl -q -c "
+  SET client_min_messages = warning;
+  DROP ROLE IF EXISTS bak_nocreatedb;
+  CREATE ROLE bak_nocreatedb LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${INNSEGL_BACKUP_PASSWORD}';
+  ALTER ROLE bak_nocreatedb SET default_transaction_read_only = on;
+  GRANT USAGE ON SCHEMA innsegl TO bak_nocreatedb;
+  GRANT SELECT ON ALL TABLES IN SCHEMA innsegl TO bak_nocreatedb;
+  GRANT SELECT ON ALL SEQUENCES IN SCHEMA innsegl TO bak_nocreatedb;" >/dev/null
+dbs_before="$(docker exec "${PG}" psql -X -A -t -U innsegl -d innsegl -c 'SELECT datname FROM pg_database ORDER BY 1')"
+nocreatedb_out="${workdir}/backups-nocreatedb"
+mkdir -p "${nocreatedb_out}"
+expect 0 "OPS-213 a NOCREATEDB role takes a verified backup" -- \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role bak_nocreatedb \
+  --out "${nocreatedb_out}" --segments "${good_segments}" --quiet
+expect_says "restored 14 event(s)" "OPS-213 the restore reads every event back" -- \
+  run_backup --postgres-host 127.0.0.1 --postgres-port 5432 --database innsegl --role bak_nocreatedb \
+  --out "${nocreatedb_out}" --segments "${good_segments}"
+dbs_after="$(docker exec "${PG}" psql -X -A -t -U innsegl -d innsegl -c 'SELECT datname FROM pg_database ORDER BY 1')"
+[ "${dbs_before}" = "${dbs_after}" ] && g=0 || g=1
+if [ "${g}" -eq 0 ]; then
+  printf '  ok    %-46s %s\n' "OPS-213 the ledger server gains no database" "$(printf '%s' "${dbs_after}" | tr '\n' ' ')"
+  pass=$((pass + 1))
+else
+  printf '  FAIL  %-46s before: %s after: %s\n' "OPS-213 the ledger server gains no database" \
+    "$(printf '%s' "${dbs_before}" | tr '\n' ' ')" "$(printf '%s' "${dbs_after}" | tr '\n' ' ')"
+  fail=$((fail + 1))
+fi
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 if [ "${fail}" -gt 0 ]; then

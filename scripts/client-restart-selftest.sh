@@ -21,6 +21,9 @@
 #             else 127.0.0.1:28195), polling until then.
 #   OPS-170g  a service that never answers: exit 1 after the timeout
 #             ($INNSEGL_CLIENT_RESTART_TIMEOUT seconds), saying so.
+#   OPS-170h  a service that runs the installed copy (#599) of this build,
+#             the same bytes, is restarted; one that runs the installed copy
+#             of another build is left alone, naming make install-release.
 #
 # curl is a fake too: nothing here reaches a real client service.
 set -uo pipefail
@@ -38,7 +41,9 @@ FAKEBIN="${TOP}/bin"
 mkdir -p "${FAKEBIN}" "${TOP}/checkout" "${TOP}/other"
 BIN="${TOP}/checkout/innsegl"
 OTHER="${TOP}/other/innsegl"
-: >"${BIN}"; : >"${OTHER}"
+printf 'build\n' >"${BIN}"; printf 'other\n' >"${OTHER}"
+RELEASE_DIR="${TOP}/libexec/innsegl"
+mkdir -p "${RELEASE_DIR}"
 ln -s "${TOP}/checkout" "${TOP}/link"
 
 cat >"${FAKEBIN}/uname" <<'EOF'
@@ -85,7 +90,8 @@ esac
 EOF
 chmod +x "${FAKEBIN}"/*
 
-export FAKE_UNAME FAKE_PROGRAM FAKE_CALLS FAKE_LISTEN FAKE_DOWN INNSEGL_CLIENT_RESTART_TIMEOUT
+export FAKE_UNAME FAKE_PROGRAM FAKE_CALLS FAKE_LISTEN FAKE_DOWN INNSEGL_CLIENT_RESTART_TIMEOUT INNSEGL_RELEASE_DIR
+INNSEGL_RELEASE_DIR="${RELEASE_DIR}"
 FAKE_LISTEN=""; FAKE_DOWN=0; INNSEGL_CLIENT_RESTART_TIMEOUT=10
 run() {
   FAKE_CALLS="$(mktemp "${TOP}/calls.XXXXXX")"
@@ -199,6 +205,26 @@ if [ "${rc}" -eq 1 ] && grep -q kickstart <<<"${calls}" && grep -q 'did not answ
 else
   bad "OPS-170g a service that never answers" "exit=${rc} out=${out}"
 fi
+
+# OPS-170h
+for os in Darwin Linux; do
+  cp "${BIN}" "${RELEASE_DIR}/innsegl"
+  FAKE_UNAME="${os}" FAKE_PROGRAM="${RELEASE_DIR}/innsegl" run "${BIN}"
+  if [ "${rc}" -eq 0 ] && grep -qE 'kickstart|--user restart' <<<"${calls}"; then
+    ok "OPS-170h ${os}: the installed copy of this build is this build, so it is restarted"
+  else
+    bad "OPS-170h ${os}: the installed copy of this build was not restarted" "exit=${rc} out=${out}
+${calls}"
+  fi
+  printf 'older build\n' >"${RELEASE_DIR}/innsegl"
+  FAKE_UNAME="${os}" FAKE_PROGRAM="${RELEASE_DIR}/innsegl" run "${BIN}"
+  if [ "${rc}" -eq 1 ] && ! grep -qE 'kickstart|--user restart' <<<"${calls}" && grep -q 'make install-release' <<<"${out}"; then
+    ok "OPS-170h ${os}: the installed copy of another build is left alone, naming make install-release"
+  else
+    bad "OPS-170h ${os}: the installed copy of another build" "exit=${rc} out=${out}
+${calls}"
+  fi
+done
 
 out="$("${SCRIPT}" 2>&1)"; rc=$?
 if [ "${rc}" -eq 2 ]; then

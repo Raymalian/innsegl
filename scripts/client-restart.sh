@@ -3,9 +3,10 @@
 #
 # Restarts this machine's innsegl client service, but only when the service
 # runs the binary named: `make client-restart` names the one `make build`
-# just wrote, so a rebuild reaches the running service in one step. A service
-# that runs another binary (an installed release, another checkout) is left
-# alone and named. `make build` never restarts anything itself.
+# just wrote, so a rebuild reaches the running service in one step. The
+# installed copy `make install-release` made of that same build counts as it
+# (#599). A service that runs another binary (an installed copy of another
+# build, another checkout) is left alone and named. `make build` never restarts anything itself.
 #
 #   macOS: launchctl kickstart -k gui/<uid>/dev.innsegl.client
 #   Linux: systemctl --user restart innsegl-client.service
@@ -74,7 +75,18 @@ case "$(uname -s)" in
     ;;
 esac
 
-if [ -z "${program}" ] || [ "$(canon "${program}")" != "$(canon "${bin}")" ]; then
+# The installed copy (#599, `make install-release`) of this very build is
+# this build: same bytes, at a path only root can change.
+release="${INNSEGL_RELEASE_DIR:-/usr/local/libexec/innsegl}/innsegl"
+if [ -n "${program}" ] && [ "$(canon "${program}")" != "$(canon "${bin}")" ] && [ -f "${program}" ] \
+  && cmp -s "${program}" "${bin}"; then
+  :
+elif [ -n "${program}" ] && [ "$(canon "${program}")" = "$(canon "${release}")" ] \
+  && [ "$(canon "${program}")" != "$(canon "${bin}")" ]; then
+  echo "client-restart: the client service runs ${program}, the installed copy of another build than ${bin};" \
+    "left as it is. Install this one first: make install-release" >&2
+  exit 1
+elif [ -z "${program}" ] || [ "$(canon "${program}")" != "$(canon "${bin}")" ]; then
   echo "client-restart: the client service runs ${program:-an unknown binary}, not ${bin}; left as it is." \
     "Restart it yourself if that is the one you mean: ${restart[*]}" >&2
   exit 1

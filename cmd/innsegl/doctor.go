@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -31,10 +30,12 @@ import (
 // lose data (restart the client service, unlock with Touch ID); print any
 // step on the core as one line labelled VM, for the operator to run there.
 //
-// It runs no other command. Every command goes through doctorCommandAllowed,
-// a static allow-list holding the client service restart and nothing else:
-// never `down`, a volume removal, ca-custody-reset, a rotation, a restore, or
-// a destructive test package (CLI-023).
+// Every command it runs goes through doctorCommandAllowed (doctorrights.go),
+// a static allow-list (CLI-038): the client service restart, which is the
+// one repair it runs, and the read-only git calls and age plugins its checks
+// need. Never `down`, a volume removal, ca-custody-reset, a rotation, a
+// restore, or a destructive test package (CLI-023). The only other change it
+// makes on its own is tightening the modes of innsegl's own files (CLI-039).
 
 // exitDoctorFailing: signing did not pass the probe after the repairs.
 const exitDoctorFailing = 37
@@ -50,12 +51,15 @@ const doctorDefaultWait = signprobe.DefaultInterval + time.Minute
 // doctorRunbook is where a repair doctor must not make is described.
 const doctorRunbook = "runbooks/ca-custody.md, section \"Signing stopped\""
 
-const doctorUsage = `usage: innsegl doctor [--identity F] [--repo DIR]... [--wait D]
+const doctorUsage = `usage: innsegl doctor [--identity F] [--managed-settings F] [--repo DIR]... [--wait D]
 
 Check the signing chain from this machine to the core's CA, in order, one
-line per check. Repairs it runs itself: restart the client service; unlock
-the CA key store (asks for Touch ID). Anything on the core is printed as a
-line starting "VM:" for you to run there. Exits 0 only when the signing probe
+line per check, and the rights innsegl holds on it: the hooks in Claude
+Code's managed settings and the binaries they, the git hooks and the client
+service run. Repairs it runs itself: restart the client service; unlock the
+CA key store (asks for Touch ID); tighten the modes of innsegl's own key
+files. Anything else is printed: a line starting "VM:" for you to run on the
+core, or the command to run here. Exits 0 only when the signing probe
 passes after the repairs; 37 when it does not; 2 on a usage error.
 `
 
@@ -67,8 +71,15 @@ type doctorDeps struct {
 	cwd string
 	// now is this machine's clock; nil is time.Now.
 	now func() time.Time
-	// run executes one allowed command. Nothing else in doctor executes.
-	run func(ctx context.Context, name string, args ...string) error
+	// run executes one allowed command and returns what it printed on
+	// stdout. Nothing else in doctor executes.
+	run func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// self is this binary's resolved path, which every hook and the client
+	// service must run; empty is innseglBinaryPath.
+	self string
+	// settings is the managed settings file doctor reads by default; empty
+	// is the system path connect writes.
+	settings string
 	// poll is how often doctor asks again while it waits.
 	poll time.Duration
 	// serviceWait bounds the wait for a restarted client service.
@@ -98,12 +109,16 @@ func doctorCommand(args []string, stdout, stderr io.Writer) int {
 
 // execDoctorCommand runs one command that doctorCommandAllowed admitted;
 // doctor.exec is its only caller.
-func execDoctorCommand(ctx context.Context, name string, args ...string) error {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+func execDoctorCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
+	// #nosec G204 -- argv only, no shell, and only what the allow-list admitted.
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+		return out, fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(stderr.String()))
 	}
-	return nil
+	return out, nil
 }
 
 // doctorRestartArgv restarts this user's client service on goos.
@@ -114,27 +129,37 @@ func doctorRestartArgv(goos string, uid int) []string {
 	return []string{"systemctl", "--user", "restart", client.SystemdUnit}
 }
 
-// doctorCommandAllowed is the allow-list: the client service restart for
-// this user on this system, exactly, and nothing else.
-func doctorCommandAllowed(goos string, uid int, argv []string) bool {
-	return slices.Equal(argv, doctorRestartArgv(goos, uid))
-}
-
 type doctor struct {
 	deps     doctorDeps
 	out      io.Writer
 	paths    client.Paths
 	identity string
+	settings string
 	local    string
+	// clientCertExpiry and the CA token's seconds left are what earlier
+	// checks read, for the reports of #601 (doctorexpiry.go). Zero when not
+	// read.
+	clientCertExpiry time.Time
+	caTokenLeft      int64
+	caTokenKnown     bool
 }
 
-// exec runs argv through the allow-list. A command off it never reaches the
-// runner.
-func (d *doctor) exec(ctx context.Context, argv []string) error {
-	if !doctorCommandAllowed(d.deps.goos, d.deps.uid, argv) {
-		return fmt.Errorf("innsegl doctor: refusing to run %q: not on its allow-list", strings.Join(argv, " "))
+// exec runs argv through the allow-list and returns its stdout. A command
+// off the list never reaches the runner.
+func (d *doctor) exec(ctx context.Context, argv []string) ([]byte, error) {
+	if err := d.permit(argv); err != nil {
+		return nil, err
 	}
 	return d.deps.run(ctx, argv[0], argv[1:]...)
+}
+
+// permit is the allow-list's gate: for what doctor runs, and for what it
+// hands to a library that runs it (the age plugin).
+func (d *doctor) permit(argv []string) error {
+	if !doctorCommandAllowed(d.deps.goos, d.deps.uid, argv) {
+		return fmt.Errorf("refusing to run %q: not on innsegl doctor's allow-list", strings.Join(argv, " "))
+	}
+	return nil
 }
 
 func (d *doctor) line(check, state, detail string) {
@@ -170,6 +195,12 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 	identity := fs.String("identity", paths.TrustIdentity,
 		"the age identity that opens the CA's unlock material (a Secure Enclave identity asks for Touch ID)")
 	wait := fs.Duration("wait", doctorDefaultWait, "how long to wait for the signing probe to pass after a repair")
+	defaultSettings := deps.settings
+	if defaultSettings == "" {
+		defaultSettings = defaultManagedSettingsPath(deps.goos)
+	}
+	settings := fs.String("managed-settings", defaultSettings,
+		"the Claude Code managed settings whose innsegl hooks to check")
 	var repos repoList
 	fs.Var(&repos, "repo", "a repository whose git hooks to check (repeatable; default: the current one)")
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
@@ -182,12 +213,13 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		fprintf(stderr, "innsegl doctor: this machine is not connected to a core (%v)\n", err)
 		return exitDoctorFailing
 	}
-	d := &doctor{deps: deps, out: stdout, paths: paths, identity: *identity,
-		local: "http://" + enrolledListen(paths)}
+	d := &doctor{deps: deps, out: stdout, paths: paths, identity: *identity, settings: *settings,
+		local: client.SocketPath(paths)}
 	if len(repos) == 0 && deps.cwd != "" {
 		repos = repoList{deps.cwd}
 	}
-	d.hostTools()
+	d.hostTools(ctx)
+	d.rights()
 	if !d.clientService(ctx) {
 		return exitDoctorFailing
 	}
@@ -197,15 +229,31 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		return exitDoctorFailing
 	}
 	unlocked, custodyOK := d.custody(ctx)
+	if d.caTokenKnown {
+		d.tokenLine(d.caTokenLeft)
+	}
 	d.components(st)
-	return d.signing(ctx, st, coreAt, unlocked, custodyOK, *wait)
+	expired := d.expiries(st)
+	d.backups(st)
+	code := d.signing(ctx, st, coreAt, unlocked, custodyOK, *wait)
+	if expired && code == exitOK {
+		return exitDoctorFailing
+	}
+	return code
 }
 
 // hostTools is doctor's first line (CLI-027, #592): what this machine lacks,
 // each with the command that installs it. It installs nothing, and the
 // checks after it run either way: they say what the gap breaks.
-func (d *doctor) hostTools() {
+func (d *doctor) hostTools(ctx context.Context) {
 	env := hostdeps.Real(d.deps.goos, d.identity)
+	// `git --version` goes through the allow-list like every other command.
+	env.Output = func(name string, args ...string) (string, error) {
+		vctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		out, err := d.exec(vctx, append([]string{name}, args...))
+		return string(out), err
+	}
 	if d.deps.host != nil {
 		env = *d.deps.host
 	}
@@ -234,7 +282,7 @@ func (d *doctor) clientService(ctx context.Context) bool {
 	}
 	if problem != "" {
 		d.line(check, "DOWN", problem+"; restarting it")
-		if rerr := d.exec(ctx, doctorRestartArgv(d.deps.goos, d.deps.uid)); rerr != nil {
+		if _, rerr := d.exec(ctx, doctorRestartArgv(d.deps.goos, d.deps.uid)); rerr != nil {
 			d.line(check, "DOWN", "the restart failed: "+rerr.Error())
 			return false
 		}
@@ -250,6 +298,9 @@ func (d *doctor) clientService(ctx context.Context) bool {
 		return false
 	}
 	exp, perr := time.Parse(time.RFC3339, svc.CertificateExpiresAt)
+	if perr == nil {
+		d.clientCertExpiry = exp
+	}
 	switch {
 	case perr != nil:
 		d.line("client certificate", "UNKNOWN", "the service did not say when it expires")
@@ -302,23 +353,28 @@ func (d *doctor) hooks(ctx context.Context, repos []string) {
 		return
 	}
 	for _, repo := range repos {
-		if _, err := gitCommonDir(ctx, repo); err != nil {
+		if err := d.gitCommonDir(ctx, repo); err != nil {
 			d.line("hooks", "not checked", repo+" is not a git repository")
 			continue
 		}
 		var missing []string
+		var scripts []hookScript
 		for _, h := range managedHooks {
-			ours, err := hasManagedHook(ctx, repo, h)
-			if err != nil || !ours {
+			s, ours := d.managedHook(ctx, repo, h)
+			if !ours {
 				missing = append(missing, h.name)
+				continue
 			}
+			scripts = append(scripts, s)
 		}
 		if len(missing) > 0 {
 			d.line("hooks", "MISSING", fmt.Sprintf("%s lacks %s; run: innsegl link %s",
 				repo, strings.Join(missing, ", "), repo))
 			continue
 		}
-		d.line("hooks", "ok", repo)
+		if d.hookBinaries(repo, scripts) {
+			d.line("hooks", "ok", repo)
+		}
 	}
 }
 
@@ -373,6 +429,7 @@ func (d *doctor) custody(ctx context.Context) (unlocked, ok bool) {
 	}
 	if st.CanSign {
 		d.line(check, "ok", "unlocked; the CA can sign")
+		d.caTokenLeft, d.caTokenKnown = st.TokenSecondsLeft, true
 		return false, true
 	}
 	reason := st.Reason
@@ -397,6 +454,10 @@ func (d *doctor) custody(ctx context.Context) (unlocked, ok bool) {
 		return false, false
 	default:
 		d.line(check, "CANNOT SIGN", reason)
+	}
+	if perr := d.permitPlugins(); perr != nil {
+		d.line(check, "NOT REPAIRED", perr.Error())
+		return false, false
 	}
 	d.line(check, "repairing", "unlocking the CA key store; approve the Touch ID prompt")
 	done, err := client.UnlockCAWith(ctx, d.paths, st, operatorIdentities(d.identity, d.out))

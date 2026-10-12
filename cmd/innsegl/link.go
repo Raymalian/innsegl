@@ -144,8 +144,8 @@ func linkHookPathsFor(ctx context.Context, repo, name string) (hookPath, previou
 	return hookPath, hookPath + linkPreviousSuffix, nil
 }
 
-// linkHookScript is the POSIX sh installed at hookPath. bin is this binary's
-// own resolved path (innseglBinaryPath, hook.go) and previousPath is where an
+// linkHookScript is the POSIX sh installed at hookPath. bin is linkBinary's
+// answer, the installed copy (#599), and previousPath is where an
 // already-existing hook was moved to, if any — both baked into the script as
 // single-quoted literals (shellQuoteSingle) rather than derived at runtime
 // from argv[0], which git does not guarantee is any particular form.
@@ -198,9 +198,9 @@ func runLinkInstall(ctx context.Context, repo string, stdout, stderr io.Writer) 
 			return exitUsage
 		}
 	}
-	bin, err := innseglBinaryPath()
+	bin, err := linkBinary()
 	if err != nil {
-		fprintf(stderr, "innsegl link: resolving this binary's own path: %v\n", err)
+		fprintf(stderr, "innsegl link: %v\n", err)
 		return exitUsage
 	}
 	for _, h := range managedHooks {
@@ -342,7 +342,8 @@ func linkRemoveHook(ctx context.Context, repo string, h managedHook, stdout, std
 // `innsegl link` by hand; a repository already linked is only read. A hook
 // the repository had is kept, exactly as `innsegl link` keeps it.
 //
-// A repository linked before a hook was added to managedHooks gains it here.
+// A repository linked before a hook was added to managedHooks gains it here,
+// and one whose hooks run another binary than linkBinary is rewritten.
 func linkEnsure(ctx context.Context, repo string) (bool, error) {
 	complete := true
 	for _, h := range managedHooks {
@@ -353,7 +354,11 @@ func linkEnsure(ctx context.Context, repo string) (bool, error) {
 		complete = complete && ours
 	}
 	if complete {
-		return false, nil
+		// #599: hooks an earlier link pointed at another binary (a checkout
+		// build) move onto the installed copy. With none to name, they stay.
+		if !hooksNeedRebinding(ctx, repo) {
+			return false, nil
+		}
 	}
 	var out, errOut strings.Builder
 	if code := runLinkInstall(ctx, repo, &out, &errOut); code != exitOK {
@@ -412,5 +417,37 @@ func linkedForHook(ctx context.Context, cwd string) bool {
 	// Linked on first use, as the session hook would have. A failure to
 	// link still acts: the repository is one innsegl records.
 	_, _ = linkEnsure(ctx, derived.Main) //nolint:errcheck // see above
+	return true
+}
+
+// linkBinary is the binary the git hooks run (#599, CLI-041): the one
+// connect names, under the same rule. A repository's hooks run on every
+// agent commit, so a build the user (or any agent) can change is refused,
+// with `make install-release` as the repair. Tests replace it.
+var linkBinary = func() (string, error) {
+	return connectDeps{binPath: innseglBinaryPath, uid: os.Getuid()}.hookBinary()
+}
+
+// hooksNeedRebinding reports whether repo's managed hooks run another binary
+// than linkBinary names. With no binary to name (linkBinary refuses), they
+// do not: there is nothing better to write.
+func hooksNeedRebinding(ctx context.Context, repo string) bool {
+	bin, err := linkBinary()
+	return err == nil && !hooksNameBinary(ctx, repo, bin)
+}
+
+// hooksNameBinary reports whether every managed hook in repo runs bin.
+func hooksNameBinary(ctx context.Context, repo, bin string) bool {
+	for _, h := range managedHooks {
+		hookPath, _, err := linkHookPathsFor(ctx, repo, h.name)
+		if err != nil {
+			return false
+		}
+		// #nosec G304 -- the hook path git itself resolved for this repository.
+		existing, err := os.ReadFile(hookPath)
+		if err != nil || hookScriptBin(string(existing)) != bin {
+			return false
+		}
+	}
 	return true
 }

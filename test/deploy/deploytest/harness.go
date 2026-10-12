@@ -52,9 +52,9 @@ const (
 	readerPassword = "innsegl-deploy-test-reader"
 
 	// BackupRole is the role the backup service connects as (RM-146, #237):
-	// the reader's grants over the ledger plus CREATEDB, because the backup
-	// proves a dump restores by restoring it into a throwaway database of its
-	// own. Spelled here for the same reason the other two are.
+	// the reader's grants over the ledger and no CREATEDB (RM-356, #604): the
+	// backup proves a dump restores in a private Postgres of its own. Spelled
+	// here for the same reason the other two are.
 	BackupRole     = "innsegl_backup"
 	backupPassword = "innsegl-deploy-test-backup"
 	// The sign-in store's writer (RM-260/RM-261): its own schema, no grant

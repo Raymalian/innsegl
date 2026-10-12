@@ -139,6 +139,8 @@ type connectFixture struct {
 	caFile   string
 	calls    [][]string
 	deps     connectDeps
+	// asked counts the times disconnect asked for the person (CLI-045).
+	asked int
 }
 
 func newConnectFixture(t *testing.T) *connectFixture {
@@ -148,7 +150,8 @@ func newConnectFixture(t *testing.T) *connectFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(core.Close)
-	f := &connectFixture{core: core, home: t.TempDir()}
+	// A short home, so the client socket under it can be bound (#600).
+	f := &connectFixture{core: core, home: shortTempDir(t)}
 	f.settings = filepath.Join(t.TempDir(), "managed-settings.json")
 	f.caFile = filepath.Join(t.TempDir(), "core-ca.pem")
 	if err := os.WriteFile(f.caFile, core.CAPEM, 0o644); err != nil {
@@ -157,8 +160,11 @@ func newConnectFixture(t *testing.T) *connectFixture {
 	f.deps = connectDeps{
 		home:    f.home,
 		binPath: func() (string, error) { return connectTestBin, nil },
-		goos:    "darwin",
-		uid:     501,
+		// connectTestBin stands for an installed copy no user can change
+		// (#599); connectrelease_test.go tests the changeable kind.
+		writable: func(string) string { return "" },
+		goos:     "darwin",
+		uid:      501,
 		run: func(name string, args ...string) error {
 			f.calls = append(f.calls, append([]string{name}, args...))
 			return nil
@@ -169,19 +175,22 @@ func newConnectFixture(t *testing.T) *connectFixture {
 		loadHarness: func(_ string, _ bool, debugFile string, ca string) error {
 			return os.WriteFile(debugFile, []byte("[DEBUG] extraCertsPath="+ca+"\n"), 0o600)
 		},
-		// Never the enrolment's default address: on a developer's machine
-		// their own client service listens there, in front of their own
-		// core. Nothing listens on port 1, so --disconnect falls back to
-		// the fake core directly; a test that wants a service starts one.
-		serviceURL: "http://127.0.0.1:1",
+		// The CLI socket is the one under this test's own home: nothing
+		// listens there, so --disconnect falls back to the fake core
+		// directly; a test that wants a service starts one.
+		// A person who confirms, unless a test says not (CLI-045).
+		presence: func(string) error {
+			f.asked++
+			return nil
+		},
 	}
 	return f
 }
 
 // connectServed enrols f with its own client service on a loopback port,
 // as `innsegl connect --listen <addr> --no-service` and then the service
-// would, and answers that service. wrap, when set, stands in front of the
-// real handler.
+// would, with its CLI socket where the service puts it, and answers that
+// service. wrap, when set, stands in front of the real handlers.
 func (f *connectFixture) connectServed(t *testing.T, wrap func(http.Handler) http.Handler) *httptest.Server {
 	t.Helper()
 	svc := httptest.NewUnstartedServer(nil)
@@ -189,17 +198,19 @@ func (f *connectFixture) connectServed(t *testing.T, wrap func(http.Handler) htt
 		"--managed-settings", f.settings, "--no-service", "--listen", svc.Listener.Addr().String()); code != exitOK {
 		t.Fatalf("connect: %s", stderr)
 	}
-	s, err := client.NewServer(client.ClientPaths(f.home), io.Discard)
+	paths := client.ClientPaths(f.home)
+	s, err := client.NewServer(paths, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := s.Handler()
+	h, sh := s.Handler(), s.SocketHandler()
 	if wrap != nil {
-		h = wrap(h)
+		h, sh = wrap(h), wrap(sh)
 	}
 	svc.Config.Handler = h
 	svc.Start()
 	t.Cleanup(svc.Close)
+	serveClientSocket(t, client.SocketPath(paths), sh)
 	return svc
 }
 
@@ -241,7 +252,8 @@ func TestCLI015ConnectEnrolsWritesFilesSettingsAndService(t *testing.T) {
 
 	dir := filepath.Join(f.home, ".innsegl", "client")
 	for name, mode := range map[string]os.FileMode{
-		"key.pem": 0o600, "cert.pem": 0o644, "bundle.pem": 0o644, "gateway-ca.pem": 0o644, "core.json": 0o644,
+		// #597 (CLI-040): every file the client keeps is private to its user.
+		"key.pem": 0o600, "cert.pem": 0o600, "bundle.pem": 0o600, "gateway-ca.pem": 0o600, "core.json": 0o600,
 	} {
 		st, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
@@ -389,7 +401,7 @@ func TestCLI015ConnectStopsBeforeEnrolmentWhenSettingsAreNotWritable(t *testing.
 	}
 	f.settings = filepath.Join(blocker, "managed-settings.json")
 	code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile, "--managed-settings", f.settings)
-	if code == exitOK || !strings.Contains(stderr, "sudo install -m 0644") {
+	if code == exitOK || !strings.Contains(stderr, "sudo sh -c ") || !strings.Contains(stderr, "install -m 0644") {
 		t.Fatalf("connect = %d: %s", code, stderr)
 	}
 	if n, _ := f.core.Counts(); n != 0 {
@@ -485,7 +497,7 @@ func TestConnectDisconnectRevokesTheInstallationOnTheCore(t *testing.T) {
 }
 
 // CLI-020 (PROPOSED for doc 07) — the CLI's calls to the core go through the
-// client service on loopback, not by dialling the core: --disconnect's
+// client service on its CLI socket, not by dialling the core: --disconnect's
 // revocation arrives at the core over the service's connection, under the
 // pass-through route.
 func TestCLI020DisconnectRevokesThroughTheClientService(t *testing.T) {
@@ -496,13 +508,12 @@ func TestCLI020DisconnectRevokesThroughTheClientService(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	var passed []string
-	svc := f.connectServed(t, func(h http.Handler) http.Handler {
+	f.connectServed(t, func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			passed = append(passed, r.Method+" "+r.URL.Path)
 			h.ServeHTTP(w, r)
 		})
 	})
-	f.deps.serviceURL = svc.URL
 	if code, stdout, stderr := f.connect("--disconnect", "--managed-settings", f.settings); code != exitOK ||
 		!strings.Contains(stdout, "revoked on the core") {
 		t.Fatalf("disconnect: exit %d\n%s%s", code, stdout, stderr)

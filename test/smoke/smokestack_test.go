@@ -917,6 +917,9 @@ func (s *stack) startMCP(ctx context.Context, t *testing.T) error {
 		"--env", "INNSEGL_FULCIO_URL=" + fulcioInternalURL,
 		"--env", "INNSEGL_REKOR_URL=" + rekorInternalURL,
 		"--env", "INNSEGL_MCP_LISTEN=0.0.0.0:8080",
+		// ADR-0083: the demo agent registers over the wire, which a
+		// deployment no longer serves; this fixture asks for it by name.
+		"--env", "INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER=true",
 		"--env", "INNSEGL_MCP_HEALTH_LISTEN=0.0.0.0:8081",
 		// The deployment's own migration step. Nothing else has a route to
 		// the ledger at this point, by design.

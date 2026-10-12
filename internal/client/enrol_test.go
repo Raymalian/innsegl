@@ -85,7 +85,7 @@ func TestEnrolRefusesACoreItDoesNotTrust(t *testing.T) {
 func TestWriteEnrolmentModes(t *testing.T) {
 	core, paths := enrolled(t)
 	for path, mode := range map[string]os.FileMode{
-		paths.Dir: 0o700, paths.Key: 0o600, paths.Cert: 0o644, paths.Bundle: 0o644, paths.CA: 0o644, paths.Core: 0o644,
+		paths.Dir: 0o700, paths.Key: 0o600, paths.Cert: 0o600, paths.Bundle: 0o600, paths.CA: 0o600, paths.Core: 0o600,
 	} {
 		st, err := os.Stat(path)
 		if err != nil {

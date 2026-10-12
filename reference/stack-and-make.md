@@ -43,7 +43,7 @@ Every target with a `##` help line:
 | `make rekor-reindex` | backfill the log's search index from the whole log |
 | `make innsegl-verify` | ask Postgres and the object store what the credentials can do |
 | `make innsegl-canary` | SEG-005: the object store refuses to delete a segment |
-| `make innsegl-demo` | register an identity, sign a commit under it, retire it, over the deprecated MCP wire (ADR-0077) |
+| `make innsegl-demo` | register an identity, sign a commit under it, retire it, over the deprecated MCP wire (ADR-0077); dev stack only, it recreates the core with `-lifecycle-on-agent-listener` (ADR-0083) |
 | `make innsegl-retire` | end a run an operator knows is over, on the core: `RUN=<run_id>` |
 | `make innsegl-init` | run `innsegl init` as a one-shot workload: `REPO=<path> ARGS='...'` |
 | `make innsegl-verify-commit` | verify a commit with no route to the ledger: `COMMIT=<sha>` |
@@ -178,7 +178,7 @@ Make variables and environment (defaults in brackets):
 | `INNSEGL_SPIRE_JWT_ISSUER` | all | [`http://spire-oidc:8080`] |
 | `INNSEGL_IMAGE` | verify-commit | [`innsegl:local`] |
 | `REPO` | up-here, innsegl-init | `host/org/name`, default from `origin`; for innsegl-init a host path |
-| `INNSEGL_MCP_ADMIN_LISTEN` | up-here | [`0.0.0.0:8090`] |
+| `INNSEGL_MCP_ADMIN_LISTEN` | up-here | [empty: the identity lifecycle is served on no listener, ADR-0083] |
 | `INNSEGL_MCP_ALSO` | up-here | empty keeps the compose default |
 | `INNSEGL_REBASE_BRANCH`, `INNSEGL_REBASE_REPOS` | up-here | both or neither |
 | `INNSEGL_WRITES_LOG_DIR`, `INNSEGL_WRITES_REPOS` | up-here | [`/harness-log`, empty] |
@@ -192,6 +192,7 @@ Make variables and environment (defaults in brackets):
 | `ARGS` | innsegl-init | flags passed to `innsegl init` |
 | `BASE` | verify-branch | [`origin/main`] |
 | `INNSEGL_BACKUP_DIR` | innsegl-backup | [`backups`] |
+| `INNSEGL_BACKUP_MARKER` | innsegl-core | the backup service's marker, mounted read-only; `/_core/status` reports it as `ledger_backup` for `innsegl doctor` |
 | `INNSEGL_TEST_KEEP_STACK` | smoke | `1` keeps the stack |
 | `INNSEGL_DESTROY_TRUST_ROOT` | teardown guard | name a trust volume to really remove |
 
@@ -240,7 +241,7 @@ there yet. The compose project (`innsegl-core`), volume names, network names
 and SPIFFE ID are unchanged.
 
 Host ports (all `127.0.0.1` unless `INNSEGL_BIND`): MCP `28080`, health
-`28081`, admin `28090`, gateway `28095` (bind), dashboard `8082` and `8443`
+`28081`, gateway `28095` (bind), dashboard `8082` and `8443`
 (bind), Fulcio `5555`, Rekor `23000`, SPIRE OIDC `28443`, admin relay `18081`.
 
 Local state: `.innsegl/stack-mode`, `.innsegl/deployed-commit` (`-dev` on a
@@ -265,7 +266,7 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
 
 ## Tests
 
-- `test/deploy/topology_test.go` (OPS-007, OPS-008), `buildonce_test.go`, `imagebundle_test.go`,
+- `test/deploy/topology_test.go` (OPS-007, OPS-008), `adminlistener_test.go` (OPS-215), `buildonce_test.go`, `imagebundle_test.go`,
   `hostports_test.go`, `bindaddress_test.go` (OPS-127), `oneprocess*_test.go`,
   `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134)
 - `test/deploy/custody/devstack_test.go` (OPS-033, OPS-127, OPS-129),

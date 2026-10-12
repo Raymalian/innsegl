@@ -41,7 +41,21 @@ type coreStatus struct {
 	// ServerCertificate is where the core's server certificate comes from
 	// and when it expires (#473). Absent from a core older than this.
 	ServerCertificate *serverCertStatus `json:"server_certificate,omitempty"`
+	// LedgerBackup is the ledger backup service's last run (#601), read from
+	// the marker it writes. Absent from a core that has no marker configured.
+	LedgerBackup *ledgerBackupStatus `json:"ledger_backup,omitempty"`
 }
+
+// ledgerBackupStatus is the backup service's marker: when it last ran and its
+// verdict (ok, failed or mismatch, backup-health.sh's words). A zero LastRunAt
+// is a core where no backup has ever completed.
+type ledgerBackupStatus struct {
+	LastRunAt time.Time `json:"last_run_at,omitzero"`
+	Verdict   string    `json:"verdict,omitempty"`
+}
+
+// envBackupMarker is the backup service's marker file, mounted read-only.
+const envBackupMarker = "INNSEGL_BACKUP_MARKER"
 
 // coreComponent is one part of the core and whether it is up.
 type coreComponent struct {
@@ -98,6 +112,9 @@ func statusHandler(store statusStore, serverCert func() serverCertStatus, log *s
 		}
 		out.TrustExpiries = coreTrustExpiries(os.Getenv(envTrustHistory), time.Now())
 		out.TrustProblems = coreTrustProblems(os.Getenv(envTrustHistory))
+		if m := os.Getenv(envBackupMarker); m != "" {
+			out.LedgerBackup = coreLedgerBackup(m)
+		}
 		if serverCert != nil {
 			sc := serverCert()
 			out.ServerCertificate = &sc

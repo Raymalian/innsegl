@@ -1152,6 +1152,7 @@ func (c *k9Campaign) startDaemon(t *testing.T) {
 		"-key", filepath.Join(c.pemDir, "key.pem"),
 		"-bundle", filepath.Join(c.pemDir, "bundle.pem"),
 		"-listen", c.mcpAddr,
+		"-lifecycle-on-agent-listener", // ADR-0083: this harness registers over the wire
 		"-health-listen", "127.0.0.1:0",
 		"-idempotency-lease", k9Lease.String(),
 		"-run-ttl", k9RunTTL.String(),

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"filippo.io/age"
 )
@@ -118,6 +119,9 @@ func TestOPS141InitLeavesOnlyCiphertextBehind(t *testing.T) {
 	st := f.c.Status(ctx)
 	if !st.Initialized || st.Sealed || !st.CanSign {
 		t.Fatalf("after init the custodian reports %+v; want initialised, unsealed, able to sign", st)
+	}
+	if st.TokenSecondsLeft <= 0 || time.Duration(st.TokenSecondsLeft)*time.Second > TokenPeriod {
+		t.Fatalf("the custodian reports %d seconds left on the CA's token; want within the %s period", st.TokenSecondsLeft, TokenPeriod)
 	}
 	if err := f.c.Init(ctx); err == nil {
 		t.Fatal("a second init was accepted on an initialised store")

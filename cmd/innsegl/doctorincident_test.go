@@ -243,9 +243,13 @@ func TestOPS192TheIncidentIsDetectedAndDoctorRepairsItWithNoRestart(t *testing.T
 		var out bytes.Buffer
 		code := runDoctor(ctx, []string{"--identity", identity, "--wait", "20s"}, &out, &out, doctorDeps{
 			home: f.home, goos: "darwin", uid: 501, cwd: t.TempDir(),
-			run: func(_ context.Context, name string, args ...string) error {
-				calls = append(calls, append([]string{name}, args...))
-				return nil
+			self: connectTestBin, settings: f.settings,
+			run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+				argv := append([]string{name}, args...)
+				if !doctorReadOnly(argv) {
+					calls = append(calls, argv)
+				}
+				return nil, nil
 			},
 			poll: 100 * time.Millisecond, serviceWait: 5 * time.Second,
 		})
