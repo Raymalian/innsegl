@@ -17,7 +17,7 @@ require (
 	github.com/gowebpki/jcs v1.0.1
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/minio/minio-go/v7 v7.3.0
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/spiffe/go-spiffe/v2 v2.9.0
 	github.com/spiffe/spire-api-sdk v1.15.3
 	golang.org/x/sys v0.49.0
