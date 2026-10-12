@@ -93,6 +93,9 @@ var ErrNotEnrolled = errors.New("this machine is not connected to a core; run `i
 // ReadCoreConfig reads core.json.
 func ReadCoreConfig(p Paths) (CoreConfig, error) {
 	var cfg CoreConfig
+	if err := TightenState(p.Dir); err != nil {
+		return cfg, fmt.Errorf("making %s private: %w", filepath.Dir(p.Dir), err)
+	}
 	text, err := os.ReadFile(p.Core)
 	if errors.Is(err, os.ErrNotExist) {
 		return cfg, ErrNotEnrolled
@@ -116,7 +119,7 @@ func WriteEnrolment(p Paths, e *Enrolment, listen string) error {
 	if err := os.MkdirAll(p.Dir, 0o700); err != nil {
 		return err
 	}
-	if err := os.Chmod(p.Dir, 0o700); err != nil {
+	if err := TightenState(p.Dir); err != nil {
 		return err
 	}
 	keyDER, err := x509.MarshalECPrivateKey(e.Key)
@@ -137,10 +140,10 @@ func WriteEnrolment(p Paths, e *Enrolment, listen string) error {
 		mode os.FileMode
 	}{
 		{p.Key, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600},
-		{p.Cert, e.ChainPEM, 0o644},
-		{p.Bundle, e.BundlePEM, 0o644},
-		{p.CA, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.CA.Raw}), 0o644},
-		{p.Core, append(cfg, '\n'), 0o644},
+		{p.Cert, e.ChainPEM, 0o600},
+		{p.Bundle, e.BundlePEM, 0o600},
+		{p.CA, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.CA.Raw}), 0o600},
+		{p.Core, append(cfg, '\n'), 0o600},
 	}
 	for _, f := range files {
 		if err := writeFileAtomic(f.path, f.data, f.mode); err != nil {
@@ -220,4 +223,37 @@ func parseCertsPEM(text []byte) ([]*x509.Certificate, error) {
 		return nil, errors.New("no certificate")
 	}
 	return certs, nil
+}
+
+// TightenState makes the state folder (~/.innsegl and everything under it)
+// private to the operator (RM-349): directories 0700, files with no group or
+// other access. It only removes access, never adds it: a file already 0400
+// stays 0400. Symbolic links are left alone. A missing folder is not an
+// error. dir is Paths.Dir; the folder tightened is its parent.
+func TightenState(dir string) error {
+	root := filepath.Dir(dir)
+	if _, err := os.Lstat(root); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		perm := info.Mode().Perm()
+		want := perm &^ 0o077
+		if d.IsDir() {
+			want = 0o700
+		}
+		if want == perm {
+			return nil
+		}
+		return os.Chmod(path, want) //nolint:gosec // want never exceeds 0700, and only removes access
+	})
 }

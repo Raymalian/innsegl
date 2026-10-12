@@ -108,6 +108,9 @@
 
 set -euo pipefail
 
+# RM-349: dumps hold the whole ledger and are for the operator alone (CLI-040).
+umask 077
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 GATE="${REPO_ROOT}/runbooks/verify-rebuilt-index.sh"

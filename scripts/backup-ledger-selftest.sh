@@ -343,6 +343,16 @@ else
   pass=$((pass + 1))
 fi
 
+# CLI-040: a dump holds the whole ledger, so it is readable by its owner alone.
+loose_dumps="$(find "${outdir}" -maxdepth 1 -name 'innsegl-*.dump' ! -perm 600 | wc -l | tr -d ' ')"
+if [ "${loose_dumps}" -ne 0 ] || [ "${n_dumps_before_check}" -lt 1 ]; then
+  printf '  FAIL  CLI-040 every dump is mode 600   %s loose\n' "${loose_dumps}"
+  fail=$((fail + 1))
+else
+  printf '  ok    CLI-040 every dump is mode 600\n'
+  pass=$((pass + 1))
+fi
+
 printf '\n-- BAK-004: the backup cannot be taken at all -> fails closed --\n'
 # An unreachable ledger, which is what "no such container" became when the
 # script stopped reaching into containers. Port 1 is reserved and nothing
