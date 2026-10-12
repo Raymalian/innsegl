@@ -91,6 +91,11 @@ type ServerConfig struct {
 	// bounded, no redirects, never a loopback or link-local address. Tests
 	// hand it a client that trusts their own provider.
 	SSOHTTPClient *http.Client
+	// CACustodianURL is where the API reaches the CA key store's custodian,
+	// on the unlock network (ADR-0082 decision 4), to forward an unlock or a
+	// reseal from an unlock key. Empty: custody is off, and the unlock-key
+	// routes say so.
+	CACustodianURL string
 }
 
 // Health is what an operator reads to see that "read-only" is a measured fact
@@ -194,6 +199,10 @@ type Server struct {
 	webAuthnConfig    WebAuthnConfig
 	sessionLifetime   time.Duration
 	ssoHTTPClient     *http.Client
+	// custody reaches the CA key store's custodian (unlockcustody.go); nil
+	// when custody is off. unlockLimit bounds each person's unlock-key POSTs.
+	custody     *custodyClient
+	unlockLimit *unlockLimiter
 }
 
 // NewServer wires the routes. It refuses to construct at all without a way
@@ -237,6 +246,8 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		coreCACertFile:    cfg.CoreCACertFile,
 		unownedRunsHidden: cfg.UnownedRunsHidden,
 		ssoHTTPClient:     cfg.SSOHTTPClient,
+		custody:           newCustodyClient(cfg.CACustodianURL),
+		unlockLimit:       newUnlockLimiter(nil),
 	}
 	if s.ssoHTTPClient == nil {
 		s.ssoHTTPClient = newSSOHTTPClient()
@@ -320,13 +331,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// and never added to the list is therefore refused, not silently
 	// admitted, however it got onto the mux.
 	if _, pattern := s.mux.Handler(r); !authAllowedRoutes[pattern] {
-		userID, _, ok := s.sessionFromRequest(r)
-		if !ok {
-			writeError(w, http.StatusUnauthorized, codeUnauthorized,
-				"sign in required (ADR-0062): this dashboard and its read API answer "+
-					"nothing without an operator session")
+		sess, state := s.checkSession(r)
+		if state != SessionLive {
+			writeSignInRequired(w, state)
 			return
 		}
+		userID := sess.UserID
 		// RM-307 (#486): every read below sees only the viewer's runs.
 		scope, scoped, err := s.runScopeFor(r, userID)
 		if err != nil {

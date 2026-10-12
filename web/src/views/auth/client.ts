@@ -133,20 +133,6 @@ async function patchJSON(base: string, path: string, body: unknown): Promise<unk
   return parsed;
 }
 
-async function deleteJSON(base: string, path: string): Promise<void> {
-  const response = await fetch(`${base}${path}`, {
-    method: "DELETE",
-    headers: { Accept: "application/json" },
-    credentials: "same-origin",
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    const parsed: unknown = text === "" ? {} : JSON.parse(text);
-    const message = errorMessage(parsed) ?? `${path} answered ${response.status}`;
-    throw new AuthRequestError(message, response.status);
-  }
-}
-
 /** One live membership, as `GET /api/v1/auth/session` reports it. */
 export interface SessionOrganisation {
   readonly id: string;
@@ -157,6 +143,9 @@ export interface SessionOrganisation {
 
 export interface SessionStatus {
   readonly authenticated: boolean;
+  /** #602: "idle" when the server just ended this session for 30 minutes
+   * without a request. */
+  readonly ended?: "idle";
   readonly displayName: string;
   /** The person's live memberships; the organisation switcher's options. */
   readonly organisations: readonly SessionOrganisation[];
@@ -194,6 +183,7 @@ export async function fetchSessionStatus(
   const o = body as Record<string, unknown>;
   return {
     authenticated: o["authenticated"] === true,
+    ...(o["ended"] === "idle" ? { ended: "idle" as const } : {}),
     displayName: typeof o["display_name"] === "string" ? o["display_name"] : "",
     organisations: sessionOrganisations(o["organisations"]),
   };
@@ -445,24 +435,42 @@ export async function updateAccount(
   return accountOf(await patchJSON(base, "/account", { display_name: displayName }));
 }
 
+/** Which half of adding a passkey the browser is waiting on (#602): the
+ * account's own passkey confirming it, then the new one being created. */
+export type AddPasskeyStep = "confirm" | "create";
+
 /**
- * The whole "add a passkey while signed in" ceremony — the same shape as
- * `enrol`'s ceremony, against the account's own begin/finish pair rather
- * than the first-enrolment one. Throws AuthRequestError for anything the
- * server refused and a plain Error for anything the browser refused, same
- * split as `enrol`/`signIn`.
+ * The whole "add a passkey while signed in" ceremony. #602: begin also
+ * asks one of the account's own passkeys to confirm it (`confirm`), which
+ * the browser answers first; only a fresh recovery-code sign-in is asked
+ * none. Throws AuthRequestError for anything the server refused and a plain
+ * Error for anything the browser refused, same split as `enrol`/`signIn`.
  */
 export async function addPasskey(
   name: string,
   browser: WebAuthnBrowser,
   base: string = DEFAULT_API_BASE,
+  onStep: (step: AddPasskeyStep) => void = () => {},
 ): Promise<AccountPasskey> {
-  const begin = asCeremonyOptions(
-    await postJSON(base, "/account/passkeys/begin", { name }),
-  );
+  const body = await postJSON(base, "/account/passkeys/begin", { name });
+  const begin = asCeremonyOptions(body);
   if (!browser.supported) {
     throw new Error("this browser has no passkey support");
   }
+  const confirm = (body as Record<string, unknown>)["confirm"];
+  let confirmation: unknown;
+  if (typeof confirm === "object" && confirm !== null) {
+    onStep("confirm");
+    const request = browser.publicKeyCredential.parseRequestOptionsFromJSON(
+      (confirm as Record<string, unknown>)["publicKey"],
+    );
+    const asserted = await browser.credentials.get({ publicKey: request });
+    if (asserted === null) {
+      throw new Error("no passkey was offered");
+    }
+    confirmation = credentialJSON(asserted);
+  }
+  onStep("create");
   const options = browser.publicKeyCredential.parseCreationOptionsFromJSON(begin.publicKey);
   const credential = await browser.credentials.create({ publicKey: options });
   if (credential === null) {
@@ -471,6 +479,7 @@ export async function addPasskey(
   const finished = await postJSON(base, "/account/passkeys/finish", {
     ceremony_id: begin.ceremonyId,
     credential: credentialJSON(credential),
+    ...(confirmation === undefined ? {} : { confirmation }),
   });
   return passkeyOf(finished);
 }
@@ -486,23 +495,25 @@ export async function renamePasskey(
   );
 }
 
-/** `DELETE /api/v1/account/passkeys/{id}`. 409s as an ordinary
- * AuthRequestError when `id` is the account's last passkey — the account
- * page disables the control for that row already, so this is the server's
- * own backstop, not the primary guard. */
+/** Remove one passkey, confirmed with a passkey (#602). 409s as an
+ * ordinary AuthRequestError when `id` is the account's last passkey — the
+ * account page disables the control for that row already, so this is the
+ * server's own backstop, not the primary guard. */
 export async function removePasskey(
   id: string,
+  browser: WebAuthnBrowser,
   base: string = DEFAULT_API_BASE,
 ): Promise<void> {
-  await deleteJSON(base, `/account/passkeys/${encodeURIComponent(id)}`);
+  await confirmWithPasskey(base, "/account/passkeys/remove", { id }, browser);
 }
 
-/** `POST /api/v1/account/recovery-codes`: ten new codes, shown once; every
- * earlier code becomes void. */
+/** Ten new recovery codes, confirmed with a passkey (#602); shown once,
+ * and every earlier code becomes void. */
 export async function generateRecoveryCodes(
+  browser: WebAuthnBrowser,
   base: string = DEFAULT_API_BASE,
 ): Promise<RecoveryCodes> {
-  const body = await postJSON(base, "/account/recovery-codes", {});
+  const body = await confirmWithPasskey(base, "/account/recovery-codes", {}, browser);
   if (typeof body !== "object" || body === null) return { codes: [] };
   const codes = (body as Record<string, unknown>)["codes"];
   return {
@@ -820,23 +831,28 @@ export async function beginOrganisationSignIn(
   return redirectOf(await postJSON(base, "/auth/sso/begin", { sign_in_name: signInName }));
 }
 
-/** `POST /api/v1/account/sso/link` {organisation_id}: where to send the
- * browser to connect the organisation's sign-in to this account. */
+/** Where to send the browser to connect the organisation's sign-in to this
+ * account, once a passkey confirms it (#602). */
 export async function beginLinkOrganisationSignIn(
   organisationId: string,
+  browser: WebAuthnBrowser,
   base: string = DEFAULT_API_BASE,
 ): Promise<string> {
-  return redirectOf(await postJSON(base, "/account/sso/link", { organisation_id: organisationId }));
+  return redirectOf(
+    await confirmWithPasskey(base, "/account/sso/link", { organisation_id: organisationId }, browser),
+  );
 }
 
-/** `POST /api/v1/account/sso/link` {sign_in_name}: connect an
- * organisation's sign-in by its name, which is how a person who is not its
- * member yet joins through it. */
+/** Connect an organisation's sign-in by its name, which is how a person
+ * who is not its member yet joins through it; confirmed with a passkey. */
 export async function beginLinkOrganisationSignInByName(
   signInName: string,
+  browser: WebAuthnBrowser,
   base: string = DEFAULT_API_BASE,
 ): Promise<string> {
-  return redirectOf(await postJSON(base, "/account/sso/link", { sign_in_name: signInName }));
+  return redirectOf(
+    await confirmWithPasskey(base, "/account/sso/link", { sign_in_name: signInName }, browser),
+  );
 }
 
 /** `GET /api/v1/account/sso?organisation_id=…`. */
@@ -871,7 +887,11 @@ export async function removeOrganisationSignIn(
   await confirmWithPasskey(base, "/account/sso/remove", { organisation_id: organisationId }, browser);
 }
 
-/** `DELETE /api/v1/account/sign-ins/{id}`: disconnect one of your own. */
-export async function disconnectSignIn(id: number, base: string = DEFAULT_API_BASE): Promise<void> {
-  await deleteJSON(base, `/account/sign-ins/${encodeURIComponent(String(id))}`);
+/** Disconnect one of your own sign-ins, confirmed with a passkey (#602). */
+export async function disconnectSignIn(
+  id: number,
+  browser: WebAuthnBrowser,
+  base: string = DEFAULT_API_BASE,
+): Promise<void> {
+  await confirmWithPasskey(base, "/account/sign-ins/unlink", { id }, browser);
 }

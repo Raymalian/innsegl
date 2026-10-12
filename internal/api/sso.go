@@ -25,8 +25,12 @@ import (
 //	GET    /api/v1/account/sso?organisation_id=ID   the organisation's sign-in
 //	POST   /api/v1/account/sso/configure/begin|finish   owner, fresh passkey
 //	POST   /api/v1/account/sso/remove/begin|finish      owner, fresh passkey
-//	POST   /api/v1/account/sso/link       {organisation_id or sign_in_name} -> {redirect_url}
-//	DELETE /api/v1/account/sign-ins/{id}  unlink one of your own
+//	POST   /api/v1/account/sso/link/begin|finish        fresh passkey -> {redirect_url}
+//	POST   /api/v1/account/sign-ins/unlink/begin|finish  {id}, fresh passkey
+//
+// Linking and unlinking change how the person signs in, so each takes a
+// fresh passkey (#602, stepup.go): a stolen session cannot link the thief's
+// own identity.
 //
 // A sign-in joins an EXISTING person. The provider's identity (issuer and
 // subject, nothing else) must first be linked from the account page by a
@@ -51,6 +55,9 @@ const (
 
 	ceremonyKindConfigureSSO = "configure_sso"
 	ceremonyKindRemoveSSO    = "remove_sso"
+	// Migration 0024's (#602).
+	ceremonyKindLinkSSO   = "link_sso"
+	ceremonyKindUnlinkSSO = "unlink_sso"
 
 	// AuthEventSSOConfigured and AuthEventSSORemoved are the owner's two
 	// changes; sign-ins and refusals are signin_succeeded and
@@ -85,7 +92,7 @@ type SSOSignInRequest struct {
 	SignInName string `json:"sign_in_name"`
 }
 
-// SSOLinkRequest is POST /api/v1/account/sso/link's body: the organisation
+// SSOLinkRequest is POST /api/v1/account/sso/link/begin's body: the organisation
 // by id (a member's own) or by its sign-in name (a person joining through
 // it). The name wins when both are given.
 type SSOLinkRequest struct {
@@ -157,8 +164,10 @@ func (s *Server) registerSSOAccountRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/account/sso/configure/finish", s.withOrgs(s.handleSSOConfigureFinish))
 	mux.HandleFunc("POST /api/v1/account/sso/remove/begin", s.withOrgs(s.handleSSORemoveBegin))
 	mux.HandleFunc("POST /api/v1/account/sso/remove/finish", s.withOrgs(s.handleSSORemoveFinish))
-	mux.HandleFunc("POST /api/v1/account/sso/link", s.withOrgs(s.handleSSOLink))
-	mux.HandleFunc("DELETE /api/v1/account/sign-ins/{id}", s.handleSSOUnlink)
+	mux.HandleFunc("POST /api/v1/account/sso/link/begin", s.withOrgs(s.handleSSOLinkBegin))
+	mux.HandleFunc("POST /api/v1/account/sso/link/finish", s.withOrgs(s.handleSSOLinkFinish))
+	mux.HandleFunc("POST /api/v1/account/sign-ins/unlink/begin", s.handleSSOUnlinkBegin)
+	mux.HandleFunc("POST /api/v1/account/sign-ins/unlink/finish", s.handleSSOUnlinkFinish)
 }
 
 // ssoRedirectURI is the one callback the provider is told, exactly.
@@ -187,28 +196,52 @@ func (s *Server) handleSSOBegin(w http.ResponseWriter, r *http.Request) {
 	s.beginSSO(w, r, c, "")
 }
 
-// handleSSOLink begins a sign-in that links the provider's identity to the
-// signed-in person. Membership is not required: linking is how a person the
-// organisation's provider vouches for joins it.
-func (s *Server) handleSSOLink(w http.ResponseWriter, r *http.Request) {
-	var req SSOLinkRequest
-	if !decodeAuthRequest(w, r, &req) {
-		return
-	}
+// linkConnection reads the connection a link names: by its sign-in name
+// when given, else the organisation's. It writes the refusal itself.
+func (s *Server) linkConnection(ctx context.Context, w http.ResponseWriter, req SSOLinkRequest) (SSOConnection, bool) {
 	var (
 		c   SSOConnection
 		err error
 	)
 	if strings.TrimSpace(req.SignInName) != "" {
-		c, err = s.orgs.SSOConnectionByName(r.Context(), req.SignInName)
+		c, err = s.orgs.SSOConnectionByName(ctx, req.SignInName)
 	} else {
-		c, err = s.orgs.SSOConnection(r.Context(), req.OrganisationID)
+		c, err = s.orgs.SSOConnection(ctx, req.OrganisationID)
 	}
 	if err != nil {
 		writeSSOLookupError(w, err)
+		return SSOConnection{}, false
+	}
+	return c, true
+}
+
+// handleSSOLinkBegin checks the connection exists, then asks for a fresh
+// passkey. Membership is not required: linking is how a person the
+// organisation's provider vouches for joins it.
+func (s *Server) handleSSOLinkBegin(w http.ResponseWriter, r *http.Request) {
+	var req SSOLinkRequest
+	if !decodeAuthRequest(w, r, &req) {
 		return
 	}
-	s.beginSSO(w, r, c, accountSessionFrom(r).userID)
+	if _, ok := s.linkConnection(r.Context(), w, req); !ok {
+		return
+	}
+	s.beginConfirmation(r.Context(), w, ceremonyKindLinkSSO, accountSessionFrom(r).userID, req)
+}
+
+// handleSSOLinkFinish, once the passkey confirms it, begins the sign-in
+// that links the provider's identity to the signed-in person.
+func (s *Server) handleSSOLinkFinish(w http.ResponseWriter, r *http.Request) {
+	userID := accountSessionFrom(r).userID
+	var req SSOLinkRequest
+	if !s.finishConfirmation(w, r, ceremonyKindLinkSSO, userID, &req) {
+		return
+	}
+	c, ok := s.linkConnection(r.Context(), w, req)
+	if !ok {
+		return
+	}
+	s.beginSSO(w, r, c, userID)
 }
 
 func writeSSOLookupError(w http.ResponseWriter, err error) {
@@ -593,21 +626,53 @@ func (s *Server) accountSignIns(ctx context.Context, userID string) ([]AccountSi
 	return out, nil
 }
 
-func (s *Server) handleSSOUnlink(w http.ResponseWriter, r *http.Request) {
+// linkedSignIn checks id is one of userID's linked sign-ins, writing the
+// refusal itself.
+func (s *Server) linkedSignIn(ctx context.Context, w http.ResponseWriter, userID string, id int64) bool {
+	rows, err := s.authStore.OIDCIdentities(ctx, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "could not read your sign-ins")
+		return false
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return true
+		}
+	}
+	writeError(w, http.StatusNotFound, codeNotFound, signInNotFoundMessage)
+	return false
+}
+
+const signInNotFoundMessage = "no such sign-in on your account"
+
+func (s *Server) handleSSOUnlinkBegin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := accountSessionFrom(r).userID
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err == nil {
-		err = s.authStore.UnlinkOIDCIdentity(ctx, userID, id)
+	var req SignInUnlink
+	if !decodeAuthRequest(w, r, &req) {
+		return
 	}
-	if err != nil {
-		if errors.Is(err, ErrIdentityNotFound) || errors.Is(err, strconv.ErrSyntax) || errors.Is(err, strconv.ErrRange) {
-			writeError(w, http.StatusNotFound, codeNotFound, "no such sign-in on your account")
+	if !s.linkedSignIn(ctx, w, userID, req.ID) {
+		return
+	}
+	s.beginConfirmation(ctx, w, ceremonyKindUnlinkSSO, userID, req)
+}
+
+func (s *Server) handleSSOUnlinkFinish(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := accountSessionFrom(r).userID
+	var req SignInUnlink
+	if !s.finishConfirmation(w, r, ceremonyKindUnlinkSSO, userID, &req) {
+		return
+	}
+	if err := s.authStore.UnlinkOIDCIdentity(ctx, userID, req.ID); err != nil {
+		if errors.Is(err, ErrIdentityNotFound) {
+			writeError(w, http.StatusNotFound, codeNotFound, signInNotFoundMessage)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not remove the sign-in")
 		return
 	}
-	s.recordAuth(ctx, AuthEventSSOUnlinked, userID, "identity "+strconv.FormatInt(id, 10))
+	s.recordAuth(ctx, AuthEventSSOUnlinked, userID, "identity "+strconv.FormatInt(req.ID, 10))
 	writeJSON(w, http.StatusOK, struct{}{})
 }

@@ -87,8 +87,92 @@ calls them):
 | `POST /api/v1/account/machines/revoke\|suspend\|resume/begin\|finish` | `{machine_id}`, after a fresh passkey; suspended is undone by resume, revoked is final |
 | `GET /api/v1/account/sso?organisation_id=ID` | the organisation's sign-in: name for a member; issuer, client id, redirect URI and whether a secret is saved for the owner; never the secret |
 | `POST /api/v1/account/sso/configure\|remove/begin\|finish` | owner only, after a fresh passkey; configure takes `{organisation_id, sign_in_name, issuer, client_id, client_secret, keep_secret}` |
-| `POST /api/v1/account/sso/link` | `{organisation_id}` or `{sign_in_name}`: where to send the browser to connect the organisation's sign-in to this account; by name is how a person not yet a member joins |
-| `DELETE /api/v1/account/sign-ins/{id}` | disconnect one of your own connected sign-ins |
+| `POST /api/v1/account/sso/link/begin\|finish` | `{organisation_id}` or `{sign_in_name}`, after a fresh passkey: where to send the browser to connect the organisation's sign-in to this account; by name is how a person not yet a member joins |
+| `POST /api/v1/account/sign-ins/unlink/begin\|finish` | `{id}`, after a fresh passkey: disconnect one of your own connected sign-ins |
+
+### Security changes and idle sessions
+
+A session cookie alone cannot change how the account signs in (#602). Each
+change below takes a fresh assertion from one of the person's own passkeys,
+with user verification; the same step-up the member and machine routes use.
+
+| Route | Does |
+|---|---|
+| `POST /api/v1/account/passkeys/begin` | `{name}` -> `publicKey` (the new passkey) and `confirm` (an assertion over your passkeys) |
+| `POST /api/v1/account/passkeys/finish` | `{ceremony_id, confirmation, credential}` -> the passkey |
+| `POST /api/v1/account/passkeys/remove/begin\|finish` | `{id}`, after a fresh passkey; 409 for the last one |
+| `POST /api/v1/account/recovery-codes/begin\|finish` | after a fresh passkey: ten new codes, shown once; every earlier code is void |
+| `POST /api/v1/account/sso/link/begin\|finish`, `.../sign-ins/unlink/begin\|finish` | as above |
+| `POST /api/v1/account/unlock-keys/begin\|finish`, `.../revoke/begin\|finish` | as in [Unlock keys](#unlock-keys) |
+
+A session a recovery code opened adds a passkey without `confirm` for its
+first 10 minutes: the code it spent is the fresh factor, and a person who
+lost every passkey has no other. After that, a passkey confirms it.
+A refused confirmation records `confirmation_refused` with the change's
+ceremony kind.
+
+A session ends after 30 minutes without a request (sliding, checked on
+every request, under the 12-hour lifetime). The API revokes it then; every
+later request with that cookie answers 401 "signed out after 30 minutes
+idle", and `GET /api/v1/auth/session` answers `{"authenticated": false,
+"ended": "idle"}`. The dashboard also signs a person out after 30 minutes
+with no input, and the sign-in page says why. While the person is active
+it reads `/api/v1/auth/session` at most every 5 minutes, so reading one
+page for a long time does not end the session.
+
+### Unlock keys
+
+Hardware security keys that unlock the CA key store from the dashboard
+(ADR-0082, [ca-custody.md](ca-custody.md#unlock-keys-dashboard)). Every
+route needs an owner or admin of the operator's organisation; a reseal
+needs an owner. A POST must carry the dashboard's own `Origin` (a missing
+one is refused, 403), and each person has 20 POSTs here, one back every
+15 seconds (429 with `Retry-After`).
+
+| Route | Does |
+|---|---|
+| `GET /api/v1/account/unlock-keys` | every key: label, owner, `state` (`pending`, `active`, `revoked`, or `unknown` while the custodian is not answering), both recipients with fingerprints; and `custody`: on, reachable, the sealed set's digest |
+| `POST /api/v1/account/unlock-keys/begin` | `{label}` (1-64 characters) -> `confirm` (your sign-in passkey), `create` (the security key: cross-platform, non-discoverable, PIN required, PRF), `prf` (a get() evaluating `custody_salt` and `backup_salt`; the browser names the new credential in `allowCredentials`) |
+| `POST /api/v1/account/unlock-keys/finish` | `{ceremony_id, confirmation, credential, assertion, custody_recipient, backup_recipient}` -> the key, `pending` |
+| `POST /api/v1/account/unlock-keys/revoke/begin\|finish` | `{id}`, after a fresh passkey; your own key, or anyone's for an owner. Revoked stays revoked |
+| `GET /api/v1/account/ca-custody` | the custodian's status, as `GET /_core/ca-custody` answers it |
+| `POST /api/v1/account/ca-custody/unlock/begin` | -> an assertion over your active keys, each with its custody salt, and `sealed`, the material to open in the browser |
+| `POST /api/v1/account/ca-custody/unlock/finish` | `{ceremony_id, credential, material}` -> `{status}` |
+| `POST /api/v1/account/ca-custody/reseal/begin` | owner -> the same, plus the proposed set (`recipients`, `added`, `removed`, each labelled with a fingerprint) and its `set_digest` |
+| `POST /api/v1/account/ca-custody/reseal/finish` | `{ceremony_id, credential, material}` -> `{confirm_id, staged}`; open `staged.sealed` with the same key |
+| `POST /api/v1/account/ca-custody/reseal/confirm` | `{confirm_id, material, check}`, within 10 minutes -> `{set_digest, recipients}` |
+
+The API verifies the assertion against an active unlock key of yours
+before it reads `material`, forwards the material once to the custodian on
+the unlock network, and keeps none of it. An enrolment is refused for a
+backup-eligible (synced) credential, no user verification, no PRF, a
+recipient that is not a plain `age1…` X25519 one, or the same recipient
+twice. Any request that carries a PRF result (`prf.results`,
+`hmacGetSecret`) is refused, 400: the PRF output never leaves the browser.
+Auth events: `unlock_key_added`, `unlock_key_refused`, `unlock_key_revoked`,
+`ca_unlocked`, `ca_unlock_refused`, `custody_reseal_staged`,
+`custody_resealed`, `custody_reseal_refused`; key ids and recipient
+fingerprints only. Answers: 409 with no active key of yours, or a set
+already current; 503 with custody off or the custodian not answering; the
+custodian's own 400, 403 or 409 for material or a set it refuses.
+
+On the account page (#616), an owner or admin of the operator's
+organisation sees an **Unlock keys** section: each key with its state,
+custody fingerprint, added and last-used dates; **Add a security key**;
+and **Revoke**, after a confirmation and a fresh passkey. Until one key is
+active, the section shows the command that applies a pending key from the
+operator machine, `innsegl ca-custody reseal --add <custody recipient>`.
+When `GET /api/v1/account/ca-custody` reports `can_sign: false`, a banner
+says so on every page, to an owner or admin of the operator's organisation
+only (it reads their memberships from `GET /api/v1/auth/session`; nobody
+else's browser asks for the custodian's status), and links to the unlock
+page at `/account?unlock`: touch an
+active key, and the browser derives its identity from the PRF, opens
+`sealed` with the pinned `age-encryption` library (pure JavaScript, no
+eval or WebAssembly, loaded only on the first unlock), and sends the
+material with the assertion. Safari and every iOS browser are told to use
+Chrome, Edge or Firefox; a key or browser that returns no PRF stops there,
+with nothing sent on.
 
 ### Organisation sign-in
 
@@ -245,6 +329,7 @@ Rows written before this release may still hold names.
 | `-message-key-dir` | `INNSEGL_API_MESSAGE_KEY_DIR` | check-only agent-message key |
 | `-sso-key-file` | `INNSEGL_API_SSO_KEY_FILE` | the per-host key an organisation's sign-in client secret is stored encrypted under (#574); empty stores public clients only. At start, a secret kept in plain text before migration 0020 is sealed |
 | `-gateway-ca-cert` | `INNSEGL_API_GATEWAY_CA_CERT` | fingerprint pinned by the connect command shown to users |
+| `-ca-custodian-url` | `INNSEGL_CA_CUSTODIAN_URL` | the custodian on the unlock network, for unlock keys (ADR-0082); the custody overlay sets it. Empty: custody is off |
 | `-hide-unowned-runs` | `INNSEGL_API_HIDE_UNOWNED_RUNS` | hide runs no machine is mapped to from the operator's organisation too; default `false` |
 | `-upstream-timeout`, `-shutdown-timeout` | `INNSEGL_API_UPSTREAM_TIMEOUT`, `INNSEGL_API_SHUTDOWN_TIMEOUT` | [`15s`, `15s`] |
 
@@ -261,6 +346,8 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 | migrations `0013`, `0014` | alert resolutions and account ceremonies |
 | migration `0019` | organisation sign-in: `sso_connections`, `oidc_identities`, `sessions.sso_connection_id`, the `sso` ceremony kinds |
 | migration `0017` | invitations' acceptor and withdrawal, an inviter-less invitation from the CLI, the member ceremonies |
+| migration `0024` | `sessions.last_seen_at`, `sessions.idle_ended`, and the ceremony kinds `remove_passkey`, `regenerate_recovery_codes`, `link_sso`, `unlink_sso` |
+| migration `0023` | `innsegl_auth.unlock_keys` (never deleted; a revoked key stays revoked; recipients and salts never change, SQLSTATE `IN009`) and the five unlock ceremony kinds |
 | `innsegl_auth.audit` | one row per change to the accounts data; refuses `UPDATE`, `DELETE`, `TRUNCATE` |
 
 ## Exit codes and error classes
@@ -325,6 +412,20 @@ organisation holds.
   The provider is `internal/oidctest`: TLS, signed tokens, exact redirect
   URIs, PKCE, single-use codes
 - `internal/api/accountwithdraw_test.go` (ACC-018)
+- step-up and idle sessions (#602): `internal/api/stepup_test.go` (AUTH-019:
+  a session alone cannot add or remove a passkey, regenerate recovery codes
+  or finish one change with another's ceremony, and a fresh recovery-code
+  sign-in's window; AUTH-020: the 30-minute idle end, sliding, and failing
+  closed), `sso_test.go` and `cmd/innsegl/apisso_test.go` (AUTH-019 for
+  link and unlink); `web/tests/auth/step-up.pw.ts` (FE-157: the step-up
+  prompts; FE-158: the cannot-sign banner on every page; FE-159: the idle
+  sign-out, on Playwright's clock)
+- unlock keys (#613): `internal/api/unlockkeys_test.go` (AUTH-013: enrolment
+  and its refusals; AUTH-014: the assertion before the material; AUTH-015:
+  no material or PRF output in a record or an answer; AUTH-016: Origin and
+  session; AUTH-017: forward-only revoke, the owner's reseal; API-041: the
+  rate limit), `unlockkeys_store_test.go` (AUTH-018: a real store, Docker,
+  `-p 1`), `cmd/innsegl/apiunlock_test.go` (API-040: `-ca-custodian-url`)
 - `web/` unit tests (`npm test`): FE-146 (`AccountPage.test.tsx`), FE-147
   (`AccountMembers.test.tsx`), FE-148 (`app/plain-empty-states.test.ts`), FE-141 (`AccountPage.test.tsx`), FE-142
   (`app/OrganisationSwitcher.test.tsx`), FE-143 (`InvitePage.test.tsx`),
@@ -341,6 +442,7 @@ organisation holds.
 - [ADR-0062](../docs/adr/0062-reading-the-ledger-requires-a-signed-in-user.md) signed-in users
 - [ADR-0065](../docs/adr/0065-a-per-repository-mirror-on-the-core-is-the-evidence-store.md) the mirror
 - [ADR-0066](../docs/adr/0066-one-name-one-certificate.md) dashboard certificate
+- [ADR-0082](../docs/adr/0082-a-second-unlock-device-a-hardware-security-key-through-the-dashboard.md) unlock keys
 
 ## Runbooks
 

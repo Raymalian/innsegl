@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -97,5 +99,80 @@ func TestParseRecipientsRefusesWhatItCannotEncryptTo(t *testing.T) {
 		if _, err := ParseRecipients(in); err == nil || errors.Is(err, ErrNoRecipients) {
 			t.Errorf("%s: ParseRecipients(%q) = %v, want a refusal naming it", name, in, err)
 		}
+	}
+}
+
+func newX25519(t *testing.T) string {
+	t.Helper()
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id.Recipient().String()
+}
+
+func writeRecipientsFile(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), RecipientsFile)
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// BAK-037: a bundle's recipients are the env list plus the recipients file,
+// comments allowed, each recipient once.
+func TestLoadRecipientsUnitesEnvAndFile(t *testing.T) {
+	env, a, b := newX25519(t), newX25519(t), newX25519(t)
+	p := writeRecipientsFile(t, "# applied set\n\n"+a+" # laptop key\n  "+b+"\n"+env+"\n")
+	got, err := LoadRecipients(env, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d recipients, want 3 (env once, a, b)", len(got))
+	}
+}
+
+func TestLoadRecipientsAbsentFileIsEnvOnly(t *testing.T) {
+	env := newX25519(t)
+	got, err := LoadRecipients(env, filepath.Join(t.TempDir(), RecipientsFile))
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %d, %v; want env only", len(got), err)
+	}
+	if _, err := LoadRecipients("", filepath.Join(t.TempDir(), RecipientsFile)); !errors.Is(err, ErrNoRecipients) {
+		t.Fatalf("no env and no file = %v, want ErrNoRecipients", err)
+	}
+	if got, err := LoadRecipients(env, ""); err != nil || len(got) != 1 {
+		t.Fatalf("empty path: got %d, %v", len(got), err)
+	}
+}
+
+func TestLoadRecipientsFileOnlyWithEmptyEnv(t *testing.T) {
+	p := writeRecipientsFile(t, newX25519(t)+"\n")
+	if got, err := LoadRecipients("", p); err != nil || len(got) != 1 {
+		t.Fatalf("got %d, %v", len(got), err)
+	}
+}
+
+func TestLoadRecipientsRefusesAMalformedFileLoudly(t *testing.T) {
+	good := newX25519(t)
+	for name, body := range map[string]string{
+		"garbage":    good + "\nnot-a-recipient\n",
+		"two on one": good + " " + newX25519(t) + "\n",
+		"plugin":     good + "\nage1yubikey1qtest\n",
+	} {
+		p := writeRecipientsFile(t, "# c\n"+body)
+		_, err := LoadRecipients(newX25519(t), p)
+		if err == nil || !strings.Contains(err.Error(), RecipientsFile+":") {
+			t.Fatalf("%s: err = %v, want an error naming the file and line", name, err)
+		}
+	}
+}
+
+func TestLoadRecipientsUnreadableFileIsAnError(t *testing.T) {
+	// A directory where the file should be is not "absent".
+	if _, err := LoadRecipients(newX25519(t), t.TempDir()); err == nil {
+		t.Fatal("a directory read as the recipients file was accepted")
 	}
 }

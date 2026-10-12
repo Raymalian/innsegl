@@ -206,10 +206,14 @@ func TestAccountHandlersReportDatabaseErrorsFromAClosedStore(t *testing.T) {
 				mustJSON(t, PasskeyBeginRequest{Name: "ok"}))},
 		{"PATCH /api/v1/account/passkeys/{id}", s.handlePasskeyRename,
 			accountTestRequest(ctx, http.MethodPatch, "/api/v1/account/passkeys/x", mustJSON(t, PasskeyRename{Name: "ok"}))},
-		{"DELETE /api/v1/account/passkeys/{id}", s.handlePasskeyDelete,
-			accountTestRequest(ctx, http.MethodDelete, "/api/v1/account/passkeys/x", "")},
-		{"POST /api/v1/account/recovery-codes", s.handleRecoveryCodesRegenerate,
-			accountTestRequest(ctx, http.MethodPost, "/api/v1/account/recovery-codes", "")},
+		{"POST /api/v1/account/passkeys/remove/begin", s.handlePasskeyRemoveBegin,
+			accountTestRequest(ctx, http.MethodPost, "/api/v1/account/passkeys/remove/begin",
+				mustJSON(t, PasskeyRemove{ID: "x"}))},
+		{"POST /api/v1/account/recovery-codes/begin", s.handleRecoveryCodesBegin,
+			accountTestRequest(ctx, http.MethodPost, "/api/v1/account/recovery-codes/begin", "")},
+		{"POST /api/v1/account/sign-ins/unlink/begin", s.handleSSOUnlinkBegin,
+			accountTestRequest(ctx, http.MethodPost, "/api/v1/account/sign-ins/unlink/begin",
+				mustJSON(t, SignInUnlink{ID: 1}))},
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()

@@ -104,7 +104,7 @@ func TestAUTH009BeginAndReadReportWhatTheyCannotDo(t *testing.T) {
 	if a := h.post(t, "/api/v1/auth/sso/begin", "{"); a.status != http.StatusBadRequest {
 		t.Errorf("begin with a bad body: %d", a.status)
 	}
-	if a := h.post(t, "/api/v1/account/sso/link", "{", h.cookie); a.status != http.StatusBadRequest {
+	if a := h.post(t, "/api/v1/account/sso/link/begin", "{", h.cookie); a.status != http.StatusBadRequest {
 		t.Errorf("link with a bad body: %d", a.status)
 	}
 
@@ -236,11 +236,14 @@ func TestAUTH011AConnectTheOrganisationRefusesLeavesNoLink(t *testing.T) {
 	}
 	h.ownerExec(t, `GRANT INSERT ON innsegl_auth.oidc_identities TO `+AuthWriterRole)
 
-	if a := do(t, http.MethodDelete, h.srv.URL+"/api/v1/account/sign-ins/not-a-number", "", h.cookie); a.status != http.StatusNotFound {
+	if a := h.post(t, "/api/v1/account/sign-ins/unlink/begin", `{"id":"x"}`, h.cookie); a.status != http.StatusBadRequest {
 		t.Errorf("unlink a malformed id: %d", a.status)
 	}
+	if a := h.post(t, "/api/v1/account/sign-ins/unlink/begin", `{"id":999}`, h.cookie); a.status != http.StatusNotFound {
+		t.Errorf("unlink an unknown id: %d", a.status)
+	}
 	h.ownerExec(t, `ALTER TABLE innsegl_auth.oidc_identities RENAME TO oidc_identities_gone`)
-	if a := do(t, http.MethodDelete, h.srv.URL+"/api/v1/account/sign-ins/1", "", h.cookie); a.status != http.StatusInternalServerError {
+	if a := h.post(t, "/api/v1/account/sign-ins/unlink/begin", `{"id":1}`, h.cookie); a.status != http.StatusInternalServerError {
 		t.Errorf("unlink with the table gone: %d", a.status)
 	}
 	if a := get(t, h.srv.URL, "/api/v1/account", h.cookie); a.status != http.StatusInternalServerError ||

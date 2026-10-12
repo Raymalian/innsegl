@@ -16,7 +16,12 @@ import { fetchSessionStatus, fetchSetupStatus, type SessionOrganisation } from "
 
 export type SessionState =
   | { readonly status: "checking" }
-  | { readonly status: "unauthenticated"; readonly setupNeeded: boolean }
+  | {
+      readonly status: "unauthenticated";
+      readonly setupNeeded: boolean;
+      /** #602: the session ended for 30 minutes idle; the sign-in page says so. */
+      readonly endedIdle?: boolean;
+    }
   | {
       readonly status: "authenticated";
       readonly displayName: string;
@@ -30,7 +35,7 @@ export interface SessionResource {
   /** Called once a ceremony's own POST already proved the session exists —
    * no second round trip to learn what the server just told us directly. */
   readonly markAuthenticated: (displayName: string) => void;
-  readonly markSignedOut: () => void;
+  readonly markSignedOut: (idle?: boolean) => void;
   readonly reload: () => void;
 }
 
@@ -55,7 +60,7 @@ export function useSessionState(base?: string): SessionResource {
               displayName: session.displayName,
               organisations: session.organisations,
             }
-          : { status: "unauthenticated", setupNeeded: setup.needed },
+          : { status: "unauthenticated", setupNeeded: setup.needed, endedIdle: session.ended === "idle" },
       );
     })();
 
@@ -68,8 +73,8 @@ export function useSessionState(base?: string): SessionResource {
     setState({ status: "authenticated", displayName, organisations: [] });
   }, []);
 
-  const markSignedOut = useCallback(() => {
-    setState({ status: "unauthenticated", setupNeeded: false });
+  const markSignedOut = useCallback((idle = false) => {
+    setState({ status: "unauthenticated", setupNeeded: false, endedIdle: idle });
   }, []);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);

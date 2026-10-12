@@ -14,6 +14,7 @@ export const strings = {
   signIn: {
     heading: "Sign in",
     intro: "This dashboard shows what an agent did. Sign in with your passkey to see it.",
+    endedIdle: "You were signed out after 30 minutes idle. Sign in again to continue.",
     button: "Sign in with a passkey",
     working: "Waiting for your passkey",
     unsupported:
@@ -145,8 +146,9 @@ export const strings = {
     currentDevice: "This device",
     renameButton: "Rename",
     removeButton: "Remove",
-    removeConfirmPrompt: "Remove this passkey? It cannot sign in again.",
-    removeConfirmButton: "Remove it",
+    removeConfirmPrompt: "Remove this passkey? It cannot sign in again. One of your passkeys confirms it.",
+    removeConfirmButton: "Remove with passkey",
+    removeWorking: "Waiting for your passkey",
     removeCancelButton: "Keep it",
     removeLastTooltip: "The last passkey on an account cannot be removed.",
     removeFailed: "That passkey could not be removed",
@@ -155,6 +157,10 @@ export const strings = {
     addNameHint: "A name for this device, so it can be told apart from the others later.",
     addButton: "Create passkey",
     addWorking: "Waiting for your passkey",
+    // #602: adding a passkey is confirmed by one already on the account.
+    addConfirmNote: "One of your current passkeys confirms this first, then this device creates the new one.",
+    addWorkingConfirm: "Confirm with one of your current passkeys",
+    addWorkingCreate: "Now create the new passkey",
     addUnsupported: "This browser has no passkey support, so it cannot add a passkey.",
     addCancelled: "The passkey prompt was closed before it finished. Try again.",
     addFailed: "Adding the passkey failed",
@@ -162,8 +168,9 @@ export const strings = {
     recoveryOf: "of 10 left",
     regenerateButton: "Generate new codes",
     regenerateConfirmPrompt:
-      "Generate ten new recovery codes? Every code shown before this stops working.",
-    regenerateConfirmButton: "Generate new codes",
+      "Generate ten new recovery codes? Every code shown before this stops working. One of your passkeys confirms it.",
+    regenerateConfirmButton: "Generate with passkey",
+    regenerateWorking: "Waiting for your passkey",
     regenerateCancelButton: "Keep the current codes",
     loadFailed: "The account could not be loaded",
 
@@ -347,20 +354,21 @@ export const strings = {
       "Sign in through an organisation's own identity provider. Connect it here once while signed in; after that the sign-in page takes it. Passkeys keep working.",
     ssoNotConfigured: "No organisation sign-in is set up.",
     ssoSignInName: (name: string) => `Sign-in name: ${name}`,
-    ssoConnectButton: "Connect this sign-in",
-    ssoConnectWorking: "Opening the organisation's sign-in",
+    ssoConnectButton: "Connect this sign-in with passkey",
+    ssoConnectWorking: "Waiting for your passkey",
     ssoConnectFailed: "The organisation's sign-in could not be opened",
     ssoConnected: "Connected to your account",
     ssoLinkedNotice: "Your organisation's sign-in is connected. The sign-in page takes it from now on.",
     ssoJoinLabel: "Connect an organisation's sign-in by name",
     ssoJoinHint: "The sign-in name its owner gave you. Connecting makes you a member if you are not one yet.",
-    ssoJoinButton: "Connect",
+    ssoJoinButton: "Connect with passkey",
     ssoLinkedHeading: "Connected sign-ins",
     ssoLinkedItem: (organisation: string, name: string) =>
       organisation === "" ? `A removed organisation sign-in (${name || "no name"})` : `${organisation} (${name})`,
     ssoLinkedWhen: (linked: string, lastUsed: string | null) =>
       `connected ${linked}, ${lastUsed === null ? "not used yet" : `last used ${lastUsed}`}`,
-    ssoDisconnectButton: "Disconnect",
+    ssoDisconnectButton: "Disconnect with passkey",
+    ssoDisconnectWorking: "Waiting for your passkey",
     ssoDisconnectFailed: "The sign-in could not be disconnected",
     ssoOwnerHeading: "Set up the organisation's sign-in",
     ssoOwnerIntro:

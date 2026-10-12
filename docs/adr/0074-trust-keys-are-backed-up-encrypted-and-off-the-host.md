@@ -1,6 +1,6 @@
 # ADR-0074: Trust keys are backed up encrypted, and off the host
 
-- Status: accepted
+- Status: accepted; amended 2026-10-11 by ADR-0082 (decision 2)
 - Date: 2026-10-07
 - Deciders: the operator
 

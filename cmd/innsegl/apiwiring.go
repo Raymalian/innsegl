@@ -273,6 +273,7 @@ func openAPI(ctx context.Context, o apiOptions, log *serveLog) (servedAPI, error
 		CoreCACertFile:    o.gatewayCACert,
 		UnownedRunsHidden: o.hideUnownedRuns,
 		SSOHTTPClient:     o.ssoHTTPClient,
+		CACustodianURL:    o.caCustodianURL,
 	})
 	if err != nil {
 		unwind()

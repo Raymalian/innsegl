@@ -139,8 +139,8 @@ func (h ssoHarness) beginSignIn(t *testing.T, name string) flight {
 
 func (h ssoHarness) beginLink(t *testing.T) flight {
 	t.Helper()
-	return h.start(t, do(t, http.MethodPost, h.srv.URL+"/api/v1/account/sso/link",
-		mustJSON(t, MemberRequest{OrganisationID: orgA}), h.cookie))
+	return h.start(t, stepUpVia(t, h.srv.URL, "/api/v1/account/sso/link",
+		MemberRequest{OrganisationID: orgA}, h.auth, h.userID, h.cookie))
 }
 
 // land finishes at the callback and answers where the server sent the
@@ -439,21 +439,23 @@ func TestAUTH011PasskeysKeepWorkingAndARemovedMemberIsRefused(t *testing.T) {
 	h.orgs.mu.Unlock()
 
 	// A second person links the same provider identity: refused.
-	_, cookie2 := enrolSecondUser(t, h)
-	f = h.start(t, do(t, http.MethodPost, h.srv.URL+"/api/v1/account/sso/link",
-		mustJSON(t, MemberRequest{OrganisationID: orgA}), cookie2))
+	// #602: their fresh session adds a passkey, which then confirms each link.
+	id2, cookie2 := enrolSecondUser(t, h)
+	auth2, _ := addPasskeyViaAPI(t, h.srv.URL, "second", cookie2, nil, id2)
+	f = h.start(t, stepUpVia(t, h.srv.URL, "/api/v1/account/sso/link",
+		MemberRequest{OrganisationID: orgA}, auth2, id2, cookie2))
 	if where, _ := h.land(t, f, f.binding); where != "/account?sso=taken" {
 		t.Fatalf("a second person took a linked identity: %q", where)
 	}
 	// A person who is no member yet names the organisation's sign-in to
 	// connect it: that is how they join.
 	h.idp.SignInAs("second-subject", "second@example.test", "Second")
-	f = h.start(t, do(t, http.MethodPost, h.srv.URL+"/api/v1/account/sso/link",
-		mustJSON(t, SSOLinkRequest{SignInName: "Example-Org"}), cookie2))
+	f = h.start(t, stepUpVia(t, h.srv.URL, "/api/v1/account/sso/link",
+		SSOLinkRequest{SignInName: "Example-Org"}, auth2, id2, cookie2))
 	if where, _ := h.land(t, f, f.binding); where != "/account?notice=sso-linked" {
 		t.Fatalf("linking by sign-in name: %q", where)
 	}
-	if a := do(t, http.MethodPost, h.srv.URL+"/api/v1/account/sso/link",
+	if a := do(t, http.MethodPost, h.srv.URL+"/api/v1/account/sso/link/begin",
 		mustJSON(t, SSOLinkRequest{SignInName: "nobody"}), cookie2); a.status != http.StatusNotFound {
 		t.Fatalf("linking an unknown sign-in name: %d", a.status)
 	}
@@ -465,11 +467,15 @@ func TestAUTH011PasskeysKeepWorkingAndARemovedMemberIsRefused(t *testing.T) {
 	if len(account.SignIns) != 1 {
 		t.Fatalf("sign-ins = %+v", account.SignIns)
 	}
-	path := "/api/v1/account/sign-ins/" + strconv.FormatInt(account.SignIns[0].ID, 10)
-	if a := do(t, http.MethodDelete, h.srv.URL+path, "", cookie2); a.status != http.StatusNotFound {
+	unlink := SignInUnlink{ID: account.SignIns[0].ID}
+	if a := stepUpVia(t, h.srv.URL, "/api/v1/account/sign-ins/unlink", unlink, auth2, id2, cookie2); a.status != http.StatusNotFound {
 		t.Fatalf("someone else unlinked it: %d", a.status)
 	}
-	if a := do(t, http.MethodDelete, h.srv.URL+path, "", h.cookie); a.status != http.StatusOK {
+	if a := do(t, http.MethodDelete, h.srv.URL+"/api/v1/account/sign-ins/"+strconv.FormatInt(unlink.ID, 10), "",
+		h.cookie); a.status == http.StatusOK {
+		t.Fatalf("unlink with the session alone answered 200: %s", a.body)
+	}
+	if a := stepUpVia(t, h.srv.URL, "/api/v1/account/sign-ins/unlink", unlink, h.auth, h.userID, h.cookie); a.status != http.StatusOK {
 		t.Fatalf("unlink: %d %s", a.status, a.body)
 	}
 	f = h.beginSignIn(t, "example-org")

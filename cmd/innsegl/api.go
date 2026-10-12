@@ -223,6 +223,21 @@ var apiRoutes = []string{
 	// fresh passkey ceremony. 503 unless -resolver-dsn is set.
 	"POST /api/v1/alert-resolutions/begin",
 	"POST /api/v1/alert-resolutions/finish",
+	// #613 (ADR-0082): unlock keys, for an owner or admin of the operator's
+	// organisation; the unlock and the reseal go to the custodian on the
+	// unlock network. Each answers 503 "custody is off" without
+	// -ca-custodian-url.
+	"GET /api/v1/account/unlock-keys",
+	"POST /api/v1/account/unlock-keys/begin",
+	"POST /api/v1/account/unlock-keys/finish",
+	"POST /api/v1/account/unlock-keys/revoke/begin",
+	"POST /api/v1/account/unlock-keys/revoke/finish",
+	"GET /api/v1/account/ca-custody",
+	"POST /api/v1/account/ca-custody/unlock/begin",
+	"POST /api/v1/account/ca-custody/unlock/finish",
+	"POST /api/v1/account/ca-custody/reseal/begin",
+	"POST /api/v1/account/ca-custody/reseal/finish",
+	"POST /api/v1/account/ca-custody/reseal/confirm",
 }
 
 // apiOptions is the resolved command line.
@@ -280,6 +295,11 @@ type apiOptions struct {
 	// file holding its certificate and key. Both or neither.
 	tlsListen string
 	tlsCert   string
+
+	// caCustodianURL is where the dashboard reaches the CA key store's
+	// custodian, on the unlock network (ADR-0082 decision 4). Empty: custody
+	// is off and the unlock-key routes say so.
+	caCustodianURL string
 
 	// ssoHTTPClient reaches organisations' identity providers. Never a
 	// flag: nil in production (internal/api's guarded client); a test hands
@@ -489,6 +509,10 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		tlsListen = fs.String("tls-listen", os.Getenv(envAPITLSListen),
 			"address the dashboard is served on over HTTPS, in addition to -listen; needs "+
 				"-tls-cert ($"+envAPITLSListen+")")
+		caCustodianURL = fs.String("ca-custodian-url", os.Getenv(envCACustodianURL),
+			"where the CA key store's custodian answers on the unlock network, for an unlock or a "+
+				"reseal from an unlock key (ADR-0082); the custody overlay sets it. Empty: custody is "+
+				"off and the unlock routes say so ($"+envCACustodianURL+")")
 		tlsCert = fs.String("tls-cert", os.Getenv(envAPITLSCert),
 			"one PEM file holding the dashboard's certificate chain and key, as the core writes "+
 				"it; re-read when it changes, so a renewal needs no restart. Needs -tls-listen "+
@@ -523,6 +547,7 @@ func parseAPIFlags(args []string, stderr io.Writer) (apiOptions, int, bool) {
 		hideUnownedRuns: *hideUnownedRuns,
 		trustHistory:    *trustHistory,
 		uiDir:           *uiDir, tlsListen: *tlsListen, tlsCert: *tlsCert,
+		caCustodianURL: *caCustodianURL,
 	}
 	if problem := o.validate(); problem != "" {
 		fprintf(stderr, "innsegl api: %s\n", problem)

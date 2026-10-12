@@ -43,6 +43,23 @@ const authCeremonyTTL = 5 * time.Minute
 // not a value the ADR fixes.
 const defaultSessionLifetime = 12 * time.Hour
 
+// sessionIdleTimeout ends a session that has answered no request for this
+// long (#602, privilege review C23): a sliding bound, enforced here on every
+// request, under the absolute lifetime above. The dashboard signs a person
+// out on the same bound when they stop using it, and says why.
+const sessionIdleTimeout = 30 * time.Minute
+
+// sessionEndedIdle is SessionStatus.Ended for a session the idle bound ended.
+const sessionEndedIdle = "idle"
+
+// signInRequiredMessage and idleSignInMessage are the refusal a request
+// without a live session gets: none, or one the idle bound ended.
+const (
+	signInRequiredMessage = "sign in required (ADR-0062): this dashboard and its read API answer " +
+		"nothing without an operator session"
+	idleSignInMessage = "signed out after 30 minutes idle; sign in again"
+)
+
 // sessionCookieName is the one cookie this surface ever sets.
 const sessionCookieName = "innsegl_session"
 
@@ -114,7 +131,10 @@ func (s *Server) serveAuth(w http.ResponseWriter, r *http.Request) {
 // request: the dashboard's organisation switcher reads them here, and a
 // removal shows on the next request.
 type SessionStatus struct {
-	Authenticated bool                  `json:"authenticated"`
+	Authenticated bool `json:"authenticated"`
+	// Ended is "idle" when the cookie named a session the idle bound just
+	// ended (#602), so the dashboard can say why it is signed out.
+	Ended         string                `json:"ended,omitempty"`
 	DisplayName   string                `json:"display_name,omitempty"`
 	Organisations []SessionOrganisation `json:"organisations,omitempty"`
 }
@@ -128,11 +148,17 @@ type SessionOrganisation struct {
 }
 
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
-	userID, _, ok := s.sessionFromRequest(r)
-	if !ok {
+	sess, state := s.checkSession(r)
+	if state == SessionIdle {
+		s.clearSessionCookie(w)
+		writeJSON(w, http.StatusOK, SessionStatus{Authenticated: false, Ended: sessionEndedIdle})
+		return
+	}
+	if state != SessionLive {
 		writeJSON(w, http.StatusOK, SessionStatus{Authenticated: false})
 		return
 	}
+	userID := sess.UserID
 	u, err := s.authStore.UserByID(r.Context(), userID)
 	if err != nil {
 		writeJSON(w, http.StatusOK, SessionStatus{Authenticated: false})
@@ -576,15 +602,32 @@ func (s *Server) cookieToken(r *http.Request) string {
 // account surface uses it to answer Account.passkeys[].current; nothing
 // before #445 needed it and every such caller discards it.
 func (s *Server) sessionFromRequest(r *http.Request) (userID, passkeyID string, ok bool) {
-	token := s.cookieToken(r)
-	if token == "" {
+	sess, state := s.checkSession(r)
+	if state != SessionLive {
 		return "", "", false
 	}
-	userID, passkeyID, ok, err := s.authStore.VerifySession(r.Context(), token)
-	if err != nil || !ok {
-		return "", "", false
+	return sess.UserID, sess.PasskeyID, true
+}
+
+// checkSession is sessionFromRequest with what it found: a live session
+// (now slid forward), one the idle bound just ended, or none. A store error
+// is no session.
+func (s *Server) checkSession(r *http.Request) (SessionInfo, SessionState) {
+	sess, state, err := s.authStore.CheckSession(r.Context(), s.cookieToken(r), sessionIdleTimeout)
+	if err != nil {
+		return SessionInfo{}, SessionNone
 	}
-	return userID, passkeyID, true
+	return sess, state
+}
+
+// writeSignInRequired is the 401 for a request without a live session,
+// saying so when the idle bound is why.
+func writeSignInRequired(w http.ResponseWriter, state SessionState) {
+	message := signInRequiredMessage
+	if state == SessionIdle {
+		message = idleSignInMessage
+	}
+	writeError(w, http.StatusUnauthorized, codeUnauthorized, message)
 }
 
 // recordAuth writes an auth event and swallows a failure to do so — see

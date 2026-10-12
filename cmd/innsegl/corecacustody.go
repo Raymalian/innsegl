@@ -20,10 +20,11 @@ import (
 )
 
 // ADR-0076: the operator's machine unlocks the CA key store through the core.
-// The core carries three things between that machine and the custodian, the
-// only process on the store's network that the core can reach: the store's
-// status, the sealed unlock material, and the unlock itself. It reads none of
-// them and logs none of them.
+// The core carries these between that machine and the custodian, the only
+// process on the store's network that the core can reach: the store's
+// status, the sealed unlock material, the unlock itself and, for a reseal
+// (ADR-0082 decision 7), the set the material is sealed to, the staged
+// reseal and its confirm. It reads none of them and logs none of them.
 const (
 	coreCACustodyPath         = cacustody.CorePath
 	coreCACustodyMaterialPath = cacustody.CoreMaterialPath
@@ -43,23 +44,29 @@ type caCustodyStatus = cacustody.CoreStatus
 const caCustodyForbidden = "innsegl core: ca custody: only an active workstation of the operator's " +
 	"organisation, enrolled by its owner or an admin, may unlock the CA"
 
-// caCustodyHandler serves the three routes behind the client guard, to the
+// caCustodyRoutes maps each core route to its one method and the
+// custodian's route it is forwarded to. Nothing else is forwarded.
+var caCustodyRoutes = map[string]struct{ method, custodian string }{
+	coreCACustodyPath:               {http.MethodGet, cacustody.PathStatus},
+	coreCACustodyMaterialPath:       {http.MethodGet, cacustody.PathMaterial},
+	cacustody.CoreRecipientsPath:    {http.MethodGet, cacustody.PathRecipients},
+	coreCACustodyUnlockPath:         {http.MethodPost, cacustody.PathUnlock},
+	cacustody.CoreResealPath:        {http.MethodPost, cacustody.PathReseal},
+	cacustody.CoreResealConfirmPath: {http.MethodPost, cacustody.PathResealConfirm},
+}
+
+// caCustodyHandler serves the custody routes behind the client guard, to the
 // same machines the trust-key backup is served to.
 func caCustodyHandler(custodian string, store trustBackupStore, limit *backupLimiter, log *serveLog) http.HandlerFunc {
 	client := &http.Client{Timeout: 60 * time.Second}
 	return func(w http.ResponseWriter, r *http.Request) {
-		var want string
-		switch r.URL.Path {
-		case coreCACustodyPath, coreCACustodyMaterialPath:
-			want = http.MethodGet
-		case coreCACustodyUnlockPath:
-			want = http.MethodPost
-		default:
+		route, ok := caCustodyRoutes[r.URL.Path]
+		if !ok {
 			writeCoreError(w, http.StatusNotFound, "innsegl core: ca custody: no such route")
 			return
 		}
-		if r.Method != want {
-			writeCoreError(w, http.StatusMethodNotAllowed, "innsegl core: ca custody: only "+want+" is accepted here")
+		if r.Method != route.method {
+			writeCoreError(w, http.StatusMethodNotAllowed, "innsegl core: ca custody: only "+route.method+" is accepted here")
 			return
 		}
 		if !admitOperatorMachine(w, r, store, limit, log, "ca custody", caCustodyForbidden) {
@@ -75,25 +82,25 @@ func caCustodyHandler(custodian string, store trustBackupStore, limit *backupLim
 			return
 		}
 		base := strings.TrimSuffix(custodian, "/")
-		switch r.URL.Path {
-		case coreCACustodyPath:
+		switch {
+		case r.URL.Path == coreCACustodyPath:
 			proxyCustodyStatus(r.Context(), w, client, base, log)
-		case coreCACustodyMaterialPath:
-			proxyCustody(r.Context(), w, client, http.MethodGet, base+cacustody.PathMaterial, nil, log)
+		case route.method == http.MethodGet:
+			proxyCustody(r.Context(), w, client, http.MethodGet, base+route.custodian, nil, log)
 		default:
 			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCoreUnlockBody))
 			if err != nil {
 				var tooBig *http.MaxBytesError
 				if errors.As(err, &tooBig) {
-					writeCoreError(w, http.StatusRequestEntityTooLarge, "innsegl core: ca custody: the unlock is too large")
+					writeCoreError(w, http.StatusRequestEntityTooLarge, "innsegl core: ca custody: the request is too large")
 					return
 				}
-				writeCoreError(w, http.StatusBadRequest, "innsegl core: ca custody: the unlock could not be read")
+				writeCoreError(w, http.StatusBadRequest, "innsegl core: ca custody: the request could not be read")
 				return
 			}
 			id, _ := gateway.InstallationFromContext(r.Context())
-			log.info("ca custody: an unlock was forwarded", "installation_id", id)
-			proxyCustody(r.Context(), w, client, http.MethodPost, base+cacustody.PathUnlock, body, log)
+			log.info("ca custody: a request was forwarded", "route", route.custodian, "installation_id", id)
+			proxyCustody(r.Context(), w, client, http.MethodPost, base+route.custodian, body, log)
 		}
 	}
 }

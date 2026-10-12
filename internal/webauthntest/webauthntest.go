@@ -16,8 +16,9 @@
 // time, rather than a fixed spec test vector — a fixed vector's challenge
 // cannot match a live BeginRegistration/BeginLogin call.
 //
-// It reports userVerification unconditionally (attestation flags and
-// assertion flags both set FlagUserVerified) — the property AUTH-003 exists
+// It reports userVerification unless WithoutUserVerification is set
+// (attestation flags and assertion flags both set FlagUserVerified) — the
+// property AUTH-003 exists
 // to prove is enforced SERVER-SIDE (userVerification: required in the
 // options a server sends), not that this fake authenticator could be
 // coerced into skipping it; a real authenticator that omits UV is refused by
@@ -48,6 +49,17 @@ type Authenticator struct {
 	key          *ecdsa.PrivateKey
 	credentialID []byte
 	signCount    uint32
+
+	// BackupEligible sets the backup-eligible flag on everything it answers:
+	// a synced passkey rather than a hardware key (ADR-0082 decision 3).
+	BackupEligible bool
+	// WithoutUserVerification clears the user-verified flag: a touch with
+	// no PIN (ADR-0082 decision 2).
+	WithoutUserVerification bool
+	// Extensions are the client extension outputs it reports, as a browser
+	// would beside the authenticator's own response: PRF enabled at
+	// registration, say, or PRF results at an assertion.
+	Extensions protocol.AuthenticationExtensionsClientOutputs
 }
 
 // New mints a fresh P-256 key and a random credential id.
@@ -62,6 +74,10 @@ func New() (*Authenticator, error) {
 	}
 	return &Authenticator{key: key, credentialID: id}, nil
 }
+
+// CredentialID is the credential id it registers and asserts with, as a
+// browser holds it to pick the PRF salt the server named for it.
+func (a *Authenticator) CredentialID() []byte { return append([]byte(nil), a.credentialID...) }
 
 // coseEC2Key is RFC 9053's COSE_Key for an EC2 (elliptic curve) key,
 // P-256/ES256: kty=2 (EC2), alg=-7 (ES256), crv=1 (P-256). Integer map keys,
@@ -100,6 +116,7 @@ func (a *Authenticator) coseKeyBytes() ([]byte, error) {
 const (
 	flagUP byte = 0x01
 	flagUV byte = 0x04
+	flagBE byte = 0x08
 	flagAT byte = 0x40
 )
 
@@ -112,6 +129,12 @@ func (a *Authenticator) authData(rpID string, withAttestedCredential bool) ([]by
 	rpIDHash := sha256.Sum256([]byte(rpID))
 
 	flags := flagUP | flagUV
+	if a.WithoutUserVerification {
+		flags &^= flagUV
+	}
+	if a.BackupEligible {
+		flags |= flagBE
+	}
 	var attested []byte
 	if withAttestedCredential {
 		flags |= flagAT
@@ -198,7 +221,8 @@ func (a *Authenticator) Register(creation *protocol.CredentialCreation, origin s
 				ID:   protocol.URLEncodedBase64(a.credentialID).String(),
 				Type: "public-key",
 			},
-			RawID: protocol.URLEncodedBase64(a.credentialID),
+			RawID:                  protocol.URLEncodedBase64(a.credentialID),
+			ClientExtensionResults: a.Extensions,
 		},
 		AttestationResponse: protocol.AuthenticatorAttestationResponse{
 			AuthenticatorResponse: protocol.AuthenticatorResponse{
@@ -245,7 +269,8 @@ func (a *Authenticator) Assert(assertion *protocol.CredentialAssertion, origin, 
 				ID:   protocol.URLEncodedBase64(a.credentialID).String(),
 				Type: "public-key",
 			},
-			RawID: protocol.URLEncodedBase64(a.credentialID),
+			RawID:                  protocol.URLEncodedBase64(a.credentialID),
+			ClientExtensionResults: a.Extensions,
 		},
 		AssertionResponse: protocol.AuthenticatorAssertionResponse{
 			AuthenticatorResponse: protocol.AuthenticatorResponse{

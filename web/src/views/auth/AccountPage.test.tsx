@@ -207,6 +207,7 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
   const unavailable = () =>
     respond({ error: { code: "unavailable", message: "no accounts store" } }, 503);
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
+  let removing = "";
 
   vi.stubGlobal(
     "fetch",
@@ -214,6 +215,7 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
       const method = init?.method ?? "GET";
       const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
       calls.push({ url, method, body });
+      if (url.endsWith("/account/passkeys/remove/begin")) removing = (body as { id: string }).id;
 
       if (url.endsWith("/api/v1/account") && method === "GET") {
         return respond(current);
@@ -233,8 +235,14 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
         };
         return respond(current.passkeys.find((p) => p.id === id));
       }
-      if (renameMatch && method === "DELETE") {
-        const id = renameMatch[1];
+      if (url.endsWith("/account/passkeys/remove/begin") && method === "POST") {
+        return respond({ ceremony_id: "cer-remove", publicKey: { challenge: "abc" } });
+      }
+      if (url.endsWith("/account/passkeys/remove/finish") && method === "POST") {
+        if ((body as { credential?: unknown }).credential === undefined) {
+          return respond({ error: { code: "unauthorized", message: "no passkey confirmation" } }, 401);
+        }
+        const id = removing;
         if (current.passkeys.length <= 1) {
           return respond({ error: { code: "conflict", message: "the last passkey cannot be removed" } }, 409);
         }
@@ -242,7 +250,11 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
         return respond({});
       }
       if (url.endsWith("/account/passkeys/begin") && method === "POST") {
-        return respond({ ceremony_id: "cer-1", publicKey: { challenge: "abc" } });
+        return respond({
+          ceremony_id: "cer-1",
+          publicKey: { challenge: "abc" },
+          confirm: { publicKey: { challenge: "confirm-abc" } },
+        });
       }
       if (url.endsWith("/account/passkeys/finish") && method === "POST") {
         const added = {
@@ -314,13 +326,20 @@ function installAccountFetch(initial: Account, spine: Spine = {}) {
         const a = spine.agents ?? AGENTS;
         return a === "unavailable" ? unavailable() : respond(a);
       }
-      if (url.endsWith("/account/recovery-codes") && method === "POST") {
+      if (url.endsWith("/account/recovery-codes/begin") && method === "POST") {
+        return respond({ ceremony_id: "cer-codes", publicKey: { challenge: "abc" } });
+      }
+      if (url.endsWith("/account/recovery-codes/finish") && method === "POST") {
         current = { ...current, recovery_codes_remaining: 10 };
         return respond({ codes: Array.from({ length: 10 }, (_, i) => `new-code-${i}`) });
       }
       if (url.includes("/account/sso?") && method === "GET") {
         if (machineList === "unavailable") return unavailable();
         return respond({ organisation_id: "org-1", configured: false, has_client_secret: false, can_manage: false });
+      }
+      if (url.includes("/account/unlock-keys") || url.includes("/account/ca-custody")) {
+        // #616: an API without the unlock routes; the section stays away.
+        return respond({ error: { code: "not_found", message: "not found" } }, 404);
       }
       throw new Error(`unexpected fetch ${method} ${url}`);
     }),
@@ -407,6 +426,57 @@ describe("AccountPage", () => {
     await user.click(within(phoneRow).getByRole("button", { name: strings.account.removeConfirmButton }));
 
     await waitFor(() => expect(screen.queryByText("Phone")).not.toBeInTheDocument());
+  });
+
+  it("FE-157: removing a passkey sends a fresh passkey assertion, never the session alone", async () => {
+    const { calls } = installAccountFetch(account());
+    const user = userEvent.setup();
+    render(<AccountPage browser={workingBrowser()} />);
+
+    await screen.findByText("Phone");
+    const phoneRow = screen.getByText("Phone").closest("tr");
+    if (phoneRow === null) throw new Error("no row for Phone");
+    await user.click(within(phoneRow).getByRole("button", { name: strings.account.removeButton }));
+    await user.click(within(phoneRow).getByRole("button", { name: strings.account.removeConfirmButton }));
+    await waitFor(() => expect(screen.queryByText("Phone")).not.toBeInTheDocument());
+
+    const finish = calls.find((c) => c.url.endsWith("/account/passkeys/remove/finish"));
+    expect(finish?.body).toEqual({ ceremony_id: "cer-remove", credential: { id: "cred-new" } });
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+  });
+
+  it("FE-157: adding a passkey asks a current passkey first, then creates the new one", async () => {
+    const { calls } = installAccountFetch(account());
+    const order: string[] = [];
+    const browser: WebAuthnBrowser = {
+      ...workingBrowser(),
+      credentials: {
+        get: async () => {
+          order.push("get");
+          return { toJSON: () => ({ id: "cred-current" }) } as unknown as Credential;
+        },
+        create: async () => {
+          order.push("create");
+          return { toJSON: () => ({ id: "cred-new" }) } as unknown as Credential;
+        },
+      },
+    };
+    const user = userEvent.setup();
+    render(<AccountPage browser={browser} />);
+
+    await screen.findByText("MacBook");
+    await user.click(screen.getByRole("button", { name: strings.account.addOpenButton }));
+    expect(screen.getByText(new RegExp(strings.account.addConfirmNote))).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: strings.account.addButton }));
+    await waitFor(() => expect(screen.getByText("Passkey 3")).toBeInTheDocument());
+
+    expect(order).toEqual(["get", "create"]);
+    const finish = calls.find((c) => c.url.endsWith("/account/passkeys/finish"));
+    expect(finish?.body).toEqual({
+      ceremony_id: "cer-1",
+      credential: { id: "cred-new" },
+      confirmation: { id: "cred-current" },
+    });
   });
 
   it("disables Remove, with a tooltip, on the account's last passkey", async () => {
