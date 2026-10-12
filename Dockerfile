@@ -334,3 +334,11 @@ RUN mkdir -p /etc/fulcio-kms && chown 65532:65532 /etc/fulcio-kms
 USER 1000:1000
 WORKDIR /home/innsegl
 ENTRYPOINT ["/usr/local/bin/ca-bootstrap"]
+
+# The commit of the Go inputs this binary is built from (ADR-0070), as a label
+# the image bundle checks; the Makefile passes INNSEGL_COMMIT. Before #622 no
+# bring-up built or loaded this image, so a machine kept whichever one it built
+# first: one from before #591 had no mountpoint above, and a fresh volume was
+# root's again. Last, so a new value relabels the image and reruns no step above.
+ARG COMMIT=unknown
+LABEL dev.innsegl.commit=${COMMIT}

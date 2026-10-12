@@ -23,7 +23,7 @@ scripts/rekor-port.sh
 
 | Command | Does |
 |---|---|
-| `make sigstore-up` | ensure the trust volumes, guard the pin, start SPIRE, Fulcio, Trillian and Rekor, then make the index ready |
+| `make sigstore-up` | ensure the trust volumes, guard the pin, start SPIRE, Fulcio, Trillian and Rekor, then pin the log and make the index ready; with custody on, custody comes up only after the pin (OPS-232) |
 | `make sigstore-verify` | get a real Fulcio certificate for a real JWT-SVID |
 | `make sigstore-down` | tear the Sigstore project down (trust volumes are external and guarded) |
 | `make rekor-tlog-id` | read the tree Rekor serves and pin it |

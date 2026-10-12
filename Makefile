@@ -278,8 +278,11 @@ sigstore-up: innsegl-trust-volumes
 	  INNSEGL_REKOR_TLOG_ID='$(INNSEGL_REKOR_TLOG_ID)' \
 	  INNSEGL_REKOR_PORT='$(INNSEGL_REKOR_PORT)' \
 	  $(INNSEGL_TRUST_ENV) $(COMPOSE_UP) $(SIGSTORE_FILES) up -d$(if $(CA_CUSTODY), $(SIGSTORE_UP_EXCEPT_FULCIO))
-	$(if $(CA_CUSTODY),@$(MAKE) --no-print-directory ca-custody-up)
+	@# The log is pinned BEFORE custody comes up (#622, OPS-232). It was
+	@# after, so a custody failure stopped the bring-up with the log unpinned,
+	@# and the next start was refused by the guard above.
 	@$(MAKE) --no-print-directory rekor-index-ready
+	$(if $(CA_CUSTODY),@$(MAKE) --no-print-directory ca-custody-up)
 
 # Both this and innsegl-here-services ensure the trust volumes first: compose
 # will not create an external volume, so a release that adds one broke the next
@@ -324,7 +327,8 @@ fulcio-file-ca-run: innsegl-trust-volumes
 	 esac
 
 # rekor-index-ready: the log pinned and its search index complete, before
-# anything that verifies starts. sigstore-up and rekor-log-up both end here.
+# anything that verifies starts. rekor-log-up ends here; sigstore-up runs it
+# before custody comes up, so a custody failure never leaves the log unpinned.
 #
 # The old rekor-redis container (#451) is removed BY NAME. `up` leaves a
 # container whose service is gone running, and --remove-orphans is NOT the
@@ -641,13 +645,18 @@ stack-announce:
 ##   Everything that runs innsegl:local depends on it, the CA custodian
 ##   included: it once provisioned a store with the previous build's policy
 ##   because the store came up before the build (OPS-160).
+# With custody on it builds the CA bootstrap's image too, and the bundle
+# carries it (#622, OPS-231). Nothing built it before: `compose up` reused
+# whatever innsegl-ca-bootstrap:local a machine first built, and one from
+# before #591 left a fresh fulcio-kms volume root's.
 innsegl-images:
 	@bundle="$$($(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh find)" || exit $$?; \
 	 if [ -n "$$bundle" ]; then \
 	   $(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh load "$$bundle"; \
 	 else \
 	   echo "innsegl: no image bundle for $(DEPLOY_COMMIT); building here"; \
-	   INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' INNSEGL_UI_COMMIT='$(UI_IMAGE_COMMIT)' INNSEGL_BACKUP_COMMIT='$(BACKUP_IMAGE_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES); \
+	   INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' INNSEGL_UI_COMMIT='$(UI_IMAGE_COMMIT)' INNSEGL_BACKUP_COMMIT='$(BACKUP_IMAGE_COMMIT)' $(INNSEGL_COMPOSE) build $(INNSEGL_BUILD_SERVICES)$(if $(CA_CUSTODY), && \
+	     INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)' $(INNSEGL_TRUST_ENV) docker compose $(CA_CUSTODY_COMPOSE) build innsegl-ca-bootstrap); \
 	 fi
 
 # innsegl-here-services: innsegl's own services in THIS working tree, built

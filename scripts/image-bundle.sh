@@ -5,7 +5,7 @@
 # host as one file, and let the host accept that file only when it was built
 # from the commit the host is deploying (ADR-0070).
 #
-#   create       build the three images for INNSEGL_IMAGE_PLATFORM and save
+#   create       build the four images for INNSEGL_IMAGE_PLATFORM and save
 #                them into one bundle with a .sha256 beside it. Run on the
 #                machine that builds; `make image-bundle` is how.
 #   find         print the bundle to use for this checkout, or nothing: the
@@ -13,7 +13,7 @@
 #                directory for this commit and the daemon's platform.
 #   load <file>  check the bundle and load it. Refuses, with nothing retagged
 #                and nothing started, unless the checksum matches, the bundle
-#                holds exactly the three images, each is for the daemon's
+#                holds exactly the four images, each is for the daemon's
 #                platform, and each carries the commit of every input it is
 #                built from. Then retags them to the names compose runs.
 #
@@ -68,13 +68,14 @@ sha256_of() {
   fi
 }
 
-# The three images. staging tag | the name compose runs | Dockerfile target.
+# The four images (the CA bootstrap since #622). staging tag | the name compose runs | Dockerfile target.
 # The staging tags keep a bundle's images apart from what is running until
 # every check has passed; the second column is compose's own default, and
 # test/deploy holds the two files to the same names.
 IMAGES="innsegl:bundle|${INNSEGL_IMAGE:-innsegl:local}|runtime
 innsegl-api:bundle|${INNSEGL_API_IMAGE:-innsegl-api:local}|api
-innsegl-backup:bundle|${INNSEGL_BACKUP_IMAGE:-innsegl-backup:local}|backup"
+innsegl-backup:bundle|${INNSEGL_BACKUP_IMAGE:-innsegl-backup:local}|backup
+innsegl-ca-bootstrap:bundle|${INNSEGL_CA_BOOTSTRAP_IMAGE:-innsegl-ca-bootstrap:local}|ca-bootstrap"
 
 # expected <staging tag> — "label value" lines that image must carry. The api
 # image is the runtime plus the built UI, so it carries both commits.
@@ -87,6 +88,8 @@ expected() {
       echo "dev.innsegl.ui-commit $UI_COMMIT" ;;
     innsegl-backup:bundle)
       echo "dev.innsegl.commit $BACKUP_COMMIT" ;;
+    innsegl-ca-bootstrap:bundle)
+      echo "dev.innsegl.commit $GO_COMMIT" ;;
   esac
 }
 
@@ -143,6 +146,7 @@ cmd_create() {
       runtime) build_args+=(--build-arg "COMMIT=$GO_COMMIT") ;;
       api) build_args+=(--build-arg "COMMIT=$GO_COMMIT" --build-arg "UI_COMMIT=$UI_COMMIT") ;;
       backup) build_args+=(--build-arg "COMMIT=$BACKUP_COMMIT") ;;
+      ca-bootstrap) build_args+=(--build-arg "COMMIT=$GO_COMMIT") ;;
     esac
     echo "image-bundle: building $target for $platform as $staging"
     docker buildx build --platform "$platform" --target "$target" \
@@ -218,7 +222,7 @@ cmd_load() {
   loaded="$(docker load -i "$bundle")" || refuse "docker load failed for $bundle"
   printf '%s\n' "$loaded"
 
-  # Exactly the three staging images, by name. Anything else -- an image by
+  # Exactly the four staging images, by name. Anything else -- an image by
   # ID only, another name, one missing -- means the bundle is not what
   # `create` makes.
   local names expect_names

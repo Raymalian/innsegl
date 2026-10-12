@@ -20,7 +20,7 @@
 #   create  1. a tracked change anywhere              -> refused, nothing built
 #           2. an untracked file under an image input  -> refused, nothing built
 #           3. an expected commit that is dirty         -> refused, nothing built
-#           4. a clean tree                             -> three images built for
+#           4. a clean tree                             -> four images built for
 #              linux/amd64, one bundle and its .sha256, a one-line scp command
 #              naming no host
 #           5. INNSEGL_IMAGE_PLATFORM                   -> builds and names that
@@ -29,7 +29,7 @@
 #           8. a bundle for another platform only       -> prints nothing
 #           9. INNSEGL_IMAGE_BUNDLE                      -> prints that path
 #          10. a dirty checkout                          -> prints nothing
-#   load   11. a good bundle                             -> all three retagged
+#   load   11. a good bundle                             -> all four retagged
 #          12. a checksum that does not match            -> refused, not loaded
 #          13. no .sha256 beside it                       -> refused, not loaded
 #          14. a missing bundle                           -> refused
@@ -40,6 +40,7 @@
 #          19. an extra image in the bundle               -> refused, no retag
 #          20. the images are for another platform        -> refused, no retag
 #          21. the checkout is dirty                      -> refused, not loaded
+#          22. the CA bootstrap's Go commit is wrong      -> refused, no retag (#622)
 #
 # USAGE
 #   scripts/image-bundle-selftest.sh
@@ -185,12 +186,14 @@ make_bundle() {
 }
 
 # good_records [platform] [runtime Go commit] [api Go commit] [UI commit]
-# [backup commit] — what a bundle built for this checkout holds.
+# [backup commit] [CA bootstrap Go commit] — what a bundle built for this
+# checkout holds.
 good_records() {
   local p="${1:-linux/amd64}"
   printf 'IMAGE innsegl:bundle\nPLATFORM %s\nLABEL dev.innsegl.commit %s\n' "$p" "${2:-$GO}"
   printf 'IMAGE innsegl-api:bundle\nPLATFORM %s\nLABEL dev.innsegl.commit %s\nLABEL dev.innsegl.ui-commit %s\n' "$p" "${3:-$GO}" "${4:-$UI}"
   printf 'IMAGE innsegl-backup:bundle\nPLATFORM %s\nLABEL dev.innsegl.commit %s\n' "$p" "${5:-$BK}"
+  printf 'IMAGE innsegl-ca-bootstrap:bundle\nPLATFORM %s\nLABEL dev.innsegl.commit %s\n' "$p" "${6:-$GO}"
 }
 
 echo "image-bundle create"
@@ -223,13 +226,13 @@ else bad "an expected commit that is dirty is refused" "rc=$rc out=$out"; fi
 # 4
 out="$(run "$TMP/c4" create 2>&1)"; rc=$?
 B4="$REPO/dist/innsegl-images-$HEADC-linux-amd64.tar.gz"
-if [ "$rc" -eq 0 ] && [ "$(built "$TMP/c4")" = 3 ] \
-   && [ "$(grep '^buildx build' "$TMP/c4/calls" | grep -c -- '--platform linux/amd64')" = 3 ] \
+if [ "$rc" -eq 0 ] && [ "$(built "$TMP/c4")" = 4 ] \
+   && [ "$(grep '^buildx build' "$TMP/c4/calls" | grep -c -- '--platform linux/amd64')" = 4 ] \
    && [ -s "$B4" ] && [ -s "$B4.sha256" ] \
    && [ "$(cut -d' ' -f1 "$B4.sha256")" = "$(sha "$B4")" ]; then
-  ok "a clean tree builds three amd64 images into one bundle with its checksum"
+  ok "a clean tree builds four amd64 images into one bundle with its checksum"
 else bad "a clean tree builds the bundle" "rc=$rc out=$out calls=$(cat "$TMP/c4/calls" 2>/dev/null)"; fi
-for want in "--target runtime" "--target api" "--target backup" "COMMIT=$GO" "UI_COMMIT=$UI" "COMMIT=$BK" "VERSION=compose" "DATE=unknown"; do
+for want in "--target runtime" "--target api" "--target backup" "--target ca-bootstrap" "COMMIT=$GO" "UI_COMMIT=$UI" "COMMIT=$BK" "VERSION=compose" "DATE=unknown"; do
   if ! grep -q -- "$want" "$TMP/c4/calls"; then bad "create passes $want to the build"; fi
 done
 scp_lines="$(printf '%s\n' "$out" | grep -c 'scp ')"
@@ -237,14 +240,14 @@ if [ "$scp_lines" = 1 ] && printf '%s' "$out" | grep 'scp ' | grep -q '<host>' \
    && printf '%s' "$out" | grep 'scp ' | grep -q "innsegl-images-$HEADC-linux-amd64.tar.gz.sha256"; then
   ok "it prints one scp line, with the host as a placeholder"
 else bad "it prints one scp line with a placeholder host" "$out"; fi
-# the bundle holds exactly the three staging images
-if [ "$(gunzip -c "$B4" | grep -c '^IMAGE ')" = 3 ]; then
-  ok "the bundle holds the three images"
-else bad "the bundle holds the three images" "$(gunzip -c "$B4")"; fi
+# the bundle holds exactly the four staging images
+if [ "$(gunzip -c "$B4" | grep -c '^IMAGE ')" = 4 ]; then
+  ok "the bundle holds the four images"
+else bad "the bundle holds the four images" "$(gunzip -c "$B4")"; fi
 
 # 5
 out="$(C_PLATFORM=linux/arm64 run "$TMP/c5" create 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(grep '^buildx build' "$TMP/c5/calls" | grep -c -- '--platform linux/arm64')" = 3 ] \
+if [ "$rc" -eq 0 ] && [ "$(grep '^buildx build' "$TMP/c5/calls" | grep -c -- '--platform linux/arm64')" = 4 ] \
    && [ -s "$REPO/dist/innsegl-images-$HEADC-linux-arm64.tar.gz" ]; then
   ok "INNSEGL_IMAGE_PLATFORM chooses the platform, and the file says which"
 else bad "INNSEGL_IMAGE_PLATFORM chooses the platform" "rc=$rc out=$out"; fi
@@ -287,11 +290,12 @@ LB="$TMP/b/innsegl-images.tar.gz"
 # 11
 make_bundle "$LB" "$(good_records)"
 out="$(run "$TMP/l11" load "$LB" 2>&1)"; rc=$?
-if [ "$rc" -eq 0 ] && [ "$(retagged "$TMP/l11")" = 3 ] \
+if [ "$rc" -eq 0 ] && [ "$(retagged "$TMP/l11")" = 4 ] \
    && grep -qx 'tag innsegl:bundle innsegl:local' "$TMP/l11/calls" \
    && grep -qx 'tag innsegl-api:bundle innsegl-api:local' "$TMP/l11/calls" \
-   && grep -qx 'tag innsegl-backup:bundle innsegl-backup:local' "$TMP/l11/calls"; then
-  ok "a good bundle is loaded and its three images retagged to what compose runs"
+   && grep -qx 'tag innsegl-backup:bundle innsegl-backup:local' "$TMP/l11/calls" \
+   && grep -qx 'tag innsegl-ca-bootstrap:bundle innsegl-ca-bootstrap:local' "$TMP/l11/calls"; then
+  ok "a good bundle is loaded and its four images retagged to what compose runs"
 else bad "a good bundle is loaded and retagged" "rc=$rc out=$out"; fi
 
 # 12
@@ -348,6 +352,10 @@ out="$(C_GO="$GO-dirty" run "$TMP/l21" load "$LB" 2>&1)"; rc=$?
 if [ "$rc" -ne 0 ] && [ "$(loaded "$TMP/l21")" = 0 ] && printf '%s' "$out" | grep -q 'dirty'; then
   ok "a dirty checkout refuses every bundle before loading it"
 else bad "a dirty checkout refuses every bundle" "rc=$rc out=$out"; fi
+
+# 22
+refused_load 22 "a CA bootstrap image built from other Go sources is refused, nothing retagged" \
+  "$(good_records linux/amd64 "$GO" "$GO" "$UI" "$BK" eeeeeeeeeeee)"
 
 echo
 echo "image-bundle-selftest: $pass passed, $fail failed"
