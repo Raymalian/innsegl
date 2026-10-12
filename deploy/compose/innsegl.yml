@@ -1083,6 +1083,10 @@ services:
       # served to the operator's enrolled machine at /_core/trust-backup.
       # Ciphertext only; this process holds no key that opens it.
       INNSEGL_TRUST_BACKUP_DIR: /run/innsegl/trust-backups
+      # #601: the ledger backup service's marker ("<unix seconds> <verdict>"),
+      # read per request for /_core/status so `innsegl doctor` reports when
+      # the core last backed up. Read-only; nothing is read at start.
+      INNSEGL_BACKUP_MARKER: /run/innsegl/backups/.last-run
 
       # The hosted shape (#462). The host address the gateway and dashboard are
       # published on, passed in so the process can refuse to start exposed
@@ -1346,6 +1350,8 @@ services:
       - innsegl-trust-history:/run/innsegl/trust
       # ADR-0074, READ-ONLY: the encrypted trust-key backups, to serve.
       - innsegl-trust-backups:/run/innsegl/trust-backups:ro
+      # #601, READ-ONLY: the ledger backup service's volume, for its marker.
+      - innsegl-backups:/run/innsegl/backups:ro
       # doc 05 §2: the scheduled canary's last result. Written here by the
       # sealer companion, read here by /readyz.
       - innsegl-canary-status:/run/innsegl/canary

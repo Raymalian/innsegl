@@ -192,6 +192,7 @@ Make variables and environment (defaults in brackets):
 | `ARGS` | innsegl-init | flags passed to `innsegl init` |
 | `BASE` | verify-branch | [`origin/main`] |
 | `INNSEGL_BACKUP_DIR` | innsegl-backup | [`backups`] |
+| `INNSEGL_BACKUP_MARKER` | innsegl-mcp | the backup service's marker, mounted read-only; `/_core/status` reports it as `ledger_backup` for `innsegl doctor` |
 | `INNSEGL_TEST_KEEP_STACK` | smoke | `1` keeps the stack |
 | `INNSEGL_DESTROY_TRUST_ROOT` | teardown guard | name a trust volume to really remove |
 

@@ -136,6 +136,12 @@ type doctor struct {
 	identity string
 	settings string
 	local    string
+	// clientCertExpiry and the CA token's seconds left are what earlier
+	// checks read, for the reports of #601 (doctorexpiry.go). Zero when not
+	// read.
+	clientCertExpiry time.Time
+	caTokenLeft      int64
+	caTokenKnown     bool
 }
 
 // exec runs argv through the allow-list and returns its stdout. A command
@@ -223,8 +229,17 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		return exitDoctorFailing
 	}
 	unlocked, custodyOK := d.custody(ctx)
+	if d.caTokenKnown {
+		d.tokenLine(d.caTokenLeft)
+	}
 	d.components(st)
-	return d.signing(ctx, st, coreAt, unlocked, custodyOK, *wait)
+	expired := d.expiries(st)
+	d.backups(st)
+	code := d.signing(ctx, st, coreAt, unlocked, custodyOK, *wait)
+	if expired && code == exitOK {
+		return exitDoctorFailing
+	}
+	return code
 }
 
 // hostTools is doctor's first line (CLI-027, #592): what this machine lacks,
@@ -283,6 +298,9 @@ func (d *doctor) clientService(ctx context.Context) bool {
 		return false
 	}
 	exp, perr := time.Parse(time.RFC3339, svc.CertificateExpiresAt)
+	if perr == nil {
+		d.clientCertExpiry = exp
+	}
 	switch {
 	case perr != nil:
 		d.line("client certificate", "UNKNOWN", "the service did not say when it expires")
@@ -411,6 +429,7 @@ func (d *doctor) custody(ctx context.Context) (unlocked, ok bool) {
 	}
 	if st.CanSign {
 		d.line(check, "ok", "unlocked; the CA can sign")
+		d.caTokenLeft, d.caTokenKnown = st.TokenSecondsLeft, true
 		return false, true
 	}
 	reason := st.Reason
