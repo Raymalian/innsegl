@@ -659,6 +659,7 @@ func (c *campaign) launchSign(t *testing.T, f signFlags) *daemon {
 		"-key", filepath.Join(f.pemDir, "key.pem"),
 		"-bundle", filepath.Join(f.pemDir, "bundle.pem"),
 		"-listen", "127.0.0.1:0",
+		"-lifecycle-on-agent-listener", // ADR-0083: this harness registers over the wire
 		"-health-listen", "127.0.0.1:0",
 		"-idempotency-lease", crashLease.String(),
 		"-register-rate-calls", "0",

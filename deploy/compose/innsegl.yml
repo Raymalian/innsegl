@@ -1036,22 +1036,18 @@ services:
 
       INNSEGL_MCP_LISTEN: 0.0.0.0:8080
       INNSEGL_MCP_HEALTH_LISTEN: 0.0.0.0:8081
-      # #170. Empty serves all five tools on 8080, which is what every
-      # deployment did before it and what this one still does by default.
-      #
-      # Set it to 0.0.0.0:8090 and register_agent and retire_agent move to that
-      # listener, leaving 8080 the three tools that need a run_id someone else
-      # issued. Something must be arranged to do the registering — a harness
-      # hook (#171), or an operator — because with the split on and nothing
-      # registering, no run can be created at all.
-      #
-      # #266 ANSWERED THE OTHER HALF OF THAT WARNING. #264 put a credential in
-      # front of the six lifecycle tools, and the two shipped callers presented
-      # none: turning this on would have answered every registration with 401,
-      # so no agent could register and no commit could be signed. Both now mint
-      # one for the repository they are working in, from the private key below,
-      # and only when this listener refuses a call.
+      # #170, ADR-0083. 8080 always serves only the tools that need a run_id
+      # someone else issued. Empty, the default, serves the identity lifecycle
+      # (register_agent, retire_agent, the recording tools) on NO listener: the
+      # gateway registers and records in process and `innsegl retire` runs in
+      # this container (ADR-0077). Set it to 0.0.0.0:8090 to serve them there,
+      # behind #264's credential, on the compose network only; no host port is
+      # published for it.
       INNSEGL_MCP_ADMIN_LISTEN: ${INNSEGL_MCP_ADMIN_LISTEN:-}
+      # ADR-0083: the behaviour before the split always held — the lifecycle on
+      # 8080 with no credential. For the demo profile and tests only; serve
+      # refuses it beside an admin listener and warns at every start.
+      INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER: ${INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER:-}
       # #264. The PUBLIC key set whose repository-scoped credentials the
       # identity lifecycle admits — the path, and never a key. Read once at
       # start-up and never fetched, so this deployment gains no dependency on
@@ -1380,23 +1376,10 @@ services:
       # and this publish line is the entire host-reachability guarantee for
       # it (guarded by GW-005).
       - "${INNSEGL_BIND:-127.0.0.1}:${INNSEGL_GATEWAY_PORT:-28095}:8095"
-      # #170's identity lifecycle. Published only when INNSEGL_MCP_ADMIN_LISTEN
-      # is set on the service below; the mapping is harmless when it is not,
-      # because nothing is listening on 8090 in that case.
-      #
-      # WHAT THIS SEPARATION IS, AND WHAT IT IS NOT. It closes the leak for a
-      # client that speaks only to the address it was configured with: an MCP
-      # client pointed at 28080 has no register_agent to call, so the model
-      # driving it cannot mint an identity for itself.
-      #
-      # It does NOT constrain a model holding a shell on this host. Loopback is
-      # reachable from anything running here, so a model that decides to curl
-      # 28090 will reach it. On a single-user laptop this is a convention with
-      # a mechanism behind it, not a boundary. It becomes a boundary when the
-      # model and the harness are on different hosts — which is the deployment
-      # #68 contemplates, and the reason this is worth wiring now rather than
-      # after.
-      - "127.0.0.1:${INNSEGL_MCP_ADMIN_PORT:-28090}:8090"
+      # NO HOST PORT FOR THE IDENTITY LIFECYCLE (ADR-0083). Its listener is off
+      # by default, and a host publish (it was 127.0.0.1:28090) was reachable by
+      # anything on this host, including a model holding a shell. An operator
+      # who opts in reaches it on the compose network.
     healthcheck:
       # /readyz and not a TCP dial: ADR-0024's rule, that a readiness probe
       # must fetch something it can parse. An unexamined 200 passes against any
