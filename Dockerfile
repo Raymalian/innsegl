@@ -121,7 +121,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build --mount=type=cache,target=/g
 # anchor and every one of them was affected; nothing failed at build time,
 # because building the wrong stage is a perfectly good build.
 # ---------------------------------------------------------------------------
-FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS runtime
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime
 
 # git      sign_commit execs it (internal/signing).
 # ca-certificates  a deployment pointed at public Fulcio/Rekor needs a trust
@@ -273,7 +273,7 @@ LABEL dev.innsegl.ui-commit=${UI_COMMIT}
 #   aws-cli              the reference implementation of the protocol, which is
 #                        the same argument innsegl-object-init's image makes:
 #                        the store's own tool cannot outlive the store.
-FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS backup
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS backup
 
 # bash, because scripts/backup-ledger.sh is a bash script and has been since it
 # was written for the host. Converting 380 lines of working shell to POSIX to
@@ -321,7 +321,7 @@ LABEL dev.innsegl.commit=${COMMIT}
 # a token and a key name, asks for signatures over digests, and mints a
 # self-signed root from the answers. Reading this container yields the token —
 # which is revocable and auditable — and never the key.
-FROM alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS ca-bootstrap
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS ca-bootstrap
 
 RUN apk add --no-cache ca-certificates
 
