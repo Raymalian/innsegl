@@ -20,7 +20,7 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 
 COVERPROFILE := cover.out
 
-.PHONY: all build client-restart test test-clean lint cover smoke smoke-down spire-up spire-verify \
+.PHONY: all build install-release client-restart test test-clean lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-services-up spire-admin-relay-up spire-admin-relay-down \
         sigstore-up rekor-log-up rekor-index-ready sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
@@ -47,7 +47,19 @@ build:
 	@scripts/codesign-cli.sh $(BINARY)
 	@scripts/link-bin.sh $(CURDIR)/$(BINARY)
 
-## client-restart: restart this machine's client service, if it runs the binary build just wrote
+## install-release: install the binary build wrote as the root-owned copy hooks and the client service run (sudo, hash-checked)
+#
+# /usr/local/libexec/innsegl/innsegl (#599). `innsegl connect` names only that
+# copy and refuses a binary the user can change: hooks run on every agent
+# prompt, and ./innsegl is rewritten by any agent building in this checkout.
+# One sudo line, printed first, copies the binary to root, checks its SHA-256
+# and renames it into place (scripts/install-release.sh). Without a terminal
+# it prints the line and exits 3. The dev loop is
+# `make build && make install-release && make client-restart`.
+install-release:
+	@scripts/install-release.sh $(CURDIR)/$(BINARY)
+
+## client-restart: restart this machine's client service, if it runs the binary build just wrote (or its installed copy)
 client-restart:
 	@scripts/client-restart.sh $(CURDIR)/$(BINARY)
 
@@ -536,15 +548,11 @@ INNSEGL_IMAGE_BUNDLE ?=
 IMAGE_BUNDLE_ENV := INNSEGL_DEPLOY_COMMIT='$(DEPLOY_COMMIT)' INNSEGL_GO_IMAGE_COMMIT='$(GO_IMAGE_COMMIT)' INNSEGL_UI_IMAGE_COMMIT='$(UI_IMAGE_COMMIT)' INNSEGL_BACKUP_IMAGE_COMMIT='$(BACKUP_IMAGE_COMMIT)' INNSEGL_IMAGE_INPUTS='$(sort $(GO_IMAGE_INPUTS) $(UI_IMAGE_INPUTS) $(BACKUP_IMAGE_INPUTS))' INNSEGL_IMAGE_BUNDLE='$(INNSEGL_IMAGE_BUNDLE)' INNSEGL_IMAGE_PLATFORM='$(INNSEGL_IMAGE_PLATFORM)'
 REPO      ?= $(shell git remote get-url origin 2>/dev/null | sed -e 's|^git@||' -e 's|^https://||' -e 's|^http://||' -e 's|:|/|' -e 's|\.git$$||')
 
-# THE IDENTITY LISTENER, on for this target and not for the shipped default.
-#
-# innsegl.yml leaves INNSEGL_MCP_ADMIN_LISTEN empty and says why: with the split
-# on and nothing registering, no run can be created at all. This target is the
-# one where something does register -- the harness hook calls register_agent --
-# and without the listener every registration is refused as unreachable:
-# honest, and a dead end, because the target that exists to make signing work
-# did not start the listener signing needs.
-INNSEGL_MCP_ADMIN_LISTEN ?= 0.0.0.0:8090
+# THE IDENTITY LISTENER IS OFF (ADR-0083, #604). Nothing shipped calls it: the
+# gateway registers and records in process and `innsegl retire` runs on the core
+# (ADR-0077). With it off the identity lifecycle is served on no listener at
+# all. Setting it is an operator's opt-in, reachable on the compose network only.
+INNSEGL_MCP_ADMIN_LISTEN ?=
 
 # THE REAPER IS BACK ON (#180 fixed, 2026-09-09).
 #
@@ -713,9 +721,8 @@ innsegl-here-services: innsegl-trust-volumes innsegl-images
 # The opinions baked in here, and each is a real choice rather than a default
 # nobody thought about:
 #
-#   - the admin listener is ON. Without it nothing can register a run, and
-#     since RM-105 the model cannot register for itself. A deployment with it
-#     off can sign nothing.
+#   - the admin listener is OFF (ADR-0083). The gateway registers each run in
+#     process, so nothing needs the identity lifecycle on the wire.
 #   - the sealer and the reconciler run inside the MCP. That is innsegl.yml's
 #     own default (ADR-0056), not a setting of this target.
 #   - Rekor's host port is chosen at run time from what is free. 3000 is the
@@ -729,7 +736,6 @@ start:
 	@port=$$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'); \
 	 echo "innsegl: rekor on 127.0.0.1:$$port"; \
 	 INNSEGL_REKOR_PORT=$$port \
-	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 \
 	 INNSEGL_STACK_ANNOUNCED=1 \
 	 $(MAKE) --no-print-directory innsegl-up-here
 	@echo
@@ -790,7 +796,7 @@ update:
 	 $(MAKE) --no-print-directory spire-services-up && \
 	 $(MAKE) --no-print-directory rekor-log-up && \
 	 $(MAKE) --no-print-directory fulcio-file-ca-up && \
-	 INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services && \
+	 $(MAKE) --no-print-directory innsegl-here-services && \
 	 INNSEGL_SIGNING_BEFORE=$$before $(UPDATE_SIGNING) after && \
 	 mkdir -p "$$(dirname '$(DEPLOYED_FILE)')" && echo '$(DEPLOY_STATE)' > '$(DEPLOYED_FILE)'
 	@echo
@@ -930,7 +936,7 @@ innsegl-acme-credential:
 	@# recreates the core now (scripts/compose-up.py). A stack that is not up
 	@# is left alone; `make start` reads it.
 	@if docker ps --format '{{.Names}}' | grep -qx $(STACK_PREFIX)-core; then \
-	   INNSEGL_MCP_ADMIN_LISTEN=0.0.0.0:8090 $(MAKE) --no-print-directory innsegl-here-services; fi
+	   $(MAKE) --no-print-directory innsegl-here-services; fi
 	@echo 'innsegl-acme-credential: stored; with INNSEGL_ACME=on and the INNSEGL_ACME_* settings in the compose .env, the core uses it'
 
 ## ca-custody-switch: Fulcio onto the store
@@ -1041,9 +1047,24 @@ innsegl-canary: innsegl-trust-volumes
 	  $(INNSEGL_COMPOSE) --profile canary run --rm innsegl-canary
 
 ## innsegl-demo: register an identity, sign a commit under it, retire it
+##   (dev stack only: it serves the identity lifecycle on the agent listener)
+# The demo agent registers over the MCP wire, which no deployment serves any
+# more (ADR-0083). It recreates the dev core with -lifecycle-on-agent-listener
+# for the run, then brings the services up again as `make start` would, which
+# recreates the core without it, pass or fail. A live stack refuses.
 innsegl-demo: innsegl-trust-volumes
+	@[ "$$(scripts/stack-mode.sh mode)" = dev ] || { echo 'innsegl-demo: dev stack only (ADR-0083): it serves the identity lifecycle with no credential'; exit 2; }
+	@INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER=true \
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent
+	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent; status=$$?; \
+	 echo 'innsegl-demo: recreating the core without -lifecycle-on-agent-listener'; \
+	 $(DEMO_RECREATE_CORE) || status=1; \
+	 exit $$status
+
+# A recipe line that names $(MAKE) runs even under `make -n`, which would run
+# the demo above for real. Under a dry run the line names no $(MAKE), so it is
+# printed, not run (OPS-215).
+DEMO_RECREATE_CORE = $(if $(DRY_RUN),echo 'make innsegl-here-services',$(MAKE) --no-print-directory innsegl-here-services)
 
 ## innsegl-retire: end a run an operator knows is over (RUN=<run_id>)
 #
@@ -1148,7 +1169,7 @@ innsegl-purge:
 # nothing shipped here took one before now.
 #
 # scripts/backup-ledger.sh does not call itself done on "pg_dump exited 0".
-# It restores the dump into a throwaway database in the same container and
+# It restores the dump into a private Postgres it starts itself (RM-356) and
 # checks the restored chain against the sealed segments with
 # runbooks/verify-rebuilt-index.sh before writing anything to
 # $(INNSEGL_BACKUP_DIR) (default ./backups) -- the adjudication

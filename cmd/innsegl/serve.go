@@ -84,6 +84,7 @@ const (
 	envMCPListen             = "INNSEGL_MCP_LISTEN"
 	envMCPAdminListen        = "INNSEGL_MCP_ADMIN_LISTEN"
 	envMCPAdminJWKSFile      = "INNSEGL_MCP_ADMIN_JWKS_FILE"
+	envMCPLifecycleOnAgent   = "INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER"
 	envMCPAlso               = "INNSEGL_MCP_ALSO"
 	envMCPHealthListen       = "INNSEGL_MCP_HEALTH_LISTEN"
 	envMCPAddrFile           = "INNSEGL_MCP_ADDR_FILE"
@@ -216,12 +217,15 @@ type serveOptions struct {
 	signAllowUnlinked   bool
 	gitsignPath         string
 
-	listen       string
-	adminListen  string
-	adminJWKS    string
-	also         []string
-	healthListen string
-	addrFile     string
+	listen      string
+	adminListen string
+	adminJWKS   string
+	// ADR-0083: serve the identity lifecycle on the agent listener with no
+	// credential, the behaviour before the split was always on.
+	lifecycleOnAgentListener bool
+	also                     []string
+	healthListen             string
+	addrFile                 string
 
 	spireTimeout    time.Duration
 	runTTL          time.Duration
@@ -833,9 +837,13 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 				"and is not is worse than one that knows it is open. Mint the keys with "+
 				"`innsegl admin-credential keygen` ($"+envMCPAdminJWKSFile+")")
 		adminListen = fs.String("admin-listen", os.Getenv(envMCPAdminListen),
-			"address the identity lifecycle listens on. Empty serves all five tools on -listen, "+
-				"as before #170. Set it and register_agent and retire_agent move here, leaving "+
-				"-listen the three tools that need a run_id that already exists ($"+envMCPAdminListen+")")
+			"address the identity lifecycle (register_agent, retire_agent and the recording tools) "+
+				"listens on, behind -admin-jwks. Empty serves them on NO listener: -listen always "+
+				"serves only the tools that need a run_id that already exists (ADR-0083) ($"+envMCPAdminListen+")")
+		lifecycleOnAgentListener = fs.Bool("lifecycle-on-agent-listener", envBool(envMCPLifecycleOnAgent, false),
+			"serve the identity lifecycle on -listen with NO credential, as before ADR-0083: any "+
+				"process that reaches it can mint a run. For tests and the demo profile only; "+
+				"refused beside -admin-listen ($"+envMCPLifecycleOnAgent+")")
 		healthListen = fs.String("health-listen", envOr(envMCPHealthListen, defaultHealthListen),
 			"address "+mcp.LivePath+" and "+mcp.ReadyPath+" listen on ($"+envMCPHealthListen+")")
 		addrFile = fs.String("addr-file", os.Getenv(envMCPAddrFile),
@@ -969,7 +977,8 @@ func parseServeFlags(args []string, stderr io.Writer) (serveOptions, int, bool) 
 		signAllowUnlinked:   *signAllowUnlinked,
 		gitsignPath:         *gitsignPath,
 		listen:              *listen, adminListen: *adminListen, adminJWKS: *adminJWKS, also: alsoRun,
-		healthListen: *healthListen, addrFile: *addrFile,
+		lifecycleOnAgentListener: *lifecycleOnAgentListener,
+		healthListen:             *healthListen, addrFile: *addrFile,
 		spireTimeout: *spireTimeout, runTTL: *runTTL, lease: *lease, writerLeaseTTL: *writerLeaseTTL,
 		rateCalls: *rateCalls, rateWindow: *rateWindow,
 		clockSkewBound: *clockSkewBound, trustedOrigins: splitOrigins(*trustedOrigins),
@@ -1062,6 +1071,11 @@ func (o serveOptions) validate() string {
 			"destroys identities, and a listener serving it with nothing to authenticate a " +
 			"caller lets any process that can reach it mint a run. Generate the keys with " +
 			"`innsegl admin-credential keygen`"
+	case o.lifecycleOnAgentListener && o.adminListen != "":
+		return "-lifecycle-on-agent-listener (or $" + envMCPLifecycleOnAgent + ") is set beside " +
+			"-admin-listen (or $" + envMCPAdminListen + "). The flag serves the identity " +
+			"lifecycle on -listen with no credential, which undoes the listener that guards it. " +
+			"Set one or the other"
 	case o.adminJWKS != "" && o.adminListen == "":
 		return "-admin-jwks (or $" + envMCPAdminJWKSFile + ") is set without -admin-listen " +
 			"(or $" + envMCPAdminListen + "). The credential belongs to the identity-lifecycle " +

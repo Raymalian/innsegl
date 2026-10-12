@@ -12,19 +12,18 @@
 #     "appendonly.sql grants less. That is provisioning, and provisioning is a
 #      claim."
 #
-# This role's provisioning is a claim with a twist in it. db-init.sh applies
-# internal/api/readonly.sql to it — the same file the reader gets, so the
-# ledger grants cannot drift between them — and then grants CREATEDB, which
-# that file's last line has just revoked. The end state is what matters and the
-# order is what produces it, so the end state is what this measures.
+# db-init.sh applies internal/api/readonly.sql to it — the same file the reader
+# gets, so the ledger grants cannot drift between them — and ends with
+# NOCREATEDB (RM-356, #604): the backup restores each dump into a private
+# Postgres of its own, so it needs no database on this server.
 #
 # THE POSITIVE CASE IS FIRST, ON PURPOSE
 # --------------------------------------
 # A scope too narrow to take a backup is worse than the exposure it closes: it
 # fails at 3am, in a service nobody is watching, and the first anyone knows is
-# that there are no backups. So this asks the credential to do the backup's
-# WHOLE job — read the ledger, create a database, write into it, drop it —
-# before it asks whether the live ledger is still closed to it.
+# that there are no backups. So this asks the credential to read the ledger
+# before it asks whether creating a database and writing the ledger are closed
+# to it.
 #
 # WHY IT CLASSIFIES BY SQLSTATE AND NOT BY SUCCESS
 # ------------------------------------------------
@@ -39,14 +38,14 @@
 # exists to catch. So only 42501 and 25006 count as refusals.
 #
 # THE READ-ONLY DEFAULT IS NOT THE BOUNDARY. readonly.sql leaves this role with
-# default_transaction_read_only = on, and the restore turns it off for its own
-# session — which it must, to write into a database it owns. So every negative
-# probe below issues SET TRANSACTION READ WRITE first: if the ACL were not the
-# real boundary, that one statement would be the whole of the bypass, and this
-# script would find it.
+# default_transaction_read_only = on, and any session can turn it off. So every
+# negative probe below issues SET TRANSACTION READ WRITE first: if the ACL were
+# not the real boundary, that one statement would be the whole of the bypass,
+# and this script would find it.
 #
 # It leaves nothing behind: every ledger probe runs in a transaction that is
-# rolled back, and the scratch database is dropped on every exit path.
+# rolled back, and a database the CREATEDB probe made is dropped on every exit
+# path.
 
 set -eu
 
@@ -64,32 +63,16 @@ export PGPASSWORD="${INNSEGL_BACKUP_PASSWORD}"
 backup() {
   psql -X -q -A -t -U "${ROLE}" -h "${PGHOST}" -p "${PORT}" -d "${PGDATABASE}" "$@"
 }
-backup_in() {
-  db="$1"; shift
-  psql -X -q -A -t -U "${ROLE}" -h "${PGHOST}" -p "${PORT}" -d "${db}" "$@"
-}
-
-# THE READ-ONLY DEFAULT IS A SESSION DEFAULT, NOT A BOUNDARY, and the positive
-# probes have to turn it off exactly as the real backup does.
+# THE READ-ONLY DEFAULT IS A SESSION DEFAULT, NOT A BOUNDARY, and the CREATEDB
+# probe turns it off before it asks.
 #
-# MEASURED: readonly.sql leaves this role with default_transaction_read_only=on,
-# so CREATE DATABASE is refused with 25006 (read_only_sql_transaction) even
-# though pg_roles reports rolcreatedb=t. That refusal says nothing about the
-# privilege, and reading it as one sent the first run of this script looking for
-# a missing GRANT that was present all along.
-#
-# Turning it off is safe precisely because it is not the boundary: the negative
-# probes below issue SET TRANSACTION READ WRITE and are STILL refused 42501, so
-# what stops this credential writing the ledger is the ACL. Off, it can write
-# only where it owns — a database it just created.
+# MEASURED: with default_transaction_read_only=on, CREATE DATABASE is refused
+# with 25006 (read_only_sql_transaction) even when pg_roles reports
+# rolcreatedb=t. That refusal says nothing about the privilege, so the probe
+# runs with it off and accepts only 42501.
 backup_rw() {
   PGOPTIONS='-c default_transaction_read_only=off' \
     psql -X -q -A -t -U "${ROLE}" -h "${PGHOST}" -p "${PORT}" -d "${PGDATABASE}" "$@"
-}
-backup_in_rw() {
-  db="$1"; shift
-  PGOPTIONS='-c default_transaction_read_only=off' \
-    psql -X -q -A -t -U "${ROLE}" -h "${PGHOST}" -p "${PORT}" -d "${db}" "$@"
 }
 
 SCRATCH="innsegl_backup_probe_$$"
@@ -144,7 +127,7 @@ if [ "${who}" != "${ROLE}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 1. THE WHOLE JOB. Read the ledger, own a database, write into it, drop it.
+# 1. THE WHOLE JOB: read the ledger. 2. No database of its own here.
 # ---------------------------------------------------------------------------
 if backup -c "SELECT count(*) FROM innsegl.events" >/dev/null 2>&1; then
   log "ALLOWED  read innsegl.events (the dump)"
@@ -153,28 +136,20 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
-# CREATE DATABASE cannot run inside a transaction block, so this one is not a
-# rolled-back probe; it is the real thing, and it is cleaned up on every exit.
-if backup_rw -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${SCRATCH}" >/dev/null 2>&1; then
-  log "ALLOWED  create a throwaway database (the restore)"
+# NO DATABASE OF ITS OWN ON THIS SERVER (RM-356, #604). The backup restores into
+# a private Postgres it starts itself, so CREATE DATABASE here must be refused
+# by privilege (42501), with the read-only default off as the restore once
+# turned it off. CREATE DATABASE cannot run in a transaction block, so this is
+# the real statement; if it ever succeeds, the cleanup drops what it made.
+createdb_out="$(backup_rw -v ON_ERROR_STOP=1 -c '\set VERBOSITY verbose' \
+  -c "CREATE DATABASE ${SCRATCH}" 2>&1 || true)"
+createdb_state="$(printf '%s' "${createdb_out}" |
+  sed -n 's/^ERROR:[[:space:]]*\([0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]\):.*/\1/p' |
+  head -n 1)"
+if [ "${createdb_state}" = "42501" ]; then
+  log "REFUSED  create a database (42501)"
 else
-  fail "REFUSED  create a throwaway database — the restore half cannot run, so a dump could only ever be a belief. Is the CREATEDB in db-init.sh applied AFTER readonly.sql, whose last line revokes it?"
-  FAILURES=$((FAILURES + 1))
-fi
-
-if backup_in_rw "${SCRATCH}" -v ON_ERROR_STOP=1 \
-     -c "CREATE TABLE probe(x int)" -c "INSERT INTO probe VALUES (1)" \
-     >/dev/null 2>&1; then
-  log "ALLOWED  write inside the throwaway database"
-else
-  fail "REFUSED  write inside the throwaway database — a restore writes, so this is the same failure as not having the database"
-  FAILURES=$((FAILURES + 1))
-fi
-
-if backup_rw -v ON_ERROR_STOP=1 -c "DROP DATABASE ${SCRATCH}" >/dev/null 2>&1; then
-  log "ALLOWED  drop the throwaway database"
-else
-  fail "REFUSED  drop the throwaway database — every run would leave one behind"
+  fail "ALLOWED  create a database (${createdb_state:-it succeeded}) — this role needs no CREATEDB: the backup restores into a private Postgres of its own. Run db-init.sh again; it ends with ALTER ROLE ... NOCREATEDB"
   FAILURES=$((FAILURES + 1))
 fi
 
@@ -196,4 +171,4 @@ if [ "${FAILURES}" -ne 0 ]; then
   fail "${FAILURES} check(s) failed for ${ROLE}"
   exit 1
 fi
-log "OK — ${ROLE} can take and verify a backup, and cannot write the ledger"
+log "OK — ${ROLE} can read the ledger, and can neither create a database nor write the ledger"

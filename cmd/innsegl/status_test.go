@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -44,7 +44,7 @@ func statusFixtureLocal(t *testing.T, components string, serviceUp bool, localBo
 	// The machine's own client service: its status route says what this
 	// test wants; everything else, the CLI's calls to the core included, is
 	// the real service.
-	svc := f.connectServed(t, func(service http.Handler) http.Handler {
+	f.connectServed(t, func(service http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != client.StatusPath {
 				service.ServeHTTP(w, r)
@@ -55,11 +55,11 @@ func statusFixtureLocal(t *testing.T, components string, serviceUp bool, localBo
 			}
 		})
 	})
-	local := "http://127.0.0.1:1" // nothing listens
-	if serviceUp {
-		local = svc.URL
+	socket := "" // the service's own, where connectServed serves it
+	if !serviceUp {
+		socket = filepath.Join(f.home, "none.sock") // nothing listens
 	}
-	return statusDeps{home: f.home, localURL: local}
+	return statusDeps{home: f.home, socket: socket}
 }
 
 // CLI-019 (PROPOSED for doc 07) — with the client service down, status says
@@ -141,14 +141,13 @@ func TestSIG015StatusSaysSigningIsFailingSinceWhenAndWhy(t *testing.T) {
 // (measured 2026-10-04). A client that answers slowly is up.
 func TestStatusWaitsLongerThanTheClientsOwnCoreProbe(t *testing.T) {
 	deps := statusFixture(t, `[{"name":"ledger","up":true}]`, false)
-	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	deps.socket = filepath.Join(deps.home, "slow.sock")
+	serveClientSocket(t, deps.socket, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(4 * time.Second)
 		if _, err := io.WriteString(w, `{"core_reachable":false,"revoked":false,"certificate_expires_at":"2026-10-05T00:00:00Z"}`); err != nil {
 			t.Error(err)
 		}
 	}))
-	t.Cleanup(slow.Close)
-	deps.localURL = slow.URL
 	var out, errOut bytes.Buffer
 	runStatus(t.Context(), nil, &out, &errOut, deps)
 	if strings.Contains(errOut.String(), "client service") {

@@ -67,6 +67,9 @@ type Status struct {
 	// Reason says why CanSign is false. Empty when it is true.
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
+	// TokenSecondsLeft is how long the CA's token has left (#601); zero when
+	// there is no live token to ask.
+	TokenSecondsLeft int64 `json:"token_seconds_left,omitempty"`
 }
 
 // Custodian holds the CA key store's custody on the core: it initialises the
@@ -235,14 +238,14 @@ func (c *Custodian) Status(ctx context.Context) Status {
 	case st.Sealed:
 		out.Reason = "the store is sealed; the operator's machine unlocks it"
 	default:
-		out.Reason = c.signingProblem(ctx)
+		out.Reason = c.signingProblem(ctx, &out.TokenSecondsLeft)
 		out.CanSign = out.Reason == ""
 	}
 	return out
 }
 
 // signingProblem answers why an unsealed store's CA cannot sign, or "".
-func (c *Custodian) signingProblem(ctx context.Context) string {
+func (c *Custodian) signingProblem(ctx context.Context, left *int64) string {
 	tok, err := os.ReadFile(c.TokenPath)
 	if err != nil || len(tok) == 0 {
 		return "the CA has no token yet"
@@ -256,6 +259,7 @@ func (c *Custodian) signingProblem(ctx context.Context) string {
 	case ttl <= 0:
 		return "the CA's token has expired"
 	}
+	*left = int64(ttl / time.Second)
 	pub, err := c.Store.PublicKey(ctx, string(tok), c.Key)
 	switch {
 	case errors.Is(err, ErrRefused):

@@ -27,6 +27,16 @@ const LogFileName = "innsegl-client.log"
 // SystemdUnit names the Linux systemd --user unit.
 const SystemdUnit = "innsegl-client.service"
 
+// ReleaseDir is where `make install-release` (scripts/install-release.sh)
+// puts the copy of innsegl that the hooks, the client service and scheduled
+// jobs run (#599): a folder owned by root, on macOS and Linux alike. A build
+// in a checkout is rewritten by every `go build`, by the operator or by any
+// agent working there; this copy changes only through sudo.
+const ReleaseDir = "/usr/local/libexec/innsegl"
+
+// ReleaseBinary is the installed copy itself.
+func ReleaseBinary() string { return filepath.Join(ReleaseDir, "innsegl") }
+
 // RenderPlist is the LaunchAgent that keeps `innsegl client serve` running
 // for the logged-in user. KeepAlive restarts it whenever it exits.
 // Interactive, not Background: the service unlocks the CA store with a
@@ -262,6 +272,33 @@ func (s Service) try(name string, args ...string) {
 
 func (s Service) launchdTarget() string {
 	return "gui/" + strconv.Itoa(s.UID) + "/" + LaunchdLabel
+}
+
+// LegacyBackupLabel names the host timer that ran scripts/backup-ledger.sh
+// from a checkout until #237 moved the ledger backup into the deployment.
+// Nothing installs it any more; a machine that had it keeps it until it is
+// removed.
+const LegacyBackupLabel = "dev.innsegl.backup-ledger"
+
+// LeftoverBackupJob is that timer's unit file and the one command that
+// removes it (#599). ok is false when no such file is there; path is where
+// it would be all the same. The job runs a script from a checkout, which
+// any agent working there can change, every day with nobody watching.
+func (s Service) LeftoverBackupJob() (path, remove string, ok bool) {
+	switch s.GOOS {
+	case "darwin":
+		path = filepath.Join(s.Home, "Library", "LaunchAgents", LegacyBackupLabel+".plist")
+		remove = "launchctl bootout gui/" + strconv.Itoa(s.UID) + "/" + LegacyBackupLabel + "; rm -f " + shellQuote(path)
+	case "linux":
+		dir := filepath.Join(s.Home, ".config", "systemd", "user")
+		path = filepath.Join(dir, LegacyBackupLabel+".timer")
+		remove = "systemctl --user disable --now " + LegacyBackupLabel + ".timer; rm -f " + shellQuote(path) + " " +
+			shellQuote(filepath.Join(dir, LegacyBackupLabel+".service")) + "; systemctl --user daemon-reload"
+	default:
+		return "", "", false
+	}
+	_, err := os.Lstat(path)
+	return path, remove, err == nil
 }
 
 // Uninstall stops the service and removes its definition. A service that
