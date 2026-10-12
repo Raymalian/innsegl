@@ -36,6 +36,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -286,4 +287,43 @@ func (a *Authenticator) Assert(assertion *protocol.CredentialAssertion, origin, 
 		return nil, fmt.Errorf("webauthntest: encoding the assertion response: %w", err)
 	}
 	return body, nil
+}
+
+// exported is an Authenticator as Export writes it.
+type exported struct {
+	Key          []byte `json:"key"`
+	CredentialID []byte `json:"credential_id"`
+	SignCount    uint32 `json:"sign_count"`
+}
+
+// Export writes the authenticator's private key, credential id and sign
+// counter, so a later process can be the same passkey (#617: a dev stack's
+// owner enrolled before `make update` signs in after it). The output holds a
+// private key: a test's own temporary file, never anything shipped.
+func (a *Authenticator) Export() ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(a.key)
+	if err != nil {
+		return nil, fmt.Errorf("webauthntest: encoding the private key: %w", err)
+	}
+	return json.Marshal(exported{Key: der, CredentialID: a.credentialID, SignCount: a.signCount})
+}
+
+// Import is the authenticator Export wrote.
+func Import(raw []byte) (*Authenticator, error) {
+	var e exported
+	if err := json.Unmarshal(raw, &e); err != nil {
+		return nil, fmt.Errorf("webauthntest: reading an export: %w", err)
+	}
+	if len(e.CredentialID) == 0 {
+		return nil, fmt.Errorf("webauthntest: the export has no credential id")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(e.Key)
+	if err != nil {
+		return nil, fmt.Errorf("webauthntest: reading the private key: %w", err)
+	}
+	key, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("webauthntest: the export's key is a %T, not a P-256 key", parsed)
+	}
+	return &Authenticator{key: key, credentialID: e.CredentialID, signCount: e.SignCount}, nil
 }

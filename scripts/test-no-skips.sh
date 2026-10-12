@@ -201,7 +201,20 @@ fi
 #       identity opens (TestASecureEnclaveRecipientEncryptsWithNoPlugin), and
 #       every other path of the bundle is exercised with an X25519 identity.
 #
-ALLOWED='TestASecureEnclaveIdentityOpensABundle|TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures|TestGenerateV5Fixtures'
+#   TestOPS208AnInPlaceUpdateKeepsTheDevStacksDataAndServesTheNewSurface
+#   TestOPS209AnUnlockKeyAloneUnlocksTheDevStack
+#       #617, ADR-0082. They run against a dev stack the developer brought up
+#       (make dev-stack, custody on, a dev age identity), never one a test
+#       starts: OPS-208 checks an in-place `make update` of a stack that has
+#       been running at the previous main, which no runner has, and OPS-209
+#       restarts that stack's key store. They skip unless
+#       INNSEGL_DEVSTACK_E2E=1, naming it. Every unit of the path they drive
+#       has its own case that never skips: AUTH-013..018 (the API on a real
+#       store), CLI-052..054 (the reseal), OPS-201..207. runbooks/ca-custody.md
+#       carries the command, and the rehearsal that ran them is recorded on
+#       #617.
+#
+ALLOWED='TestOPS208AnInPlaceUpdateKeepsTheDevStacksDataAndServesTheNewSurface|TestOPS209AnUnlockKeyAloneUnlocksTheDevStack|TestASecureEnclaveIdentityOpensABundle|TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures|TestGenerateV5Fixtures'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)
