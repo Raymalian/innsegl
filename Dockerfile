@@ -221,7 +221,7 @@ CMD ["help"]
 # lockfile is the pin. `npm run build` is `tsc --noEmit && vite build`, so an
 # image cannot be produced from source the compiler rejects.
 # ---------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS ui-build
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a AS ui-build
 
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
