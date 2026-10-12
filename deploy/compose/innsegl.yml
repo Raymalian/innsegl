@@ -16,7 +16,7 @@
 #                                  and the S3 gateway, which alone enforces
 #                                  object lock and alone is reachable — every
 #                                  other listener binds loopback
-#   innsegl-mcp         built      The MCP server (register/credential/event/
+#   innsegl-core         built      The MCP server (register/credential/event/
 #                                  sign/retire). ONLY SERVICE HOLDING THE SPIRE
 #                                  ADMIN CREDENTIAL
 #   innsegl-reconciler  built      Intent expiry, Rekor cross-check, drift
@@ -53,7 +53,7 @@
 #   deploy/compose/spire/register.sh
 #   docker compose -f deploy/compose/sigstore.yml up -d
 #   docker compose -f deploy/compose/innsegl.yml build
-#   deploy/compose/spire/register.sh          # now registers innsegl-mcp too
+#   deploy/compose/spire/register.sh          # now registers innsegl-core too
 #   docker compose -f deploy/compose/innsegl.yml up -d
 #
 # WHAT IS STILL NOT HERE, said plainly rather than left to be discovered:
@@ -336,7 +336,7 @@ x-parent-id: &parent-id ${INNSEGL_SPIRE_PARENT_ID:?run deploy/compose/spire/regi
 # `innsegl serve` defaults to `-identity-mode pseudonymous`, and in that mode
 # `internal/identity` refuses to start without a secret of at least 16 bytes.
 # #119 introduced that refusal deliberately; this file was not updated to
-# supply one, so innsegl-mcp crashlooped on a clean `up` (#124).
+# supply one, so innsegl-core crashlooped on a clean `up` (#124).
 #
 # WHY THERE IS NO SECRET IN THIS FILE. A pseudonym is
 # `HMAC(deployment_secret, field ‖ ":" ‖ value)` and the DEPLOYMENT half is the
@@ -345,7 +345,7 @@ x-parent-id: &parent-id ${INNSEGL_SPIRE_PARENT_ID:?run deploy/compose/spire/regi
 # ticket reference everywhere, and one resolved mapping would resolve it for
 # everybody — which is worse than not pseudonymising at all, because it looks
 # private and is not. So innsegl-identity-init below mints one per deployment
-# into a volume, and this is the path it writes and innsegl-mcp reads.
+# into a volume, and this is the path it writes and innsegl-core reads.
 #
 # DECLARED ONCE, AS AN ANCHOR, for sigstore.yml's stated reason: it is used by
 # a writer and a reader, and two copies of a default is how they come to
@@ -393,7 +393,7 @@ x-admin-key-file: &admin-key-file ${INNSEGL_MCP_ADMIN_LISTEN:+/run/innsegl/admin
 # RM-246 (#391) — the gateway's own TLS certificate authority.
 #
 # THE PRIVATE KEY NEVER TOUCHES THE HOST. It lives only in the named volume
-# below (innsegl-gateway-ca-key), mounted read-write into innsegl-mcp and NO
+# below (innsegl-gateway-ca-key), mounted read-write into innsegl-core and NO
 # OTHER SERVICE, the same one-writer shape the admin signing key already
 # uses. Created on first start, kept across restarts by the volume — a
 # `down -v` costs the CA the same way it costs every other minted-not-backed
@@ -405,11 +405,11 @@ x-admin-key-file: &admin-key-file ${INNSEGL_MCP_ADMIN_LISTEN:+/run/innsegl/admin
 # default). A host folder, ~/.innsegl/ca unless INNSEGL_GATEWAY_CA_HOST_DIR
 # says otherwise — the same $HOME-relative-with-an-override shape
 # INNSEGL_BACKUP_HOST_DIR already uses below. It must be writable by uid 1000
-# (innsegl-mcp's own user); when it is not, the gateway fails to start and
+# (innsegl-core's own user); when it is not, the gateway fails to start and
 # says so, the same posture the CA key directory already takes.
 #
 # No anchor here (unlike this file's other single-purpose paths): the
-# expression is used in exactly one place, innsegl-mcp's own volumes: below,
+# expression is used in exactly one place, innsegl-core's own volumes: below,
 # spelled out there directly.
 # ----------------------------------------------------------------------------
 
@@ -888,7 +888,7 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      # The path it writes. innsegl-mcp reads the same anchor.
+      # The path it writes. innsegl-core reads the same anchor.
       INNSEGL_IDENTITY_SECRET_FILE: *identity-secret-file
       INNSEGL_REPO_KEY_FILE: *repo-key-file
     volumes:
@@ -923,7 +923,7 @@ services:
     command: ["/admin-credential-init.sh"]
     restart: "no"
     read_only: true
-    # root, so the key set can be chowned to the uid innsegl-mcp runs as. The
+    # root, so the key set can be chowned to the uid innsegl-core runs as. The
     # volume is created root-owned by Docker and the MCP must be able to read
     # it without this stack running the MCP as root.
     user: "0:0"
@@ -932,7 +932,7 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      # The paths it writes. innsegl-mcp reads the first from the same anchor.
+      # The paths it writes. innsegl-core reads the first from the same anchor.
       INNSEGL_MCP_ADMIN_JWKS_FILE: *admin-jwks-file
       INNSEGL_ADMIN_CREDENTIAL_KEY_FILE: *admin-key-file
     volumes:
@@ -942,7 +942,7 @@ services:
       - innsegl-admin-key:/run/innsegl/admin-key
 
   # --------------------------------------------------------------------------
-  # innsegl-mcp — doc 05 §1's "The MCP server (register/credential/event/sign/
+  # innsegl-core — doc 05 §1's "The MCP server (register/credential/event/sign/
   # retire). Only service holding SPIRE admin credential."
   #
   # NETWORKS: four, and the list IS the access-control list.
@@ -967,9 +967,9 @@ services:
   # defaulted to warning because nothing created one. Something creates one
   # now, so the server refuses to start behind anything else.
   # --------------------------------------------------------------------------
-  innsegl-mcp:
+  innsegl-core:
     <<: *innsegl-build
-    container_name: innsegl-mcp
+    container_name: innsegl-core
     restart: unless-stopped
     # Longer than INNSEGL_GATEWAY_SHUTDOWN_TIMEOUT: the gateway's drain.
     stop_grace_period: 2m30s
@@ -991,17 +991,22 @@ services:
       innsegl-object-init:
         condition: service_completed_successfully
     networks:
-      - innsegl-ledger
-      - innsegl-spire-admin
-      - innsegl-sigstore
-      - innsegl-mcp-clients
+      innsegl-ledger: {}
+      innsegl-spire-admin: {}
+      innsegl-sigstore: {}
+      innsegl-mcp-clients:
+        # The container had the name below until RM-346 (#594). That old DNS name
+        # answers here for one release, so a client still configured with it
+        # reaches the core through the switch. Removed in the release after.
+        aliases:
+          - innsegl-mcp
       # The sealer's. Only the object store's S3 port, which enforces object
       # lock, answers here; its other listeners bind loopback (#451).
-      - innsegl-objects
+      innsegl-objects: {}
     labels:
       # The hash of what it reads at start, set by scripts/compose-up.py:
       # a changed input recreates it (OPS-165).
-      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_MCP:-}
+      dev.innsegl.inputs: ${INNSEGL_INPUTS_INNSEGL_CORE:-}
       # The selector register.sh registers. Ours, not compose's own label
       # scheme, and part of the attestation surface rather than metadata.
       dev.innsegl.component: mcp
@@ -1412,11 +1417,11 @@ services:
   # host. NOT A DOC 05 §1 ROW — a job, the same shape as demo-agent and
   # innsegl-canary above: it runs once, under a profile, and exits.
   #
-  # REUSES innsegl-mcp's image, uid and dev.innsegl.component LABEL ON
+  # REUSES innsegl-core's image, uid and dev.innsegl.component LABEL ON
   # PURPOSE. Those five properties are exactly the selectors register.sh's
   # bootstrap entry matches (spiffe://innsegl.dev/innsegl/mcp, server.conf's
   # only admin_ids value) — see register_mcp() there. So this container
-  # attests as the SAME identity the running innsegl-mcp holds; no second
+  # attests as the SAME identity the running innsegl-core holds; no second
   # admin identity is registered and neither server.conf nor
   # authz-policy.rego changes. cmd/innsegl/initsignharness_test.go's own
   # comment on signE2EAdminID calls this "the right impersonation, not a
@@ -1426,7 +1431,7 @@ services:
   #
   # WHAT IT DOES NOT NEED: no published port, ever — `docker compose run` has
   # nothing to publish and nothing to forget to unpublish. Two networks only,
-  # both already declared for innsegl-mcp: the admin path and Fulcio/Rekor.
+  # both already declared for innsegl-core: the admin path and Fulcio/Rekor.
   # No route to postgres, the object store, or the dashboard.
   #
   # THE COST, MEASURED (see runbooks/spire-admin-access.md for the full
@@ -1497,7 +1502,7 @@ services:
   #
   #   * server.conf's admin_ids names exactly one identity,
   #     spiffe://innsegl.dev/innsegl/mcp, matched by register.sh's five
-  #     selectors for the innsegl-mcp CONTAINER specifically (one of them is
+  #     selectors for the innsegl-core CONTAINER specifically (one of them is
   #     docker:label:dev.innsegl.component:mcp — this service's label is
   #     "reconciler", so it cannot match that entry).
   #   * doc 05 §1 states, for that row, "Only service holding SPIRE admin
@@ -1517,12 +1522,12 @@ services:
   # An operator who HAS made that decision turns this pass on with three
   # variables — INNSEGL_SPIRE_ADDRESS (host:port), INNSEGL_TRUST_DOMAIN
   # (already set below), and INNSEGL_WORKLOAD_API_ADDRESS (defaults to the
-  # same socket innsegl-mcp reads) — plus this service joining
-  # innsegl-spire-admin and mounting spire-agent-socket the way innsegl-mcp
+  # same socket innsegl-core reads) — plus this service joining
+  # innsegl-spire-admin and mounting spire-agent-socket the way innsegl-core
   # does. None of that is done here while the identity question stands.
   # --------------------------------------------------------------------------
   # THE `separate` PROFILE (ADR-0056, #339). By default the reconcile loop
-  # runs inside innsegl-mcp (see INNSEGL_MCP_ALSO there), and this container is
+  # runs inside innsegl-core (see INNSEGL_MCP_ALSO there), and this container is
   # not started. The multi-replica topology (doc 05 §2) runs it on its own:
   #
   #   INNSEGL_MCP_ALSO=reap docker compose -f innsegl.yml --profile separate up -d
@@ -1586,7 +1591,7 @@ services:
     volumes:
       # ADR-0078: the credentials this service uses, and no others.
       - innsegl-credential-appender:/run/innsegl/credentials/appender:ro
-      # READ-ONLY. innsegl-mcp holds the one read-write mount, for receiving
+      # READ-ONLY. innsegl-core holds the one read-write mount, for receiving
       # pushes; a reconciler that could write the evidence it judges could
       # also make its own findings go away.
       - innsegl-mirror:/mirror:ro
@@ -1778,7 +1783,7 @@ services:
   # pseudonymisation secret, the SPIRE upstream CA, the gateway CA key and the
   # trust history. The manifest inside carries every file's sha256. The
   # bundles land in innsegl-trust-backups, the newest 14 kept, and
-  # innsegl-mcp serves them to the operator's enrolled machine, which keeps
+  # innsegl-core serves them to the operator's enrolled machine, which keeps
   # its own copies.
   #
   # ENCRYPTED TO PUBLIC KEYS ONLY. INNSEGL_TRUST_BACKUP_RECIPIENTS is a
@@ -1796,7 +1801,7 @@ services:
   # ROOT, AND WHY. The key volumes are owned by four different images' users,
   # and some files are 0400. The process runs as uid 0 with every capability
   # dropped but DAC_READ_SEARCH, to read them, and CHOWN, to hand what it
-  # writes to uid 1000 for innsegl-mcp to serve. Every key volume is mounted
+  # writes to uid 1000 for innsegl-core to serve. Every key volume is mounted
   # read-only; the root filesystem is read-only; the only network is the log
   # database's.
   #
@@ -1879,7 +1884,7 @@ services:
       - innsegl-trust-backups:/trust-backups
 
   # THE `separate` PROFILE, as for innsegl-reconciler above: by default the
-  # seal loop runs inside innsegl-mcp and this container is not started.
+  # seal loop runs inside innsegl-core and this container is not started.
   # `--profile separate` with INNSEGL_MCP_ALSO=reap runs it on its own.
   innsegl-sealer:
     <<: *innsegl-build
@@ -1919,8 +1924,8 @@ services:
       INNSEGL_OBJECT_STORE_PREFIX: *object-store-prefix
       INNSEGL_OBJECT_STORE_RETENTION_MODE: ${INNSEGL_OBJECT_STORE_RETENTION_MODE:-COMPLIANCE}
       INNSEGL_SEAL_INTERVAL: ${INNSEGL_SEAL_INTERVAL:-1m}
-      # The scheduled canary, as on innsegl-mcp: this container runs the
-      # sealer, so it runs the canary and writes the file innsegl-mcp reports.
+      # The scheduled canary, as on innsegl-core: this container runs the
+      # sealer, so it runs the canary and writes the file innsegl-core reports.
       INNSEGL_CANARY_INTERVAL: ${INNSEGL_CANARY_INTERVAL:-24h}
       INNSEGL_CANARY_STATUS_FILE: /run/innsegl/canary/worm-canary.json
       # NO $INNSEGL_OBJECT_STORE_RETENTION HERE, AND THAT IS THE FIX RATHER
@@ -1962,7 +1967,7 @@ services:
   # target: the runtime image plus web/'s build at INNSEGL_API_UI_DIR), the
   # query API and the proof BFF on one origin, so the browser's relative
   # /api/v1 requests need no proxy. It terminates the browser's TLS on 8443
-  # with the dashboard's own certificate and key, which innsegl-mcp writes to
+  # with the dashboard's own certificate and key, which innsegl-core writes to
   # the innsegl-dashboard-tls volume (RM-311, ADR-0066's amendment) and renews;
   # this service mounts it read-only and reads the file again when it changes.
   # Plain HTTP stays on 8082 for localhost and for the health check. The
@@ -1970,7 +1975,7 @@ services:
   # internal/api/ui.go.
   #
   # ITS OWN IMAGE, NOT innsegl:local. A UI change rebuilds and restarts this
-  # service alone; innsegl-mcp and the other Go services keep the runtime
+  # service alone; innsegl-core and the other Go services keep the runtime
   # image, and the core is not restarted for a dashboard change.
   #
   # THE DSN IS $INNSEGL_API_DSN AND IT NAMES THE READER. Not $INNSEGL_LEDGER_DSN,
@@ -2059,7 +2064,7 @@ services:
       # Plain HTTP, for localhost (ADR-0066's amendment) and the health check.
       INNSEGL_API_LISTEN: 0.0.0.0:8082
       # #475: the dashboard's HTTPS at the core's name, from the certificate
-      # and key innsegl-mcp writes to the innsegl-dashboard-tls volume
+      # and key innsegl-core writes to the innsegl-dashboard-tls volume
       # (mounted below). Set together: `innsegl api` refuses one without the
       # other.
       INNSEGL_API_TLS_LISTEN: 0.0.0.0:8443
@@ -2080,7 +2085,7 @@ services:
       INNSEGL_API_LOG_DIR: /agentlog
       INNSEGL_API_LOG_DAYS: ${INNSEGL_LOG_DAYS:-90}
       # RM-237's derived agent-message key (ADR-0061 decision 2), written by
-      # innsegl-mcp to the innsegl-message-key volume, so this process can
+      # innsegl-core to the innsegl-message-key volume, so this process can
       # VERIFY a brief or a reply's keyed digest without the identity secret
       # it was derived from.
       INNSEGL_API_MESSAGE_KEY_DIR: /message-key
@@ -2103,22 +2108,22 @@ services:
       - innsegl-credential-authwriter:/run/innsegl/credentials/authwriter:ro
       - innsegl-credential-resolver:/run/innsegl/credentials/resolver:ro
       - innsegl-credential-sso-key:/run/innsegl/credentials/sso-key:ro
-      # READ-ONLY. innsegl-mcp holds the one read-write mount, for receiving
+      # READ-ONLY. innsegl-core holds the one read-write mount, for receiving
       # pushes. See the header above.
       - innsegl-mirror:/mirror:ro
       # READ-ONLY: retention belongs to the process that writes the bodies.
       - ${INNSEGL_LOG_DIR:-${HOME}/.innsegl/log}:/agentlog:ro
-      # READ-ONLY. The only other mount of this volume is innsegl-mcp's
+      # READ-ONLY. The only other mount of this volume is innsegl-core's
       # read-write one: one writer, one reader.
       - innsegl-message-key:/message-key:ro
       # READ-ONLY: the gateway's public CA certificate, from the host folder
-      # innsegl-mcp writes it to (*gateway-ca-host-dir). Never the key.
+      # innsegl-core writes it to (*gateway-ca-host-dir). Never the key.
       - ${INNSEGL_GATEWAY_CA_HOST_DIR:-${HOME}/.innsegl/ca}:/run/innsegl/gateway-ca:ro
-      # READ-ONLY: the dashboard's certificate and key (RM-311). innsegl-mcp
+      # READ-ONLY: the dashboard's certificate and key (RM-311). innsegl-core
       # is the one writer and renews it; this process reads it again when it
       # changes. The core's file is 0600 for uid 1000, this service's user.
       - innsegl-dashboard-tls:/run/innsegl/dashboard-tls:ro
-      # READ-ONLY: the trust history (ADR-0073). innsegl-mcp writes it.
+      # READ-ONLY: the trust history (ADR-0073). innsegl-core writes it.
       - innsegl-trust-history:/run/innsegl/trust:ro
     ports:
       # The dashboard (#475), on the host ports the nginx container used, so
@@ -2170,7 +2175,7 @@ services:
       dockerfile: deploy/docker/demo-agent.Dockerfile
     container_name: innsegl-demo-agent
     depends_on:
-      innsegl-mcp:
+      innsegl-core:
         condition: service_healthy
     networks:
       - innsegl-mcp-clients
@@ -2182,7 +2187,7 @@ services:
     # there is no safe.directory to inject.
     user: "1000:1000"
     environment:
-      INNSEGL_MCP_URL: http://innsegl-mcp:8080
+      INNSEGL_MCP_URL: http://innsegl-core:8080
       INNSEGL_WORKSPACE: /work
       INNSEGL_DEMO_REPO: ${INNSEGL_DEMO_REPO:-github.com/innsegl-demo/scratch}
     volumes:
@@ -2196,7 +2201,7 @@ services:
   # innsegl-canary — SEG-005's deletion canary, ON DEMAND, under a profile.
   #
   # The SCHEDULED run doc 05 §2 requires is not this service: it runs from the
-  # sealer's loop inside innsegl-mcp (INNSEGL_CANARY_INTERVAL there). This one
+  # sealer's loop inside innsegl-core (INNSEGL_CANARY_INTERVAL there). This one
   # is the same check by hand, so the object-lock claim can be MEASURED on a
   # first run rather than read:
   #
@@ -2250,7 +2255,7 @@ networks:
 
   # THE WRITE PATH. doc 05 §1's "postgres write role reachable only from the
   # services that need them".
-  # MEMBERS: postgres, innsegl-db-init, innsegl-mcp, innsegl-reconciler,
+  # MEMBERS: postgres, innsegl-db-init, innsegl-core, innsegl-reconciler,
   # innsegl-sealer. Nothing else — in particular not the dashboard, which is
   # the point of the second ledger network below.
   innsegl-ledger:
@@ -2288,7 +2293,7 @@ networks:
   # The agents' network, and the MCP's only non-internal one — a container on
   # internal networks alone CANNOT have a port published (measured, see
   # sigstore.yml), and the MCP is the service agents have to reach.
-  # MEMBERS: innsegl-mcp, demo-agent, and whatever terminates TLS in front.
+  # MEMBERS: innsegl-core, demo-agent, and whatever terminates TLS in front.
   innsegl-mcp-clients:
     name: innsegl-mcp-clients
 
@@ -2301,9 +2306,9 @@ networks:
     name: innsegl-dashboard-frontend
 
   # DECLARED IN spire.yml, JOINED HERE. spire.yml declared it with one member
-  # and said why: "when innsegl-mcp arrives joining this network is the whole
+  # and said why: "when innsegl-core arrives joining this network is the whole
   # of what grants it admin reachability". This is that arrival.
-  # MEMBERS: spire-server, innsegl-mcp. Nothing else, ever.
+  # MEMBERS: spire-server, innsegl-core. Nothing else, ever.
   innsegl-spire-admin:
     name: ${INNSEGL_SPIRE_ADMIN_NETWORK:-innsegl-spire-admin}
     external: true
@@ -2380,23 +2385,23 @@ volumes:
   # it computes a message digest and nothing else, and cannot mint a run
   # token or a pseudonym, both derived from the identity secret under a
   # different, domain-separated label (agentmessagekey.go's own argument).
-  # MOUNTED BY: innsegl-mcp (rw, one file per key id, written idempotently
+  # MOUNTED BY: innsegl-core (rw, one file per key id, written idempotently
   # and never logged) and innsegl-api (ro). Nothing else, ever.
   innsegl-message-key:
   # The per-repository mirror (ADR-0065): one bare repository per repository
   # id, fed by hosted clients' authenticated pushes. The only place the core
   # reads a repository from.
-  # MOUNTED BY: innsegl-mcp (rw), innsegl-api (ro), innsegl-reconciler (ro).
+  # MOUNTED BY: innsegl-core (rw), innsegl-api (ro), innsegl-reconciler (ro).
   innsegl-mirror:
   # The working trees the `sign_commit` MCP tool resolves `repo` under (doc 02
   # §5: `repo` is an identifier, and the tree it names is the DEPLOYMENT's,
   # not the caller's). No repository reader on the core reads it.
-  # MOUNTED BY: innsegl-mcp (rw), demo-agent (rw).
+  # MOUNTED BY: innsegl-core (rw), demo-agent (rw).
   innsegl-workspace:
 
   # #264's PUBLIC key set: the keys whose repository-scoped credentials the
   # identity-lifecycle listener admits.
-  # MOUNTED BY: innsegl-admin-credential-init (rw), innsegl-mcp (ro).
+  # MOUNTED BY: innsegl-admin-credential-init (rw), innsegl-core (ro).
   innsegl-admin-jwks:
 
   # #264's PRIVATE signing key. MOUNTED BY: innsegl-admin-credential-init (rw)
@@ -2405,7 +2410,7 @@ volumes:
   # exists to protect.
   #
   # #266 — WHO READS IT, AND HOW. No shipped command does any more:
-  # `innsegl retire` runs inside innsegl-mcp under the core's own SPIRE admin
+  # `innsegl retire` runs inside innsegl-core under the core's own SPIRE admin
   # identity (ADR-0077), and the admin listener this key guards is
   # deprecated with the rest of the MCP wire surface. A caller that reaches
   # the identity lifecycle from the host mints its own
@@ -2435,7 +2440,7 @@ volumes:
   innsegl-admin-key:
 
   # RM-246 (#391) — the gateway's own TLS certificate authority's PRIVATE
-  # key. MOUNTED BY: innsegl-mcp, read-write, and no other running service —
+  # key. MOUNTED BY: innsegl-core, read-write, and no other running service —
   # a service that could read this could mint a certificate for the gateway's
   # own loopback address. The one exception is innsegl-trust-backup
   # (ADR-0074), read-only, which reads it into an encrypted bundle and holds
@@ -2451,7 +2456,7 @@ volumes:
   # restart; the leaf certificates it signs are short-lived by design (RM-246).
   innsegl-gateway-ca-key:
 
-  # The dashboard's certificate and key (RM-311). MOUNTED BY: innsegl-mcp
+  # The dashboard's certificate and key (RM-311). MOUNTED BY: innsegl-core
   # (rw), innsegl-api (ro). Losing it costs nothing: the core writes a
   # new one on its next start.
   innsegl-dashboard-tls:
@@ -2459,7 +2464,7 @@ volumes:
   # THIS DEPLOYMENT's pseudonymisation secret, and the reason it is a volume
   # rather than a value in this file: a secret in the file would be the same
   # secret in every deployment (#124, ADR-0041).
-  # MOUNTED BY: innsegl-identity-init (rw), innsegl-mcp (ro), and
+  # MOUNTED BY: innsegl-identity-init (rw), innsegl-core (ro), and
   # innsegl-trust-backup (ro, ADR-0074: into an encrypted bundle). No read
   # path in this stack has any use for it — the secret CREATES a pseudonym
   # and is needed to resolve one never.
@@ -2481,7 +2486,7 @@ volumes:
   # Public material only. A trust volume, for the reason the identity secret
   # is one: losing it loses the record of which roots were this deployment's,
   # and a commit signed under a rotated-away root then stops verifying.
-  # MOUNTED BY: innsegl-mcp (rw), innsegl-api (ro), innsegl-trust-backup (ro).
+  # MOUNTED BY: innsegl-core (rw), innsegl-api (ro), innsegl-trust-backup (ro).
   innsegl-trust-history:
     name: ${INNSEGL_TRUST_HISTORY_VOLUME:-${COMPOSE_PROJECT_NAME:-innsegl-core}_innsegl-trust-history}
     external: ${INNSEGL_TRUST_VOLUMES_EXTERNAL:-false}
@@ -2514,12 +2519,12 @@ volumes:
   # ADR-0074: the encrypted trust-key bundles and the producer's status.
   # Ciphertext only. Losing it loses backups, not keys: the operator's
   # machine keeps its own copies.
-  # MOUNTED BY: innsegl-trust-backup (rw), innsegl-mcp (ro).
+  # MOUNTED BY: innsegl-trust-backup (rw), innsegl-core (ro).
   innsegl-trust-backups:
 
   # doc 05 §2: the scheduled WORM canary's last result, one small JSON file.
   # Not a trust volume: losing it costs one "no run recorded" until the next
-  # run. MOUNTED BY: innsegl-mcp (rw), innsegl-sealer (rw; one of the two runs
+  # run. MOUNTED BY: innsegl-core (rw), innsegl-sealer (rw; one of the two runs
   # the sealer at a time).
   innsegl-canary-status:
 
@@ -2545,7 +2550,7 @@ volumes:
   # <project>_<key>, so spire.yml's `spire-agent-socket` is
   # `innsegl-spire_spire-agent-socket`; overridable so an ADR-0022 test overlay
   # can point at a per-process SPIRE stack's socket.
-  # MOUNTED BY: spire-agent (rw, in its own project) and innsegl-mcp.
+  # MOUNTED BY: spire-agent (rw, in its own project) and innsegl-core.
   spire-agent-socket:
     name: ${INNSEGL_SPIRE_AGENT_SOCKET_VOLUME:-innsegl-spire_spire-agent-socket}
     external: true

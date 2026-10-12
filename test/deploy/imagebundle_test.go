@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // The images a deployment runs can be built once, on another machine, and
@@ -16,17 +18,6 @@ import (
 // from, and refuses it otherwise. These tests hold the labels, the inputs, the
 // compose file and the Makefile together; scripts/image-bundle-selftest.sh
 // drives the accept-or-refuse path itself.
-
-// makeRecipe is the recipe of one Makefile target: every line after its rule
-// line up to the first blank line.
-func makeRecipe(t *testing.T, mk, target string) string {
-	t.Helper()
-	m := regexp.MustCompile(`(?ms)^` + regexp.QuoteMeta(target) + `:[^\n]*\n(.*?)\n\n`).FindStringSubmatch(mk)
-	if m == nil {
-		t.Fatalf("the Makefile has no %s target", target)
-	}
-	return m[1]
-}
 
 func makeVar(t *testing.T, mk, name string) []string {
 	t.Helper()
@@ -44,10 +35,10 @@ func makeVar(t *testing.T, mk, name string) []string {
 // Dockerfile. Without these, a bundle built from other UI sources, or another
 // backup stage, would match the Go commit and be accepted.
 func TestEveryBuiltImageIsLabelledWithTheCommitOfItsInputs(t *testing.T) {
-	root := repoRoot(t)
-	mk := readFile(t, filepath.Join(root, "Makefile"))
-	df := readFile(t, filepath.Join(root, "Dockerfile"))
-	stack := readFile(t, filepath.Join(root, "deploy", "compose", "innsegl.yml"))
+	root := deploytest.RepoRoot(t)
+	mk := deploytest.ReadFile(t, filepath.Join(root, "Makefile"))
+	df := deploytest.ReadFile(t, filepath.Join(root, "Dockerfile"))
+	stack := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "innsegl.yml"))
 
 	ui := map[string]bool{}
 	for _, in := range makeVar(t, mk, "UI_IMAGE_INPUTS") {
@@ -66,12 +57,12 @@ func TestEveryBuiltImageIsLabelledWithTheCommitOfItsInputs(t *testing.T) {
 		}
 	}
 
-	api := dockerfileStage(t, df, "api")
+	api := deploytest.DockerfileStage(t, df, "api")
 	if !regexp.MustCompile(`(?m)^ARG UI_COMMIT=unknown$`).MatchString(api) ||
 		!regexp.MustCompile(`(?m)^LABEL dev\.innsegl\.ui-commit=\$\{UI_COMMIT\}$`).MatchString(api) {
 		t.Error("the api stage does not label its image with the UI's commit")
 	}
-	backup := dockerfileStage(t, df, "backup")
+	backup := deploytest.DockerfileStage(t, df, "backup")
 	if !regexp.MustCompile(`(?m)^ARG COMMIT=unknown$`).MatchString(backup) ||
 		!regexp.MustCompile(`(?m)^LABEL dev\.innsegl\.commit=\$\{COMMIT\}$`).MatchString(backup) {
 		t.Error("the backup stage does not label its image with its commit")
@@ -88,8 +79,8 @@ func TestEveryBuiltImageIsLabelledWithTheCommitOfItsInputs(t *testing.T) {
 	}
 
 	// The build is innsegl-images (OPS-160); the start is innsegl-here-services.
-	images := makeRecipe(t, mk, "innsegl-images")
-	here := makeRecipe(t, mk, "innsegl-here-services")
+	images := deploytest.MakeRecipe(t, mk, "innsegl-images")
+	here := deploytest.MakeRecipe(t, mk, "innsegl-here-services")
 	for _, want := range []string{
 		"INNSEGL_COMMIT='$(GO_IMAGE_COMMIT)'",
 		"INNSEGL_UI_COMMIT='$(UI_IMAGE_COMMIT)'",
@@ -105,11 +96,11 @@ func TestEveryBuiltImageIsLabelledWithTheCommitOfItsInputs(t *testing.T) {
 // builds them when none is; either way the start that follows never builds.
 // A bundle that fails its checks stops the target before anything starts.
 func TestTheHostTakesABundleOrBuildsAndTheStartNeverBuilds(t *testing.T) {
-	mk := readFile(t, filepath.Join(repoRoot(t), "Makefile"))
+	mk := deploytest.ReadFile(t, filepath.Join(deploytest.RepoRoot(t), "Makefile"))
 	// innsegl-images finds, loads or builds; innsegl-here-services has it as a
 	// prerequisite, so the images are in place before it registers or starts.
-	images := makeRecipe(t, mk, "innsegl-images")
-	here := makeRecipe(t, mk, "innsegl-here-services")
+	images := deploytest.MakeRecipe(t, mk, "innsegl-images")
+	here := deploytest.MakeRecipe(t, mk, "innsegl-here-services")
 
 	find := strings.Index(images, "scripts/image-bundle.sh find")
 	load := strings.Index(images, "scripts/image-bundle.sh load")
@@ -152,12 +143,12 @@ func TestTheHostTakesABundleOrBuildsAndTheStartNeverBuilds(t *testing.T) {
 // `make image-bundle` builds for the deployment host's platform, amd64 unless
 // the operator says otherwise, through the same script the host checks with.
 func TestImageBundleBuildsForTheHostPlatform(t *testing.T) {
-	root := repoRoot(t)
-	mk := readFile(t, filepath.Join(root, "Makefile"))
+	root := deploytest.RepoRoot(t)
+	mk := deploytest.ReadFile(t, filepath.Join(root, "Makefile"))
 	if !regexp.MustCompile(`(?m)^INNSEGL_IMAGE_PLATFORM \?= linux/amd64$`).MatchString(mk) {
 		t.Error("the bundle's platform is not linux/amd64 by default, overridable")
 	}
-	if !strings.Contains(makeRecipe(t, mk, "image-bundle"), "$(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh create") {
+	if !strings.Contains(deploytest.MakeRecipe(t, mk, "image-bundle"), "$(IMAGE_BUNDLE_ENV) scripts/image-bundle.sh create") {
 		t.Error("make image-bundle does not run scripts/image-bundle.sh create")
 	}
 	phony := regexp.MustCompile(`(?ms)^\.PHONY:(.*?)\n\n`).FindStringSubmatch(mk)
@@ -176,9 +167,9 @@ func TestImageBundleBuildsForTheHostPlatform(t *testing.T) {
 // A bundle's images are retagged to the names compose runs. Those names are
 // compose's defaults, so the two must not drift apart.
 func TestTheBundleRetagsToTheImagesComposeRuns(t *testing.T) {
-	root := repoRoot(t)
-	stack := readFile(t, filepath.Join(root, "deploy", "compose", "innsegl.yml"))
-	script := readFile(t, filepath.Join(root, "scripts", "image-bundle.sh"))
+	root := deploytest.RepoRoot(t)
+	stack := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "innsegl.yml"))
+	script := deploytest.ReadFile(t, filepath.Join(root, "scripts", "image-bundle.sh"))
 	for _, ref := range []string{
 		"${INNSEGL_IMAGE:-innsegl:local}",
 		"${INNSEGL_API_IMAGE:-innsegl-api:local}",
@@ -196,11 +187,11 @@ func TestTheBundleRetagsToTheImagesComposeRuns(t *testing.T) {
 // A bundle is a build artifact: it never enters git, and never enters the
 // build context, which is uploaded to the daemon whole on every build.
 func TestBundlesStayOutOfGitAndTheBuildContext(t *testing.T) {
-	root := repoRoot(t)
-	if !regexp.MustCompile(`(?m)^dist/$`).MatchString(readFile(t, filepath.Join(root, ".gitignore"))) {
+	root := deploytest.RepoRoot(t)
+	if !regexp.MustCompile(`(?m)^dist/$`).MatchString(deploytest.ReadFile(t, filepath.Join(root, ".gitignore"))) {
 		t.Error(".gitignore does not ignore dist/")
 	}
-	if !regexp.MustCompile(`(?m)^dist$`).MatchString(readFile(t, filepath.Join(root, ".dockerignore"))) {
+	if !regexp.MustCompile(`(?m)^dist$`).MatchString(deploytest.ReadFile(t, filepath.Join(root, ".dockerignore"))) {
 		t.Error(".dockerignore does not exclude dist")
 	}
 }
@@ -212,8 +203,8 @@ func TestBundlesStayOutOfGitAndTheBuildContext(t *testing.T) {
 // an arm64 build for linux/amd64 stopped at the gitsign step. It installs to
 // GOPATH and copies from whichever directory the Go toolchain chose.
 func TestTheBuildStageCrossCompilesGitsign(t *testing.T) {
-	df := readFile(t, filepath.Join(repoRoot(t), "Dockerfile"))
-	build := dockerfileStage(t, df, "build")
+	df := deploytest.ReadFile(t, filepath.Join(deploytest.RepoRoot(t), "Dockerfile"))
+	build := deploytest.DockerfileStage(t, df, "build")
 	for _, run := range regexp.MustCompile(`(?ms)^RUN .*?[^\\]$`).FindAllString(build, -1) {
 		if strings.Contains(run, "go install") && strings.Contains(run, "GOARCH=") && strings.Contains(run, "GOBIN=") {
 			t.Errorf("a cross-compiling go install sets GOBIN, which go refuses:\n%s", run)

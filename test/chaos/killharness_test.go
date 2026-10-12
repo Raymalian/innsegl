@@ -1053,7 +1053,7 @@ func k9BuildServer(t *testing.T, root string) string {
 
 // writeAdminPEMs mints the admin SVID and puts it where a subprocess can read
 // it. In a deployment the MCP is an attested workload and holds no files; there
-// is no attested innsegl-mcp workload on this host and the containerised
+// is no attested innsegl-core workload on this host and the containerised
 // agent's Workload API socket is inside the container.
 func (c *k9Campaign) writeAdminPEMs(t *testing.T) string {
 	t.Helper()

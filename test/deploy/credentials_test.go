@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -71,7 +73,7 @@ const legacyConstantLine = "LEDGER_OWNER_LEGACY_PUBLIC_PASSWORD='innsegl-compose
 
 func credentialShippedFiles(t *testing.T) []string {
 	t.Helper()
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	out, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files",
 		"deploy", "runbooks", "scripts", "Dockerfile", "Makefile").Output()
 	if err != nil {
@@ -85,7 +87,7 @@ func credentialShippedFiles(t *testing.T) []string {
 }
 
 func TestOPS130NoShippedFileDefaultsAnyCredential(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	for _, file := range credentialShippedFiles(t) {
 		body, err := os.ReadFile(filepath.Join(root, file))
 		if err != nil {
@@ -134,7 +136,7 @@ func emptyReference(v string) bool {
 
 // The constant exists exactly once, where the move reads it.
 func TestOPS130TheOldOwnerPasswordIsOneNamedConstant(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	n := 0
 	for _, file := range credentialShippedFiles(t) {
 		body, err := os.ReadFile(filepath.Join(root, file))
@@ -157,12 +159,12 @@ func TestOPS130TheOldOwnerPasswordIsOneNamedConstant(t *testing.T) {
 
 // renderAll renders a compose file set with every profile on, so no service is
 // left out of a mount-table read.
-func renderAll(t *testing.T, files ...string) composeDoc {
+func renderAll(t *testing.T, files ...string) deploytest.ComposeDoc {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker is not on PATH: %v", err)
 	}
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	args := []string{"compose"}
 	for _, f := range files {
 		args = append(args, "-f", filepath.Join(root, f))
@@ -180,7 +182,7 @@ func renderAll(t *testing.T, files ...string) composeDoc {
 	if err != nil {
 		t.Fatalf("docker compose %v config: %v\n%s", files, err, stderr.String())
 	}
-	var doc composeDoc
+	var doc deploytest.ComposeDoc
 	if err := json.Unmarshal(out, &doc); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +192,7 @@ func renderAll(t *testing.T, files ...string) composeDoc {
 // credentialMounts lists, per service, the credential volumes it mounts: the
 // trust volume as "TRUST" (with ":rw" when writable), and each per-credential
 // volume by the name after its prefix.
-func credentialMounts(doc composeDoc, trustKey, prefix string) map[string][]string {
+func credentialMounts(doc deploytest.ComposeDoc, trustKey, prefix string) map[string][]string {
 	got := map[string][]string{}
 	for name, svc := range doc.Services {
 		for _, v := range svc.Volumes {
@@ -219,7 +221,7 @@ func credentialMounts(doc composeDoc, trustKey, prefix string) map[string][]stri
 
 // The mount table is the grant (ADR-0078 decision 3).
 func TestOPS130EachServiceMountsOnlyTheCredentialsItUses(t *testing.T) {
-	core := renderAll(t, coreBase)
+	core := renderAll(t, deploytest.CoreBase)
 	want := map[string][]string{
 		// The generator writes the trust volume and every rendered volume.
 		"innsegl-credentials": {
@@ -233,7 +235,7 @@ func TestOPS130EachServiceMountsOnlyTheCredentialsItUses(t *testing.T) {
 		"innsegl-trust-backup":  {"TRUST"},
 		"postgres":              {"ledger-owner"},
 		"innsegl-object-init":   {"objects-root", "objects-sealer"},
-		"innsegl-mcp":           {"acme-dns", "appender", "authwriter", "objects-sealer"},
+		"innsegl-core":          {"acme-dns", "appender", "authwriter", "objects-sealer"},
 		"innsegl-reconciler":    {"appender"},
 		"innsegl-sealer":        {"appender", "objects-sealer"},
 		"innsegl-backup":        {"backup", "objects-sealer"},
@@ -280,7 +282,7 @@ func TestOPS130EachServiceMountsOnlyTheCredentialsItUses(t *testing.T) {
 // Every innsegl connection string names a passfile and carries no password,
 // and every object-store secret is read from a file.
 func TestOPS130ServicesReadCredentialsFromFiles(t *testing.T) {
-	core := renderAll(t, coreBase)
+	core := renderAll(t, deploytest.CoreBase)
 	dsnVars := []string{"INNSEGL_LEDGER_DSN", "INNSEGL_GATEWAY_ACCOUNTS_DSN",
 		"INNSEGL_API_DSN", "INNSEGL_API_AUTH_DSN", "INNSEGL_API_RESOLVER_DSN"}
 	seen := 0

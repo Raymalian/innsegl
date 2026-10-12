@@ -74,7 +74,7 @@ system's roots for a core with a public certificate once `innsegl connect`
 
 | Item | Holds |
 |---|---|
-| `innsegl-mcp` | runs the gateway; host port `${INNSEGL_BIND}:28095` |
+| `innsegl-core` | runs the gateway; host port `${INNSEGL_BIND}:28095` |
 | volume `innsegl-gateway-ca-key` | the gateway CA private key, mounted into the core only |
 | host folder `~/.innsegl/ca` | the gateway CA certificate (public) |
 | volume `innsegl-message-key` | derived agent-message key, read-only into `innsegl-api` |

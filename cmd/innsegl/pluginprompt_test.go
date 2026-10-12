@@ -13,6 +13,9 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/plugin"
+
+	"innsegl.dev/innsegl/internal/client"
+	"innsegl.dev/innsegl/internal/trustbackup"
 )
 
 // BAK-031 (PROPOSED for doc 07, #592) — an age plugin's own prompt ("touch
@@ -61,11 +64,34 @@ func TestBAK031APluginPromptReachesTheTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A copy, not a link: the pin checks the file it resolves to and that
+	// file's directory, and the build cache's modes depend on the umask.
+	src, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
-	if err = os.Symlink(self, filepath.Join(dir, "age-plugin-"+fakePluginName)); err != nil {
+	if err = os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "age-plugin-"+fakePluginName), src, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// #598: the plugin runs only as connect pinned it.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	pin, err := trustbackup.PinPlugin(fakePluginName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := client.ClientPaths(home)
+	if err = os.MkdirAll(paths.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = trustbackup.WritePluginPins(client.PluginPinsFile(paths), []trustbackup.PluginPin{pin}); err != nil {
+		t.Fatal(err)
+	}
 	idFile := filepath.Join(t.TempDir(), "identity.txt")
 	if err = os.WriteFile(idFile, []byte(plugin.EncodeIdentity(fakePluginName, []byte("handle"))+"\n"), 0o600); err != nil {
 		t.Fatal(err)

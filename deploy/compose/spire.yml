@@ -7,7 +7,7 @@
 #
 #   spire-server  upstream SPIRE  Trust domain `innsegl.dev` root
 #                                 SQLite datastore acceptable here only;
-#                                 admin API reachable solely from `innsegl-mcp`
+#                                 admin API reachable solely from `innsegl-core`
 #   spire-agent   upstream SPIRE  Node/workload attestation
 #                                 Workload API socket volume-shared
 #   spire-oidc    upstream        JWT-SVID → OIDC bridge for Fulcio
@@ -100,7 +100,7 @@ services:
   #
   # NETWORKS: exactly two, both internal, and that is the segmentation.
   #   innsegl-spire-node   spire-agent reaches the Agent API here.
-  #   innsegl-spire-admin  innsegl-mcp reaches the admin API here, and is the
+  #   innsegl-spire-admin  innsegl-core reaches the admin API here, and is the
   #                        only other member this network will ever have.
   # Everything else in doc 05 §1 — postgres, the object store, rekor, fulcio,
   # the sealer,
@@ -143,9 +143,9 @@ services:
       # on a volume. That is deliberate and it is the strongest form of the
       # doc 05 §1 rule: the socket is UNAUTHENTICATED — whatever can open it
       # has full admin over the trust domain — and a tmpfs cannot be mounted
-      # by a second container at all, so "reachable only from innsegl-mcp"
+      # by a second container at all, so "reachable only from innsegl-core"
       # is not a rule someone can quietly break by adding one line to a
-      # `volumes:` list. innsegl-mcp reaches admin over TCP with an SVID, on
+      # `volumes:` list. innsegl-core reaches admin over TCP with an SVID, on
       # the innsegl-spire-admin network. See ADR-0011.
       #
       # uid/gid so the unprivileged server user owns it; 0700 so nothing else
@@ -413,9 +413,9 @@ networks:
     name: innsegl-spire-node
     internal: true
 
-  # spire-server ↔ innsegl-mcp. The admin path.
-  # MEMBERS: spire-server, and innsegl-mcp when E4 lands. Nothing else.
-  # Declared now, with one member, precisely so that when innsegl-mcp arrives
+  # spire-server ↔ innsegl-core. The admin path.
+  # MEMBERS: spire-server, and innsegl-core when E4 lands. Nothing else.
+  # Declared now, with one member, precisely so that when innsegl-core arrives
   # joining this network is the whole of what grants it admin reachability —
   # rather than the stack having grown a flat network that someone has to
   # retrofit segmentation onto.

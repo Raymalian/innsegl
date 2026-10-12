@@ -41,7 +41,7 @@ newer than N hours.
 | `INNSEGL_TRUST_BACKUP_KEEP` | compose | bundles kept [`14`] |
 | `INNSEGL_TRUST_BACKUP_INTERVAL` | compose | schedule [`24h`] |
 | `INNSEGL_TRUST_BACKUP_MYSQL_USER`, `INNSEGL_TRUST_BACKUP_MYSQL_PASSWORD` | `create` | the log database's credentials for `--mysql` |
-| `INNSEGL_TRUST_BACKUP_DIR` | core | where `innsegl-mcp` reads bundles to serve them |
+| `INNSEGL_TRUST_BACKUP_DIR` | core | where `innsegl-core` reads bundles to serve them |
 
 Recipients may be X25519, post-quantum, tagged P-256 (`age1tag1…`) or
 plugin recipients with a tagged P-256 payload (`age1se1…`). The core runs no
@@ -52,7 +52,7 @@ age plugin.
 | Item | Holds |
 |---|---|
 | `innsegl-trust-backup` | runs `create` (compose profile `trust-backup`); read-only root, only `DAC_READ_SEARCH` and `CHOWN` |
-| volume `innsegl-trust-backups` | the bundles, read-only into `innsegl-mcp` |
+| volume `innsegl-trust-backups` | the bundles, read-only into `innsegl-core` |
 | `trust-backup-*.tar.age` and a checksum file | one bundle: a tar of every item plus `manifest.json` (size, mode, sha256 per file) |
 | `~/.innsegl/trust-backups/` | the operator's copies, newest 30 (dir 0700, files 0600) |
 | `~/.innsegl/trust-backup/identity.txt` | the operator's age identity |

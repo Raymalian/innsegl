@@ -104,6 +104,14 @@ linters:
           - gosec
           - unparam
           - contextcheck
+      # The same, for the helpers test/deploy's packages share. They are test
+      # code in a package of their own only because a _test.go file cannot be
+      # imported; nothing outside test/deploy uses them, and nothing ships.
+      - path: test/deploy/deploytest/
+        linters:
+          - gosec
+          - unparam
+          - contextcheck
 
 formatters:
   enable:

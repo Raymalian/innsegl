@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -37,7 +39,7 @@ var keyMaterialDefault = regexp.MustCompile(
 	`\$\{([A-Z0-9_]*(?:CA|KEY|PKI|SIGNING)_(?:PASSWORD|PASSWD|PASSPHRASE)[A-Z0-9_]*):-([^}]+)\}`)
 
 func TestOPS130NoShippedFileDefaultsAKeyPassword(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	out, err := exec.CommandContext(t.Context(), "git", "-C", root, "ls-files",
 		"deploy", "runbooks", "scripts", "Dockerfile", "Makefile").Output()
 	if err != nil {
@@ -64,9 +66,9 @@ func TestOPS130NoShippedFileDefaultsAKeyPassword(t *testing.T) {
 }
 
 func TestOPS130FulcioReadsItsCAPasswordFromAFile(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	for _, f := range []string{"sigstore.yml", "sigstore.keycustody.yml"} {
-		body := readFile(t, filepath.Join(root, "deploy", "compose", f))
+		body := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", f))
 		if strings.Contains(body, "--fileca-key-passwd") {
 			t.Errorf("deploy/compose/%s passes --fileca-key-passwd: the value is then on "+
 				"Fulcio's command line and in `docker inspect`", f)
@@ -76,7 +78,7 @@ func TestOPS130FulcioReadsItsCAPasswordFromAFile(t *testing.T) {
 				"(`-passin pass:$...`); read it from the password file", f)
 		}
 	}
-	stack := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore.yml"))
+	stack := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "sigstore.yml"))
 	fulcio := composeService(t, stack, "fulcio")
 	if !strings.Contains(fulcio, `--config=/etc/fulcio/serve.yaml`) {
 		t.Errorf("fulcio is not started with --config=/etc/fulcio/serve.yaml, the file "+
@@ -88,13 +90,13 @@ func TestOPS130FulcioReadsItsCAPasswordFromAFile(t *testing.T) {
 }
 
 func TestOPS130TheBootstrapGeneratesThePassword(t *testing.T) {
-	root := repoRoot(t)
-	lib := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore", "ca-lib.sh"))
+	root := deploytest.RepoRoot(t)
+	lib := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "sigstore", "ca-lib.sh"))
 	if !strings.Contains(lib, "openssl rand -hex 32") {
 		t.Error("deploy/compose/sigstore/ca-lib.sh does not draw the CA password with " +
 			"`openssl rand -hex 32` (32 bytes from a CSPRNG)")
 	}
-	stack := readFile(t, filepath.Join(root, "deploy", "compose", "sigstore.yml"))
+	stack := deploytest.ReadFile(t, filepath.Join(root, "deploy", "compose", "sigstore.yml"))
 	boot := composeService(t, stack, "sigstore-bootstrap")
 	if !strings.Contains(boot, "./sigstore/ca-lib.sh:/ca-lib.sh:ro") {
 		t.Errorf("sigstore-bootstrap does not mount the CA library it sources:\n%s", boot)
@@ -108,11 +110,11 @@ func TestOPS130TheBootstrapGeneratesThePassword(t *testing.T) {
 // file-CA Fulcio, leaves one under key custody alone, ensures the trust
 // volumes first, and does it before the core starts.
 func TestOPS130TheUpdateRecreatesAFileCAFulcio(t *testing.T) {
-	root := repoRoot(t)
-	mk := readFile(t, filepath.Join(root, "Makefile"))
+	root := deploytest.RepoRoot(t)
+	mk := deploytest.ReadFile(t, filepath.Join(root, "Makefile"))
 	// fulcio-file-ca-up chooses between custody and the file CA by
 	// prerequisite; the file-CA work is fulcio-file-ca-run's.
-	recipe := makeRecipe(t, mk, "fulcio-file-ca-run")
+	recipe := deploytest.MakeRecipe(t, mk, "fulcio-file-ca-run")
 	if !strings.Contains(recipe, "*--ca=kmsca*)") {
 		t.Error("fulcio-file-ca-up does not leave a Fulcio under key custody alone")
 	}
@@ -123,7 +125,7 @@ func TestOPS130TheUpdateRecreatesAFileCAFulcio(t *testing.T) {
 		!regexp.MustCompile(`(?m)^fulcio-file-ca-run: innsegl-trust-volumes$`).MatchString(mk) {
 		t.Error("fulcio-file-ca-up does not ensure the trust volumes first")
 	}
-	upd := makeRecipe(t, mk, "update")
+	upd := deploytest.MakeRecipe(t, mk, "update")
 	f, c := strings.Index(upd, "--no-print-directory fulcio-file-ca-up"), strings.Index(upd, "--no-print-directory innsegl-here-services")
 	l := strings.Index(upd, "--no-print-directory rekor-log-up")
 	if f < 0 || c < 0 || f > c || l > f {

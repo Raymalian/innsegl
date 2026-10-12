@@ -84,7 +84,7 @@ could not be reached.
 
 - `scripts/rekor-tlog-pin-selftest.sh` (OPS-055, OPS-193, OPS-194), `rekor-reindex-selftest.sh`,
   `rekor-port-selftest.sh`
-- `test/deploy/rekorindex_test.go` (OPS-036), `trustroot_test.go` (OPS-034)
+- `test/deploy/rekorindex_test.go` (OPS-036), `test/deploy/custody/trustroot_test.go` (OPS-034)
 - `test/smoke/rekorport_test.go` (OPS-006, OPS-014, OPS-015)
 - `internal/segment/anchor_rekor_test.go` (SEG-003, SEG-004),
   `internal/reconciler/rekor_test.go` (REC-002)

@@ -47,7 +47,18 @@ fi
 # cached PASS means this gate certifies a run that did not happen — the exact
 # false-green it exists to prevent. RM-036 hit it: the first run reported six
 # skips that were cached from an earlier invocation.
-go test ${SUITE_PACKAGES} -race -count=1 -json ${INNSEGL_TEST_FLAGS:-} >"${out}" 2>&1
+#
+# THE TIMEOUT IS STATED, NOT INHERITED. -timeout is per package: one test
+# binary that runs past it dies with a panic and no test result. This is go
+# test's own default, written down so the report below can measure against it.
+# test/deploy crossed it twice in two days (#591, PR #620): 372s alone on a
+# workstation, over 600s on a loaded CI runner. It was split into
+# test/deploy/{ledgerdb,objectstore,lifecycle,custody}, each under 125s alone,
+# and scripts/test-package-times.sh warns on any package past 60% of this
+# limit. Raising the limit is not the fix for a package that warns; splitting
+# it is.
+TEST_TIMEOUT_SECONDS=600
+go test ${SUITE_PACKAGES} -race -count=1 -timeout "${TEST_TIMEOUT_SECONDS}s" -json ${INNSEGL_TEST_FLAGS:-} >"${out}" 2>&1
 rc=$?
 
 # Package-level result lines, so the log still reads like a test run.
@@ -61,6 +72,10 @@ awk -F'"' '
     if (action != "" && pkg != "") printf "%-5s %s\n", action, pkg
   }
 ' "${out}" | sort -u
+
+# How long each package ran, against its limit: a package nearing the timeout
+# says so on a green run, not only when it has already failed.
+"${SCRIPT_DIR}/test-package-times.sh" "${out}" "${TEST_TIMEOUT_SECONDS}"
 
 if [ "${rc}" -ne 0 ]; then
   printf '\n--- failures ---\n'

@@ -16,7 +16,7 @@
 #
 #   spire-oidc   without which the discovery provider cannot fetch the JWKS it
 #                exists to publish, and Fulcio refuses every token;
-#   innsegl-mcp  doc 05 §1's "Only service holding SPIRE admin credential".
+#   innsegl-core  doc 05 §1's "Only service holding SPIRE admin credential".
 #                Added by RM-076 (#109) — see THE SECOND CASE below.
 #
 # THE SECOND CASE, and the circularity it does NOT have
@@ -53,7 +53,7 @@
 # The server's admin socket is unauthenticated: whatever can open it has full
 # admin over the trust domain. Giving a second container that socket, even a
 # short-lived registrar, would make "the admin API is reachable only from
-# innsegl-mcp" (doc 05 §1) false the moment the stack boots. So bootstrap
+# the MCP server" (doc 05 §1; the innsegl-core container) false the moment the stack boots. So bootstrap
 # registration runs *inside* the server container, as an operator action, using
 # access the operator already has. See ADR-0011.
 #
@@ -228,7 +228,7 @@ register_oidc() {
 }
 
 # ---------------------------------------------------------------------------
-# innsegl-mcp (RM-076, #109). doc 05 §1: "Only service holding SPIRE admin
+# innsegl-core (RM-076, #109). doc 05 §1: "Only service holding SPIRE admin
 # credential", and server.conf's admin_ids names exactly this SPIFFE ID.
 #
 # Its selectors come from the IMAGE and not from a running container, which is

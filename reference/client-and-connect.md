@@ -110,6 +110,7 @@ Under `~/.innsegl/client/` (`internal/client/files.go:50`):
 | `proxy-ca.pem`, `proxy-ca-key.pem` | the local proxy CA |
 | `session-processes.json` | the harness process of each watched session |
 | `unrouted-sessions.json` | sessions whose model traffic bypassed innsegl (below) |
+| `age-plugins.json` | each pinned age plugin: name, absolute path, SHA-256 (below) |
 
 Also `~/.innsegl/trust-backups/` and `~/.innsegl/trust-backup/identity.txt`
 (see [trust-key-backup.md](trust-key-backup.md)).
@@ -120,14 +121,33 @@ log: `~/Library/Logs/innsegl-client.log` on macOS; `journalctl --user -u
 innsegl-client.service` on Linux.
 
 The service unlocks the CA key store itself (ADR-0076), with the age plugin
-the identity file names (`age-plugin-<name>`). A service manager gives a
-service a short default PATH (launchd: `/usr/bin:/bin:/usr/sbin:/sbin`), which
-does not hold the usual plugin directories. So `innsegl connect` resolves
-each plugin on its own PATH and writes the plugin's directory into the
-service definition's PATH, after the default (`EnvironmentVariables` in the
-plist, `Environment="PATH=…"` in the unit). It writes no PATH when the default
-already finds every plugin. After installing a plugin, or moving it, run
-`innsegl connect --update --service`.
+the identity file names (`age-plugin-<name>`).
+
+**The plugin is pinned.** `innsegl connect` (enrolment and `--update`)
+resolves each plugin once, on its own PATH, to an absolute path with symlinks
+resolved, and records that path and the file's SHA-256 in
+`~/.innsegl/client/age-plugins.json`. Every use runs the plugin only while all
+of these hold, and checks them again just before the plugin starts: the CLI's
+`ca-custody unlock`, `trust-backup drill`, `doctor`, and the service's own
+unlock.
+
+- PATH still finds the pinned file, not another copy.
+- Neither the file nor its directory is writable by group or others.
+- Both are owned by root or this user.
+- The hash is unchanged.
+
+Otherwise the plugin is refused with the reason and the repair: check that
+it is the plugin you installed, then run `innsegl connect --update`. Connect
+also refuses to pin a plugin that fails these checks, and names it. A plain
+X25519 identity needs no pin.
+
+age finds a plugin by name on PATH only. So the service's PATH stays: a
+service manager gives a short default (launchd: `/usr/bin:/bin:/usr/sbin:/sbin`),
+and connect adds the pinned file's own directory after it, not the shared bin
+directory that links to it (`EnvironmentVariables` in the plist,
+`Environment="PATH=…"` in the unit). It writes no PATH when the default already
+finds every plugin. When `--update` finds a plugin in a new directory (an
+upgrade), it rewrites and restarts the installed service itself.
 
 ### Host dependencies
 
@@ -145,8 +165,8 @@ written. `innsegl doctor`'s first line is the same check: `host: ok`, or one
 | `notify-send` | the signing-down notification (optional) | — | `sudo apt-get install -y libnotify-bin` | `sudo dnf install -y libnotify` |
 
 A Secure Enclave identity (`age-plugin-se`) works on macOS only. A missing
-plugin does not stop connect: it is named, and the CA unlock fails until it
-is installed.
+or refused plugin does not stop connect: it is named, and the CA unlock fails
+until it is installed and pinned.
 
 Local routes: `GET /_client/status`, and `/_client/core/<core path>` for the
 CLI (below). Core routes it calls: `/_core/enrol`, `/_core/renew`,
@@ -253,6 +273,10 @@ says to revoke the machine from the Account page.
   per OS; `notify-send` on Linux, and said once when it is absent)
 - `internal/client/servicepath_test.go`, `cmd/innsegl/connectpath_test.go`
   (CLI-025, PROPOSED: the plugin's directory in the service's PATH)
+- `internal/trustbackup/pin_test.go`, `internal/client/servicepath_test.go`,
+  `cmd/innsegl/connectpath_test.go` (CLI-046, CLI-047, PROPOSED: a plugin
+  writable by others, changed, or not the one PATH finds is refused with the
+  repair; `--update` pins it again)
 - `internal/hostdeps/hostdeps_test.go`, `cmd/innsegl/preflight_test.go`
   (CLI-027, PROPOSED: every missing tool named in one run, with this OS's
   command; connect refuses before writing anything)

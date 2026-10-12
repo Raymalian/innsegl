@@ -10,9 +10,9 @@ doc 05 §1's other seven rows, none of which existed as a compose service before
 |---|---|---|
 | `postgres` | service | ledger hot tier, volume-backed, **publishes no host port** |
 | object storage | `innsegl-s3` | **one process** (#451): master, volume server, Filer and the S3 gateway. Only the S3 layer enforces object lock, and only its port is reachable; every other listener binds the container's loopback. Buckets get object lock **on at creation**, COMPLIANCE mode |
-| `innsegl-mcp` | service | attested through the Workload API; append-only DB role. Runs the seal, reconcile and reap loops by default (ADR-0056) |
-| `innsegl-reconciler` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `reconcile` |
-| `innsegl-sealer` | loop in `innsegl-mcp`; service, `--profile separate` | same binary, `seal` |
+| `innsegl-core` | service | attested through the Workload API; append-only DB role. Runs the seal, reconcile and reap loops by default (ADR-0056) |
+| `innsegl-reconciler` | loop in `innsegl-core`; service, `--profile separate` | same binary, `reconcile` |
+| `innsegl-sealer` | loop in `innsegl-core`; service, `--profile separate` | same binary, `seal` |
 | `innsegl-dashboard` | `innsegl-api` | one service since #475: `innsegl api` serves the built UI, the query API and the proof BFF on one origin, and terminates the dashboard's TLS with the certificate the core writes (ADR-0066). It runs its own image — the runtime plus the UI — so a UI change restarts it alone. The row's "No write credentials mounted" holds: the read-only role it reads with cannot write |
 | `demo-agent` | service, `--profile demo` | a curl client of the deprecated MCP wire surface (ADR-0077); runs to completion. Removed with the wire at the next major release |
 
@@ -25,7 +25,7 @@ projects, and nothing lists repositories at deploy time.
 
 | service | mirror mount |
 |---|---|
-| `innsegl-mcp` | read-write: it receives the pushes |
+| `innsegl-core` | read-write: it receives the pushes |
 | `innsegl-api` | read-only: proof, run page, account page |
 | `innsegl-reconciler` (`--profile separate`) | read-only |
 
@@ -55,7 +55,7 @@ at deploy".
 16 bytes. #119 introduced that refusal deliberately — #116 chose it over a
 silent fall back to literal values, which would have read as "private" while
 every ticket reference went into Rekor — and this file was not updated to
-supply one, so `innsegl-mcp` crashlooped on a clean `up`.
+supply one, so `innsegl-core` crashlooped on a clean `up`.
 
 The fix is not a constant in `innsegl.yml`, and that is the whole of the
 reasoning. A pseudonym is `HMAC(deployment_secret, field ‖ ":" ‖ value)`, so a
@@ -68,7 +68,7 @@ is worse than not pseudonymising at all, because it looks private and is not.
 | | |
 |---|---|
 | [`identity-init.sh`](identity-init.sh) | `openssl rand -hex 32` into the `innsegl-identity-secret` volume, **only if absent**; `network_mode: none`, `read_only: true`, the only rw mount of that volume anywhere |
-| `innsegl-mcp` | gates on its completion and reads the file through `INNSEGL_IDENTITY_SECRET_FILE`, mounted read-only |
+| `innsegl-core` | gates on its completion and reads the file through `INNSEGL_IDENTITY_SECRET_FILE`, mounted read-only |
 
 An existing secret is left alone, because pseudonyms must be stable: `down -v`
 is the only rotation, exactly as for the Fulcio CA and the Rekor log key.
@@ -109,7 +109,7 @@ Three files, and the split matters:
 > wanted to "just fix one thing" is invisible to any amount of code review.
 
 So `db-init.sh` does not exit 0 on "the GRANTs ran". It exits 0 on "the server
-says this credential cannot delete", and `innsegl-mcp` gates on its completion.
+says this credential cannot delete", and `innsegl-core` gates on its completion.
 `innsegl serve` then runs with `-require-append-only-role`, so the server
 *refuses to start* rather than warning — the flag existed already and was
 defaulted off precisely because nothing created the role.
@@ -580,7 +580,7 @@ per-process test harnesses take up to eight each, so #100 is a real constraint
 and every network above had to earn its place — one that would have been merged
 (a shared MCP/dashboard frontend) is deliberately two.
 
-**Nothing in this file publishes a host port except `innsegl-mcp` (the MCP,
+**Nothing in this file publishes a host port except `innsegl-core` (the MCP,
 health, admin and gateway ports) and the dashboard, and that is a control rather than an omission.** MEASURED by RM-054 (#62): publishing a container's
 port inserts an ACCEPT rule for that container's address into Docker's own
 filter chain, matched *before* the isolation rules that keep one bridge network

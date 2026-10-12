@@ -310,7 +310,7 @@ organisation holds.
 - `cmd/innsegl/noprincipal_test.go` (ACC-012: no organisation or person
   identifier in the machine certificate, the run's SPIRE entries, the
   commit trailers, the ledger schema or the gateway log)
-- `test/deploy/apiui_test.go`, `readerrole_test.go` (OPS-011 to OPS-013),
+- `test/deploy/ledgerdb/apiui_test.go`, `readerrole_test.go` (OPS-011 to OPS-013),
   `resolverrole_test.go`
 - `scripts/setup-link-selftest.sh`
 - organisation sign-in (#485): `internal/api/ssooidc_test.go` (AUTH-010:

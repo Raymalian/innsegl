@@ -191,7 +191,7 @@ services:
   #                           cannot open a socket to the Agent or admin API.
   #                           The network is declared in spire.yml and joined
   #                           here as external; see ADR-0028.
-  #   innsegl-sigstore        where signing clients reach it: innsegl-mcp and
+  #   innsegl-sigstore        where signing clients reach it: innsegl-core and
   #                           the gitsign wrapper when E5 lands. Internal.
   #   innsegl-sigstore-published
   #                           the one non-internal network, whose only purpose

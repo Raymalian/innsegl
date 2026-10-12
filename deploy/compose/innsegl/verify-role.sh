@@ -18,7 +18,7 @@
 #      can."
 #
 # db-init.sh runs this at the end of provisioning and the compose stack gates
-# `innsegl-mcp` on it, so the MCP does not start behind a role nobody measured.
+# `innsegl-core` on it, so the MCP does not start behind a role nobody measured.
 # `make innsegl-verify` runs it against a live stack.
 #
 # WHY IT CLASSIFIES BY SQLSTATE AND NOT BY SUCCESS

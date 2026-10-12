@@ -11,13 +11,15 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // OPS-180: the core's binary fits under the size the SPIRE agent hashes a
 // workload's binary up to. Over it, the agent's unix attestor refuses to
 // attest the core, the core gets no identity and never comes up. Measured
 // on a dev-stack update rehearsal (#473): an ACME library's all-providers
-// import took the binary from 42 MB to 100 MB, and innsegl-mcp hung at
+// import took the binary from 42 MB to 100 MB, and innsegl-core hung at
 // start waiting for an SVID while the agent logged "exceeds size limit".
 // Built the way the Dockerfile builds it, for the platform the image
 // targets.
@@ -25,7 +27,7 @@ func TestOPS180TheCoreBinaryFitsTheAttestorsSizeLimit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
 	}
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	conf, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "spire", "agent.conf"))
 	if err != nil {
 		t.Fatal(err)

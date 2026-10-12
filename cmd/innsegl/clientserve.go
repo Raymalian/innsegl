@@ -130,7 +130,7 @@ func runClientServe(ctx context.Context, args []string, _, stderr io.Writer, hom
 		client.TrustBackupInterval)
 	// ADR-0076: unlock the core's CA key store when it restarts sealed.
 	go srv.RunCAUnlock(renewCtx, func() ([]age.Identity, error) {
-		return trustbackup.LoadIdentities(paths.TrustIdentity, nil)
+		return trustbackup.LoadIdentities(paths.TrustIdentity, nil, client.PluginPinsFile(paths))
 	}, client.CAUnlockInterval, client.CAUnlockBackoff)
 	go func() {
 		<-ctx.Done()

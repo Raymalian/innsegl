@@ -4,6 +4,7 @@ package ledger
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -24,12 +25,37 @@ func TestADP020DeadRunsForRepoAreTheRepositorysEndedRunsMostRecentFirst(t *testi
 	ctx := testCtx(t, 60*time.Second)
 	const repo = "example.test/org/name"
 	n := 0
+	var last event.Timestamp
 	appendAll := func(bodies ...event.Fields) {
 		t.Helper()
 		for _, b := range bodies {
-			if _, err := s.Append(ctx, b); err != nil {
+			rec, err := s.Append(ctx, b)
+			if err != nil {
 				t.Fatalf("append %v: %v", b[event.FieldEventType], err)
 			}
+			if last, err = event.ParseTimestamp(fmt.Sprint(rec[event.FieldTS])); err != nil {
+				t.Fatalf("the appended record's ts: %v", err)
+			}
+		}
+	}
+	// later holds the next append back until it cannot share the last one's
+	// ts. A ts is the server clock at millisecond precision and is only
+	// non-decreasing (monotonicTS), so two appends a fast machine makes inside
+	// one millisecond carry one instant, and every fact this test orders —
+	// "more recent", "heard from AFTER its withdrawal" — is a comparison of
+	// instants. Elapsed time is not something the test may assume; it waits
+	// for the clock the ledger stamps with to move instead.
+	later := func() {
+		t.Helper()
+		for {
+			var clock time.Time
+			if err := s.pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&clock); err != nil {
+				t.Fatalf("read the ledger's clock: %v", err)
+			}
+			if event.NewTimestamp(clock).Time().After(last.Time()) {
+				return
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 	registered := func(runID, inRepo string) event.Fields {
@@ -53,12 +79,15 @@ func TestADP020DeadRunsForRepoAreTheRepositorysEndedRunsMostRecentFirst(t *testi
 	// retired run of another repository.
 	appendAll(registered("run-retired", repo), toolCall("run-retired"),
 		runScopedBody("run-retired", event.EventTypeRunRetired, 0))
+	later()
 	appendAll(registered("run-lapsed", repo), toolCall("run-lapsed"), withdrawn("run-lapsed"))
 	appendAll(registered("run-active", repo), toolCall("run-active"))
 	appendAll(registered("run-elsewhere", "example.test/org/other"), toolCall("run-elsewhere"),
 		runScopedBody("run-elsewhere", event.EventTypeRunRetired, 0))
 	// A run withdrawn and then heard from again is active, not lapsed.
-	appendAll(registered("run-back", repo), withdrawn("run-back"), toolCall("run-back"))
+	appendAll(registered("run-back", repo), withdrawn("run-back"))
+	later()
+	appendAll(toolCall("run-back"))
 
 	since := time.Now().Add(-time.Hour)
 	got, err := s.DeadRunsForRepo(ctx, repo, since, 10)

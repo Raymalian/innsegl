@@ -46,7 +46,7 @@ imply otherwise.
 Fail closed. Every design decision in this system converts an integrity attack
 into an availability problem; this is the moment you cash that in.
 
-1. **Stop issuing.** Stop `innsegl-mcp`, the core. With it stopped the
+1. **Stop issuing.** Stop `innsegl-core`, the core. With it stopped the
    gateway registers no run and nothing is issued a credential, over the
    (deprecated) MCP tools or in process; IP §6 makes that a clean refusal,
    not a corruption.

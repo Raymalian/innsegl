@@ -15,7 +15,7 @@
 # attach to one.
 #
 # A name added to spire.yml needs its dev twin here; OPS-129
-# (test/deploy/devstack_test.go) fails until it has one.
+# (test/deploy/custody/devstack_test.go) fails until it has one.
 # ============================================================================
 
 name: innsegl-dev-spire

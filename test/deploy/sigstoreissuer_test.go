@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -32,9 +34,9 @@ func TestOPS156EveryRecipeHasTheIssuer(t *testing.T) {
 	}
 	cmd := exec.CommandContext(t.Context(), "make", "-s", "--no-print-directory",
 		"-f", "Makefile", "-f", probe, "ops156-probe")
-	cmd.Dir = repoRoot(t)
+	cmd.Dir = deploytest.RepoRoot(t)
 	var env []string
-	for _, kv := range stackEnv(t.TempDir(), "") {
+	for _, kv := range deploytest.StackEnv(t.TempDir(), "") {
 		if !strings.HasPrefix(kv, "INNSEGL_SPIRE_JWT_ISSUER=") {
 			env = append(env, kv)
 		}

@@ -77,7 +77,7 @@ checksum of the compose `.env`.
 
 Signing is proved on both sides of the update (OPS-190, OPS-191, #587):
 `scripts/update-signing.sh before` runs the core's `innsegl signing-probe`
-(`docker exec <prefix>-mcp`) first and, if it already fails, says so, so the
+(`docker exec <prefix>-core`) first and, if it already fails, says so, so the
 update is not blamed; `scripts/update-signing.sh after` runs it once the
 services are up. A failure exits 1 with the reason and one repair line:
 `innsegl doctor` on the operator machine ([doctor.md](doctor.md)); without
@@ -117,7 +117,7 @@ service once, because the label was empty before.
 |---|---|
 | `postgres` | ledger-owner password (used at first init only) |
 | `innsegl-s3` | `identities.json` and its key; `object-store-start.sh` |
-| `innsegl-mcp`, `innsegl-api`, `innsegl-sealer`, `innsegl-reconciler`, `innsegl-backup` | their ledger and object-store credentials; mcp also the identity secret and admin JWKS; backup also `scripts/`, `runbooks/`, `deploy/compose/innsegl/` |
+| `innsegl-core`, `innsegl-api`, `innsegl-sealer`, `innsegl-reconciler`, `innsegl-backup` | their ledger and object-store credentials; the core also the identity secret and admin JWKS; backup also `scripts/`, `runbooks/`, `deploy/compose/innsegl/` |
 | `innsegl-trust-backup` | the trust volumes it backs up |
 | `trillian-db` | `init.sql` (users reset at every start) |
 | `trillian-log-server`, `trillian-log-signer` | the log database flags |
@@ -220,11 +220,24 @@ to remove a trust volume.
 Containers (live names; dev adds `-dev`): SPIRE `innsegl-spire-*`; Sigstore
 `innsegl-sigstore-*`; innsegl `innsegl-postgres`, `innsegl-db-init`,
 `innsegl-s3`, `innsegl-s3-identities`, `innsegl-object-init`,
-`innsegl-identity-init`, `innsegl-admin-credential-init`, `innsegl-mcp`,
+`innsegl-identity-init`, `innsegl-admin-credential-init`, `innsegl-core`,
 `innsegl-api`, `innsegl-backup`; by profile `innsegl-init` (`init`),
 `innsegl-reconciler` and `innsegl-sealer` (`separate`),
 `innsegl-trust-backup` (`trust-backup`), `innsegl-demo-agent` (`demo`),
 `innsegl-canary` (`canary`).
+
+The core is `innsegl-core` (`innsegl-dev-core` on a dev stack): it runs
+`innsegl serve`, the MCP server and the gateway, with the sealer, reconciler
+and reaper by default. Its name before RM-346 (#594) stays an alias for one
+release on the `innsegl-mcp-clients` network:
+
+    innsegl-mcp     old name; DNS alias only, removed in the next release
+
+The first `make update` onto RM-346 removes the old container
+(`--remove-orphans`) and starts `innsegl-core` on the same volumes;
+`update-signing.sh before` probes the old container when the new one is not
+there yet. The compose project (`innsegl-core`), volume names, network names
+and SPIFFE ID are unchanged.
 
 Host ports (all `127.0.0.1` unless `INNSEGL_BIND`): MCP `28080`, health
 `28081`, admin `28090`, gateway `28095` (bind), dashboard `8082` and `8443`
@@ -252,12 +265,18 @@ dev stack), `deploy/compose/.rekor-tlog-id`, `dist/`.
 
 ## Tests
 
-- `test/deploy/devstack_test.go` (OPS-033, OPS-127, OPS-129), `topology_test.go`
-  (OPS-007, OPS-008), `trustroot_test.go` (OPS-031 to OPS-047),
-  `updateenv_test.go` (OPS-135), `buildonce_test.go`, `imagebundle_test.go`,
+- `test/deploy/topology_test.go` (OPS-007, OPS-008), `buildonce_test.go`, `imagebundle_test.go`,
   `hostports_test.go`, `bindaddress_test.go` (OPS-127), `oneprocess*_test.go`,
-  `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134),
-  `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED), `upwait_test.go` (OPS-179, PROPOSED), `updatesigning_test.go` (OPS-190, OPS-191, PROPOSED)
+  `volumeowner_test.go`, `destructivetag_test.go`, `awkportable_test.go` (OPS-134)
+- `test/deploy/custody/devstack_test.go` (OPS-033, OPS-127, OPS-129),
+  `trustroot_test.go` (OPS-031 to OPS-047)
+- `test/deploy/lifecycle/updateenv_test.go` (OPS-135),
+  `startinputs_test.go` (OPS-165 to OPS-167, PROPOSED), `upwait_test.go` (OPS-179, PROPOSED), `updatesigning_test.go` (OPS-190, OPS-191, PROPOSED), `corename_test.go` (OPS-197, PROPOSED: the core container is `innsegl-core`)
+- `test/deploy/deploytest`: the container harnesses and compose helpers the
+  `test/deploy` packages share. The container-heavy tests are split across
+  `ledgerdb`, `objectstore`, `lifecycle` and `custody` so each package runs
+  well inside `go test`'s ten-minute `-timeout` (`scripts/test-no-skips.sh`
+  prints each package's runtime).
 - `test/deploy/referencedocs_test.go` (DOC-001, PROPOSED); `devpins_test.go` (OPS-196, PROPOSED: install hints name the CI pins)
 - `scripts/stack-mode-selftest.sh` (OPS-129), `innsegl-update-selftest.sh`,
   `image-bundle-selftest.sh`, `install-selftest.sh` (OPS-195, PROPOSED), `setup-link-selftest.sh`,

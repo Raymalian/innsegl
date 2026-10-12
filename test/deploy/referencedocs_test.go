@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/test/deploy/deploytest"
 )
 
 // DOC-001 (PROPOSED for doc 07) — reference/ is the record of every part.
@@ -29,7 +31,7 @@ var codeSpan = regexp.MustCompile("`([^`\n]+)`")
 // cliSubcommands reads the dispatch table in cmd/innsegl/cli.go.
 func cliSubcommands(t *testing.T, root string) []string {
 	t.Helper()
-	src := readFile(t, filepath.Join(root, "cmd", "innsegl", "cli.go"))
+	src := deploytest.ReadFile(t, filepath.Join(root, "cmd", "innsegl", "cli.go"))
 	start := strings.Index(src, "var commands = map[string]command{")
 	if start < 0 {
 		t.Fatal("cmd/innsegl/cli.go has no `var commands = map[string]command{` table")
@@ -54,7 +56,7 @@ func cliSubcommands(t *testing.T, root string) []string {
 func makeTargets(t *testing.T, root string) []string {
 	t.Helper()
 	var names []string
-	for _, line := range strings.Split(readFile(t, filepath.Join(root, "Makefile")), "\n") {
+	for _, line := range strings.Split(deploytest.ReadFile(t, filepath.Join(root, "Makefile")), "\n") {
 		if m := makeHelpLine.FindStringSubmatch(line); m != nil {
 			names = append(names, m[1])
 		}
@@ -97,7 +99,7 @@ func mentioned(spans []string, prefix, name string) bool {
 }
 
 func TestDOC001EveryCommandAndTargetHasAReferencePage(t *testing.T) {
-	root := repoRoot(t)
+	root := deploytest.RepoRoot(t)
 	spans := referenceSpans(t, root)
 
 	var missing []string

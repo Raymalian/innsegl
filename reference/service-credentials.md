@@ -23,13 +23,13 @@ kept; a missing one is 32 bytes from `openssl rand -hex 32`.
 | store | credential | file in the trust volume | read by |
 |---|---|---|---|
 | ledger | owner | `ledger-owner` | `postgres` (first start), `innsegl-db-init` |
-| ledger | appender | `ledger-appender` | `innsegl-mcp`, reconciler, sealer |
+| ledger | appender | `ledger-appender` | `innsegl-core`, reconciler, sealer |
 | ledger | reader | `ledger-reader` | `innsegl-api` |
-| ledger | auth writer | `ledger-authwriter` | `innsegl-api`, `innsegl-mcp` |
+| ledger | auth writer | `ledger-authwriter` | `innsegl-api`, `innsegl-core` |
 | ledger | resolver | `ledger-resolver` | `innsegl-api` |
 | ledger | backup | `ledger-backup` | `innsegl-backup` |
 | object store | root identity | `objects-root` | `innsegl-s3-identities`, `innsegl-object-init` |
-| object store | sealer identity | `objects-sealer` | `innsegl-mcp`, sealer, backup, canary |
+| object store | sealer identity | `objects-sealer` | `innsegl-core`, sealer, backup, canary |
 | auth database | the key an organisation's sign-in client secret is sealed under (#574) | `sso-key` | `innsegl-api` (`INNSEGL_API_SSO_KEY_FILE`) |
 | log database | MySQL root | `logdb-root` | `trillian-db` |
 | log database | Trillian's user | `logdb-trillian` | Trillian pair, `innsegl-trust-backup` |
@@ -97,7 +97,7 @@ back. `innsegl-credentials` exits 1 when a stored credential is malformed.
 - OPS-130 (`test/deploy/credentials_test.go`, `cmd/innsegl/credentialenv_test.go`):
   no shipped default, no password in a DSN or compose value, the mount table,
   `-h` never prints a credential.
-- OPS-163 (`test/deploy/credentialsmove_test.go`, `logdbcredentials_test.go`):
+- OPS-163 (`test/deploy/ledgerdb/credentialsmove_test.go`, `logdbcredentials_test.go`):
   the move against a real Postgres and the pinned MySQL.
 - OPS-164 (`scripts/credentials-selftest.sh`): the generators.
 

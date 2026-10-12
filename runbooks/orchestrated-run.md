@@ -165,7 +165,7 @@ retirement is effective immediately (IP §6.2)
 Retiring is not cleanup you can skip. Until it happens the identity is live.
 
 An operator who knows a run is over, and is not its orchestrator, ends it on
-the core instead: `docker exec innsegl-mcp innsegl retire <run_id>`.
+the core instead: `docker exec innsegl-core innsegl retire <run_id>`.
 
 ---
 
