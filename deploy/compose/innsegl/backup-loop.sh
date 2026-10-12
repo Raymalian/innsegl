@@ -108,6 +108,18 @@ seconds_or_refuse INNSEGL_BACKUP_RETRY_MAX "${RETRY_MAX}"
 [ "${RETRY_MAX}" -le "${INTERVAL}" ] || RETRY_MAX="${INTERVAL}"
 [ -x "${BACKUP_SH}" ] || { log "FAIL: ${BACKUP_SH} is missing or not executable"; exit 2; }
 
+# ONE RUN, FOR `make innsegl-backup` (RM-371, #623). The manual backup used to
+# replace this entrypoint with backup-ledger.sh, and compose then dropped the
+# service's command, which is where the object store's identity and secret-key
+# file are: every manual backup was UNVERIFIED. It now runs this entrypoint
+# with INNSEGL_BACKUP_ONCE=1, so the service's own arguments arrive here, as
+# they do for the schedule. One backup, its own exit status, and no marker:
+# the healthcheck reads the schedule's verdict, not a run taken by hand.
+if [ "${INNSEGL_BACKUP_ONCE:-}" = 1 ]; then
+  "${BACKUP_SH}" --out "${BACKUP_DIR}" "$@"
+  exit $?
+fi
+
 # record VERDICT — one line, written whole. The healthcheck may read it at any
 # moment, so it is written to a temporary file and moved into place rather than
 # truncated and rewritten, which has a window in which it is empty.

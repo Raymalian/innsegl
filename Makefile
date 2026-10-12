@@ -1207,16 +1207,19 @@ INNSEGL_BACKUP_DIR ?= backups
 # user running make: a bind-mount source that does not exist is created by the
 # runtime, and on Linux that means owned by root and unwritable by the backup.
 #
-# NOTHING AFTER THE SERVICE NAME (RM-371, #623). Arguments given to `compose
-# run` replace the service's `command`, and that command is where the object
-# store's endpoint, bucket, prefix, identity and secret-key file are. With
-# `--out /backups` here the manual run read the store with no credential and
-# reported every backup UNVERIFIED. With none, the script gets the service's
-# own command, the one source the scheduled run uses too, and writes to the
-# service's INNSEGL_BACKUP_DIR. test/deploy BAK-045 holds both.
+# THE SERVICE'S OWN ENTRYPOINT AND COMMAND (RM-371, #623). The service's
+# `command` is where the object store's endpoint, bucket, prefix, identity and
+# secret-key file are. This target used to override the entrypoint with
+# backup-ledger.sh and pass `--out /backups`, and compose dropped that command
+# both ways (measured: an --entrypoint override alone leaves no arguments), so
+# every manual backup read the store with no credential and was UNVERIFIED.
+# Now nothing replaces either: INNSEGL_BACKUP_ONCE=1 makes backup-loop.sh run
+# one backup with the service's arguments and exit with its status.
+# --no-deps: the ledger is already up, and a dependency brought up again under
+# this target's environment would be recreated (#624). test/deploy BAK-045.
 innsegl-backup: innsegl-trust-volumes
 	mkdir -p "$${INNSEGL_BACKUP_HOST_DIR:-$$HOME/innsegl-backups}"
-	$(INNSEGL_COMPOSE) run --rm --entrypoint /innsegl/scripts/backup-ledger.sh innsegl-backup
+	$(INNSEGL_COMPOSE) run --rm --no-deps -e INNSEGL_BACKUP_ONCE=1 innsegl-backup
 
 # THE SCHEDULE IS NOT HERE ANY MORE (RM-146, #237). It was a host scheduler —
 # launchd on one platform, systemd on the other, two unit layouts, and a
@@ -1234,8 +1237,8 @@ innsegl-backup: innsegl-trust-volumes
 # became a network client. The service carries one; on a machine that does not,
 # run it the way the service does:
 #
-#   docker compose -f deploy/compose/innsegl.yml run --rm \
-#     --entrypoint /innsegl/scripts/backup-ledger.sh innsegl-backup
+#   docker compose -f deploy/compose/innsegl.yml run --rm --no-deps \
+#     -e INNSEGL_BACKUP_ONCE=1 innsegl-backup
 
 # ---------------------------------------------------------------------------
 # The merge gate for agent-signed commits (#173, RM-108).
