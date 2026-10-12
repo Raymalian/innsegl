@@ -18,7 +18,7 @@
 #
 # Layout, as every reader sees it under /run/innsegl/credentials/<name>/:
 #   ledger-owner/password                        postgres (POSTGRES_PASSWORD_FILE)
-#   <role>/password, <role>/pgpass                the five service roles; a DSN
+#   <role>/password, <role>/pgpass                the six service roles; a DSN
 #                                                names pgpass with passfile=
 #   objects-root/secret, objects-sealer/secret    the two object-store identities
 #   sso-key/key                                   the key innsegl-api seals an
@@ -35,10 +35,10 @@ CRED_WHO=innsegl-credentials
 STORE="${INNSEGL_CREDENTIALS_STORE:-/run/innsegl/credentials-store}"
 RENDER="${INNSEGL_CREDENTIALS_RENDER:-/run/innsegl/render}"
 
-LEDGER_ROLES='appender reader authwriter resolver backup'
+LEDGER_ROLES='appender reader authwriter resolver enroller backup'
 
 cred_ensure "${STORE}" ledger-owner \
-  ledger-appender ledger-reader ledger-authwriter ledger-resolver ledger-backup \
+  ledger-appender ledger-reader ledger-authwriter ledger-resolver ledger-enroller ledger-backup \
   objects-root objects-sealer sso-key
 
 render_dir() {

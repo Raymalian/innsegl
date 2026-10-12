@@ -179,6 +179,15 @@ x-auth-writer-dsn: &auth-writer-dsn postgres://innsegl_authwriter@postgres:5432/
 x-resolver-role: &resolver-role innsegl_resolver
 x-resolver-dsn: &resolver-dsn postgres://innsegl_resolver@postgres:5432/innsegl?sslmode=disable&passfile=/run/innsegl/credentials/resolver/pgpass
 
+# RM-355 (#603) — the core's enroller. Enrolment, renewal and revocation of
+# client machines, and what those routes read, on innsegl_auth; nothing on
+# users, passkeys or sessions, nothing on the ledger (internal/api/enroller.sql
+# lists every statement). `innsegl-core` connects as it and NOTHING ELSE DOES;
+# it refuses the auth-writer at start (accounts.OpenEnroller). Its own
+# credential, for the reason every role here has one.
+x-enroller-role: &enroller-role innsegl_enroller
+x-enroller-dsn: &enroller-dsn postgres://innsegl_enroller@postgres:5432/innsegl?sslmode=disable&passfile=/run/innsegl/credentials/enroller/pgpass
+
 # doc 05 §1's BACKUP role (RM-146, #237). The reader's grants over the ledger,
 # and no CREATEDB (RM-356, #604): the backup proves a dump restores by restoring
 # it into a private Postgres it starts in its own container, never on this
@@ -465,6 +474,7 @@ services:
       - innsegl-credential-reader:/run/innsegl/render/reader
       - innsegl-credential-authwriter:/run/innsegl/render/authwriter
       - innsegl-credential-resolver:/run/innsegl/render/resolver
+      - innsegl-credential-enroller:/run/innsegl/render/enroller
       - innsegl-credential-backup:/run/innsegl/render/backup
       - innsegl-credential-objects-root:/run/innsegl/render/objects-root
       - innsegl-credential-objects-sealer:/run/innsegl/render/objects-sealer
@@ -565,6 +575,7 @@ services:
       INNSEGL_BACKUP_ROLE: *backup-role
       INNSEGL_AUTHWRITER_ROLE: *auth-writer-role
       INNSEGL_RESOLVER_ROLE: *resolver-role
+      INNSEGL_ENROLLER_ROLE: *enroller-role
     volumes:
       - ./innsegl:/innsegl/init:ro
       # The trust credentials volume, read-only: this one-shot sets every
@@ -595,6 +606,9 @@ services:
       # internal/api/resolver.sql — RM-330's resolver grants, mounted for the
       # identical reason: api.EnsureResolverRole embeds this exact file.
       - ../../internal/api/resolver.sql:/innsegl/api/resolver.sql:ro
+      # internal/api/enroller.sql — RM-355's enroller grants, mounted for the
+      # identical reason: api.EnsureEnrollerRole embeds this exact file.
+      - ../../internal/api/enroller.sql:/innsegl/api/enroller.sql:ro
     entrypoint: ["sh", "/innsegl/init/db-init.sh"]
     security_opt:
       - no-new-privileges:true
@@ -1108,9 +1122,10 @@ services:
       # core reads a repository from: the reconciler running in this process
       # reads it rather than /work whenever this is set.
       INNSEGL_MIRROR_DIR: /mirror
-      # The auth-writer DSN, for enrolment: the same credential and role the
-      # API holds as INNSEGL_API_AUTH_DSN, never the appender's or the reader's.
-      INNSEGL_GATEWAY_ACCOUNTS_DSN: *auth-writer-dsn
+      # The enroller's DSN (RM-355), for enrolment, renewal and revocation:
+      # never the auth-writer the API holds as INNSEGL_API_AUTH_DSN, which the
+      # core refuses at start, and never the appender's or the reader's.
+      INNSEGL_GATEWAY_ACCOUNTS_DSN: *enroller-dsn
 
       # Companion subcommands to run inside this process (serve.go's -also).
       # Subcommand names, not container names: `serve` refuses a name it does
@@ -1284,7 +1299,10 @@ services:
       # (scripts/compose-up.py).
       - innsegl-credential-acme-dns:/run/innsegl/credentials/acme-dns:ro
       - innsegl-credential-appender:/run/innsegl/credentials/appender:ro
-      - innsegl-credential-authwriter:/run/innsegl/credentials/authwriter:ro
+      # RM-355: the enroller, not the auth-writer. A start-read input like
+      # every credential here: a changed password recreates this service
+      # (scripts/compose-up.py hashes the volume).
+      - innsegl-credential-enroller:/run/innsegl/credentials/enroller:ro
       - innsegl-credential-objects-sealer:/run/innsegl/credentials/objects-sealer:ro
       # The Workload API socket, from spire.yml's project. Read-write because
       # a Unix socket is connected to, not read.
@@ -2496,6 +2514,7 @@ volumes:
   innsegl-credential-reader:
   innsegl-credential-authwriter:
   innsegl-credential-resolver:
+  innsegl-credential-enroller:
   innsegl-credential-backup:
   innsegl-credential-objects-root:
   innsegl-credential-objects-sealer:

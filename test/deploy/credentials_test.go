@@ -226,7 +226,7 @@ func TestOPS130EachServiceMountsOnlyTheCredentialsItUses(t *testing.T) {
 		// The generator writes the trust volume and every rendered volume.
 		"innsegl-credentials": {
 			"TRUST:rw",
-			"authwriter:rw", "backup:rw", "ledger-owner:rw", "objects-root:rw",
+			"authwriter:rw", "backup:rw", "enroller:rw", "ledger-owner:rw", "objects-root:rw",
 			"objects-sealer:rw", "reader:rw", "resolver:rw", "appender:rw", "sso-key:rw",
 		},
 		// What sets passwords on a server reads the trust volume.
@@ -235,12 +235,13 @@ func TestOPS130EachServiceMountsOnlyTheCredentialsItUses(t *testing.T) {
 		"innsegl-trust-backup":  {"TRUST"},
 		"postgres":              {"ledger-owner"},
 		"innsegl-object-init":   {"objects-root", "objects-sealer"},
-		"innsegl-core":          {"acme-dns", "appender", "authwriter", "objects-sealer"},
-		"innsegl-reconciler":    {"appender"},
-		"innsegl-sealer":        {"appender", "objects-sealer"},
-		"innsegl-backup":        {"backup", "objects-sealer"},
-		"innsegl-api":           {"authwriter", "reader", "resolver", "sso-key"},
-		"innsegl-canary":        {"objects-sealer"},
+		// RM-355 (#603): the enroller, never the auth-writer.
+		"innsegl-core":       {"acme-dns", "appender", "enroller", "objects-sealer"},
+		"innsegl-reconciler": {"appender"},
+		"innsegl-sealer":     {"appender", "objects-sealer"},
+		"innsegl-backup":     {"backup", "objects-sealer"},
+		"innsegl-api":        {"authwriter", "reader", "resolver", "sso-key"},
+		"innsegl-canary":     {"objects-sealer"},
 	}
 	for k := range want {
 		sort.Strings(want[k])

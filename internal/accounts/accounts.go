@@ -6,7 +6,9 @@
 // and an append-only audit trail. Migration 0010 creates the tables, in
 // schema innsegl_auth beside the sign-in tables they reference.
 //
-// The store connects as the auth-writer role (internal/api.AuthWriterRole).
+// The API's store connects as the auth-writer role (internal/api.AuthWriterRole);
+// the core's connects as the enroller (internal/api.EnrollerRole, OpenEnroller),
+// which holds only the statements enrolment, renewal and revocation issue.
 // Every write appends an audit row in the same transaction, so a change with
 // no record of it cannot commit.
 package accounts
@@ -775,4 +777,20 @@ func (s *Store) ListAccounts(ctx context.Context) ([]AccountSummary, error) {
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// OpenEnroller connects with the enroller DSN (api.EnrollerRole, RM-355) and
+// REFUSES a credential api.AssertEnrollerScope does not accept: one that can
+// write the ledger, reach a sign-in table (the auth-writer can), or not
+// enrol. The core opens its accounts store with this, never with Open.
+func OpenEnroller(ctx context.Context, dsn string) (*Store, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("accounts: opening the pool: %w", err)
+	}
+	if _, err := api.AssertEnrollerScope(ctx, pool); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Store{pool: pool, own: true}, nil
 }

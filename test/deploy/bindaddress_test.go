@@ -6,6 +6,7 @@ import (
 	"context"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,8 +108,13 @@ func TestOPS127TheServiceSeesTheExposureVariables(t *testing.T) {
 	if !ok || dsn == nil || *dsn == "" {
 		t.Fatalf("innsegl-core environment carries no INNSEGL_GATEWAY_ACCOUNTS_DSN")
 	}
-	api := cfg.Service(t, "innsegl-api").Environment["INNSEGL_API_AUTH_DSN"]
-	if api == nil || *api != *dsn {
-		t.Errorf("INNSEGL_GATEWAY_ACCOUNTS_DSN = %q, want the auth-writer DSN the API holds (%v)", *dsn, api)
+	// RM-355 (#603): the core enrols as the enroller, never as the
+	// auth-writer the API holds.
+	if !strings.HasPrefix(*dsn, "postgres://innsegl_enroller@") ||
+		!strings.Contains(*dsn, "passfile=/run/innsegl/credentials/enroller/pgpass") {
+		t.Errorf("INNSEGL_GATEWAY_ACCOUNTS_DSN = %q, want the enroller's DSN", *dsn)
+	}
+	if api := cfg.Service(t, "innsegl-api").Environment["INNSEGL_API_AUTH_DSN"]; api != nil && *api == *dsn {
+		t.Errorf("the core holds the auth-writer DSN the API holds (%q)", *dsn)
 	}
 }

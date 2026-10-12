@@ -25,8 +25,9 @@ kept; a missing one is 32 bytes from `openssl rand -hex 32`.
 | ledger | owner | `ledger-owner` | `postgres` (first start), `innsegl-db-init` |
 | ledger | appender | `ledger-appender` | `innsegl-core`, reconciler, sealer |
 | ledger | reader | `ledger-reader` | `innsegl-api` |
-| ledger | auth writer | `ledger-authwriter` | `innsegl-api`, `innsegl-core` |
+| ledger | auth writer | `ledger-authwriter` | `innsegl-api` |
 | ledger | resolver | `ledger-resolver` | `innsegl-api` |
+| ledger | enroller (enrolment, renewal and revocation of machines) | `ledger-enroller` | `innsegl-core` |
 | ledger | backup | `ledger-backup` | `innsegl-backup` |
 | object store | root identity | `objects-root` | `innsegl-s3-identities`, `innsegl-object-init` |
 | object store | sealer identity | `objects-sealer` | `innsegl-core`, sealer, backup, canary |
@@ -59,7 +60,7 @@ No longer read: `INNSEGL_LEDGER_APPENDER_PASSWORD`,
 
 | volume | holds | mounted by |
 |---|---|---|
-| `innsegl-trust-credentials` | the core's nine credentials, 0400 | `innsegl-credentials` (rw); `innsegl-db-init`, `innsegl-s3-identities`, `innsegl-trust-backup` (ro) |
+| `innsegl-trust-credentials` | the core's ten credentials, 0400 | `innsegl-credentials` (rw); `innsegl-db-init`, `innsegl-s3-identities`, `innsegl-trust-backup` (ro) |
 | `innsegl-trust-sigstore-credentials` | the log database's three | `sigstore-bootstrap` (rw); `innsegl-trust-backup` (ro) |
 | `innsegl-credential-<name>` (core) | one credential in its reader's form: `password`, `pgpass`, `secret`, or `key` | the services that use it, read-only |
 | `sigstore-credential-logdb` | `root`, `trillian`, `init.sql`, `healthcheck.cnf`, `rekor.cnf` | `trillian-db` |
@@ -100,6 +101,12 @@ back. `innsegl-credentials` exits 1 when a stored credential is malformed.
 - OPS-163 (`test/deploy/ledgerdb/credentialsmove_test.go`, `logdbcredentials_test.go`):
   the move against a real Postgres and the pinned MySQL.
 - OPS-164 (`scripts/credentials-selftest.sh`): the generators.
+- LED-049 (`internal/accounts/enroller_test.go`, `internal/api/enroller_test.go`,
+  `test/deploy/ledgerdb/enrollerrole_test.go`): the enroller runs enrolment's
+  statements and is refused everything else the auth writer may do;
+  `db-init.sh` provisions it and `verify-enroller-role.sh` catches a widened grant.
+- ACC-019 (`cmd/innsegl/enroller_core_test.go`): the core enrols, renews and
+  revokes a machine as the enroller, and refuses to start holding the auth writer.
 
 ## Decisions
 

@@ -70,6 +70,7 @@ var moveRoles = map[string]string{
 	"backup":     deploytest.BackupRole,
 	"authwriter": deploytest.AuthwriterRole,
 	"resolver":   deploytest.ResolverRole,
+	"enroller":   deploytest.EnrollerRole,
 }
 
 func newCreds(t *testing.T) ledgerCreds {
@@ -124,9 +125,11 @@ func (p *movePG) dbInit(ctx context.Context, t *testing.T, c ledgerCreds, files 
 		"--env", "INNSEGL_BACKUP_ROLE=" + deploytest.BackupRole,
 		"--env", "INNSEGL_AUTHWRITER_ROLE=" + deploytest.AuthwriterRole,
 		"--env", "INNSEGL_RESOLVER_ROLE=" + deploytest.ResolverRole,
+		"--env", "INNSEGL_ENROLLER_ROLE=" + deploytest.EnrollerRole,
 		"--env", "INNSEGL_READONLY_SQL=/innsegl/api/readonly.sql",
 		"--env", "INNSEGL_AUTHWRITER_SQL=/innsegl/api/authwriter.sql",
 		"--env", "INNSEGL_RESOLVER_SQL=/innsegl/api/resolver.sql",
+		"--env", "INNSEGL_ENROLLER_SQL=/innsegl/api/enroller.sql",
 	}
 	if files {
 		dir := t.TempDir()
@@ -150,7 +153,8 @@ func (p *movePG) dbInit(ctx context.Context, t *testing.T, c ledgerCreds, files 
 			"--env", "INNSEGL_READER_PASSWORD="+c["reader"],
 			"--env", "INNSEGL_BACKUP_PASSWORD="+c["backup"],
 			"--env", "INNSEGL_AUTHWRITER_PASSWORD="+c["authwriter"],
-			"--env", "INNSEGL_RESOLVER_PASSWORD="+c["resolver"])
+			"--env", "INNSEGL_RESOLVER_PASSWORD="+c["resolver"],
+			"--env", "INNSEGL_ENROLLER_PASSWORD="+c["enroller"])
 	}
 	args = append(args, extra...)
 	args = append(args, p.Name, "sh", "/innsegl/init/db-init.sh")

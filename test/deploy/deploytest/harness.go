@@ -65,6 +65,10 @@ const (
 	// nothing else; db-init.sh provisions it beside the other four.
 	ResolverRole     = "innsegl_resolver"
 	resolverPassword = "innsegl-deploy-test-resolver"
+	// The core's enroller (RM-355): enrolment's statements on innsegl_auth
+	// and nothing else; db-init.sh provisions it beside the other five.
+	EnrollerRole     = "innsegl_enroller"
+	enrollerPassword = "innsegl-deploy-test-enroller"
 )
 
 // Requirement is what a harness must do for the calling test.
@@ -202,6 +206,12 @@ func DiscardError(string, error) {}
 // CopyDeployScripts puts the SHIPPED migrations and the SHIPPED init scripts
 // into the container at the paths deploy/compose/innsegl.yml mounts them.
 //
+// EnrollerDSN is the core's enrolment credential (RM-355).
+func (c *LedgerContainer) EnrollerDSN() string {
+	return fmt.Sprintf("postgres://%s:%s@127.0.0.1:%s/%s?sslmode=disable",
+		EnrollerRole, enrollerPassword, c.port, OwnerDatabase)
+}
+
 // The paths match the compose file on purpose: what this test runs must be the
 // artifact an adopter runs, not a second arrangement of the same files.
 func (c *LedgerContainer) CopyDeployScripts(ctx context.Context, root string) error {
@@ -219,6 +229,7 @@ func (c *LedgerContainer) CopyDeployScripts(ctx context.Context, root string) er
 		{root + "/internal/api/readonly.sql", "/innsegl/api/readonly.sql"},
 		{root + "/internal/api/authwriter.sql", "/innsegl/api/authwriter.sql"},
 		{root + "/internal/api/resolver.sql", "/innsegl/api/resolver.sql"},
+		{root + "/internal/api/enroller.sql", "/innsegl/api/enroller.sql"},
 	} {
 		dir := cp[1]
 		if strings.HasSuffix(dir, ".sql") {
@@ -256,6 +267,9 @@ func (c *LedgerContainer) RunInit(ctx context.Context, script string, extra ...s
 		"--env", "INNSEGL_RESOLVER_ROLE=" + ResolverRole,
 		"--env", "INNSEGL_RESOLVER_PASSWORD=" + resolverPassword,
 		"--env", "INNSEGL_RESOLVER_SQL=/innsegl/api/resolver.sql",
+		"--env", "INNSEGL_ENROLLER_ROLE=" + EnrollerRole,
+		"--env", "INNSEGL_ENROLLER_PASSWORD=" + enrollerPassword,
+		"--env", "INNSEGL_ENROLLER_SQL=/innsegl/api/enroller.sql",
 	}
 	args = append(args, extra...)
 	args = append(args, c.Name, "sh", "/innsegl/init/"+script)

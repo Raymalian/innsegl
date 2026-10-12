@@ -36,8 +36,14 @@
 #      resolution, and nothing else, the same mount-not-copy discipline.
 #  11. runs verify-resolver-role.sh, which asks the server whether that is
 #      all it can do.
+#  12. creates the ENROLLER role (RM-355, #603) and applies
+#      internal/api/enroller.sql to it — the statements the core's
+#      enrolment, renewal and revocation issue on innsegl_auth, and nothing
+#      else. The core holds it instead of the auth-writer.
+#  13. runs verify-enroller-role.sh, which asks the server whether that is
+#      all it can do.
 #
-# Steps 3, 5, 9 and 11 are the point. internal/api/readonly.go is the model:
+# Steps 3, 5, 9, 11 and 13 are the point. internal/api/readonly.go is the model:
 #
 #     "The assertion matters more than the provisioning. A role is provisioned
 #      once and then lives in somebody's deployment; a later GRANT by an
@@ -97,9 +103,11 @@ if [ -n "${CREDENTIALS_DIR}" ]; then
   INNSEGL_BACKUP_PASSWORD="$(read_credential ledger-backup)" || exit 1
   INNSEGL_AUTHWRITER_PASSWORD="$(read_credential ledger-authwriter)" || exit 1
   INNSEGL_RESOLVER_PASSWORD="$(read_credential ledger-resolver)" || exit 1
+  INNSEGL_ENROLLER_PASSWORD="$(read_credential ledger-enroller)" || exit 1
   # Exported: the verify-*.sh scripts this runs read them.
   export PGPASSWORD INNSEGL_APPENDER_PASSWORD INNSEGL_READER_PASSWORD \
-    INNSEGL_BACKUP_PASSWORD INNSEGL_AUTHWRITER_PASSWORD INNSEGL_RESOLVER_PASSWORD
+    INNSEGL_BACKUP_PASSWORD INNSEGL_AUTHWRITER_PASSWORD INNSEGL_RESOLVER_PASSWORD \
+    INNSEGL_ENROLLER_PASSWORD
 fi
 
 : "${PGHOST:?db-init: PGHOST must name the ledger}"
@@ -143,12 +151,20 @@ AUTHWRITER_ROLE="${INNSEGL_AUTHWRITER_ROLE:-innsegl_authwriter}"
 RESOLVER_ROLE="${INNSEGL_RESOLVER_ROLE:-innsegl_resolver}"
 : "${INNSEGL_RESOLVER_PASSWORD:?db-init: INNSEGL_RESOLVER_PASSWORD must be set}"
 
+# RM-355 (#603) — api.EnrollerRole. The core enrols, renews and revokes
+# machines through it: enrolment's own statements on innsegl_auth, nothing on
+# users, passkeys or sessions, nothing on the ledger. Like the others, a
+# default and not a protected string.
+ENROLLER_ROLE="${INNSEGL_ENROLLER_ROLE:-innsegl_enroller}"
+: "${INNSEGL_ENROLLER_PASSWORD:?db-init: INNSEGL_ENROLLER_PASSWORD must be set}"
+
 check_password owner "${PGPASSWORD}"
 check_password appender "${INNSEGL_APPENDER_PASSWORD}"
 check_password reader "${INNSEGL_READER_PASSWORD}"
 check_password backup "${INNSEGL_BACKUP_PASSWORD}"
 check_password authwriter "${INNSEGL_AUTHWRITER_PASSWORD}"
 check_password resolver "${INNSEGL_RESOLVER_PASSWORD}"
+check_password enroller "${INNSEGL_ENROLLER_PASSWORD}"
 
 # internal/api/readonly.sql, reached BY MOUNT and not by copy.
 #
@@ -175,6 +191,9 @@ AUTHWRITER_SQL="${INNSEGL_AUTHWRITER_SQL:-/innsegl/api/authwriter.sql}"
 # internal/api/resolver.sql, reached BY MOUNT for the identical reason.
 RESOLVER_SQL="${INNSEGL_RESOLVER_SQL:-/innsegl/api/resolver.sql}"
 
+# internal/api/enroller.sql, reached BY MOUNT for the identical reason.
+ENROLLER_SQL="${INNSEGL_ENROLLER_SQL:-/innsegl/api/enroller.sql}"
+
 # The same grammar internal/api/readonly.go accepts. A role name reaches SQL as
 # an identifier and psql quotes it, but a name this pattern rejects is a
 # configuration mistake worth catching where it is made.
@@ -190,6 +209,7 @@ check_role_name "${ROLE}"
 check_role_name "${READER_ROLE}"
 check_role_name "${AUTHWRITER_ROLE}"
 check_role_name "${RESOLVER_ROLE}"
+check_role_name "${ENROLLER_ROLE}"
 if [ "${ROLE}" = "${READER_ROLE}" ]; then
   fail "the append-only role and the read-only role are both \"${ROLE}\"; one role cannot be both"
 fi
@@ -202,6 +222,10 @@ fi
 case "${RESOLVER_ROLE}" in
   "${ROLE}"|"${READER_ROLE}"|"${AUTHWRITER_ROLE}"|"${BACKUP_ROLE}"|"${PGUSER}")
     fail "the resolver role \"${RESOLVER_ROLE}\" collides with another role; RM-330 requires a role that may insert an alert resolution and nothing else" ;;
+esac
+case "${ENROLLER_ROLE}" in
+  "${ROLE}"|"${READER_ROLE}"|"${AUTHWRITER_ROLE}"|"${BACKUP_ROLE}"|"${RESOLVER_ROLE}"|"${PGUSER}")
+    fail "the enroller role \"${ENROLLER_ROLE}\" collides with another role; RM-355 requires a role that holds enrolment's statements and nothing else" ;;
 esac
 
 # psql, with errors fatal and nothing read from a user profile.
@@ -248,7 +272,7 @@ owner_try() {
 move_ledger_passwords() {
   old="$1"
   existing="$(PGPASSWORD="${old}" psql -X -q -v ON_ERROR_STOP=1 -A -t -c \
-    "SELECT rolname FROM pg_roles WHERE rolname IN ('${ROLE}', '${READER_ROLE}', '${BACKUP_ROLE}', '${AUTHWRITER_ROLE}', '${RESOLVER_ROLE}') ORDER BY rolname")" \
+    "SELECT rolname FROM pg_roles WHERE rolname IN ('${ROLE}', '${READER_ROLE}', '${BACKUP_ROLE}', '${AUTHWRITER_ROLE}', '${RESOLVER_ROLE}', '${ENROLLER_ROLE}') ORDER BY rolname")" \
     || fail "could not list the ledger's roles with the old owner password; nothing was changed"
   sql="BEGIN;
 SET LOCAL lock_timeout = '${INNSEGL_CREDENTIALS_LOCK_TIMEOUT:-10s}';
@@ -260,6 +284,7 @@ ALTER ROLE :\"owner\" PASSWORD :'pass';"
     elif [ "${r}" = "${READER_ROLE}" ];     then p="${INNSEGL_READER_PASSWORD}"
     elif [ "${r}" = "${BACKUP_ROLE}" ];     then p="${INNSEGL_BACKUP_PASSWORD}"
     elif [ "${r}" = "${AUTHWRITER_ROLE}" ]; then p="${INNSEGL_AUTHWRITER_PASSWORD}"
+    elif [ "${r}" = "${ENROLLER_ROLE}" ];   then p="${INNSEGL_ENROLLER_PASSWORD}"
     else                                         p="${INNSEGL_RESOLVER_PASSWORD}"
     fi
     sql="${sql}
@@ -568,7 +593,45 @@ printf '%s\n' "${resolver_grants}" |
   psql_owner -v role="${RESOLVER_ROLE}" -v db="${PGDATABASE}" -f -
 
 # ---------------------------------------------------------------------------
-# 11. Ask the server about the resolver — the last check this script runs.
+# 11. Ask the server about the resolver.
 # ---------------------------------------------------------------------------
 log "verifying the resolver credential against the server"
-exec sh "${HERE}/verify-resolver-role.sh"
+sh "${HERE}/verify-resolver-role.sh"
+
+# ---------------------------------------------------------------------------
+# 12. RM-355 (#603) — the enroller role: enrolment's statements on
+#     innsegl_auth and nothing else. Applied the SAME way (mount, not copy).
+#     On an existing deployment this is where the role first appears: the
+#     core's next start (its credential volume changed, so `make update`
+#     recreates it) connects as it instead of the auth-writer.
+# ---------------------------------------------------------------------------
+[ -f "${ENROLLER_SQL}" ] || fail "no enroller grants at ${ENROLLER_SQL} (\$INNSEGL_ENROLLER_SQL). deploy/compose/innsegl.yml mounts internal/api/enroller.sql there; a second copy of those GRANTs under deploy/ is the wrong fix"
+
+enroller_exists="$(psql_owner -A -t -c "SELECT 1 FROM pg_roles WHERE rolname = '${ENROLLER_ROLE}'")"
+if [ -z "${enroller_exists}" ]; then
+  enroller_verb=CREATE
+  log "creating role ${ENROLLER_ROLE}"
+else
+  enroller_verb=ALTER
+  log "role ${ENROLLER_ROLE} already exists; resetting its password and its grants"
+fi
+
+psql_owner -v role="${ENROLLER_ROLE}" <<SQL
+\set pass '${INNSEGL_ENROLLER_PASSWORD}'
+${enroller_verb} ROLE :"role" LOGIN PASSWORD :'pass';
+SQL
+
+# The same translation as apply_authwriter_sql, for the same two verbs.
+enroller_grants="$(sed -e 's/%\[1\]s/:"role"/g' -e 's/%\[2\]s/:"db"/g' "${ENROLLER_SQL}")"
+if printf '%s\n' "${enroller_grants}" | grep -Eq '%(\[|[A-Za-z])'; then
+  fail "${ENROLLER_SQL} still contains an fmt verb after translation; teach this translation the new verb rather than copying the GRANTs into deploy/"
+fi
+log "applying ${ENROLLER_SQL} to ${ENROLLER_ROLE}"
+printf '%s\n' "${enroller_grants}" |
+  psql_owner -v role="${ENROLLER_ROLE}" -v db="${PGDATABASE}" -f -
+
+# ---------------------------------------------------------------------------
+# 13. Ask the server about the enroller — the last check this script runs.
+# ---------------------------------------------------------------------------
+log "verifying the enroller credential against the server"
+exec sh "${HERE}/verify-enroller-role.sh"

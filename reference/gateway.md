@@ -44,7 +44,7 @@ Read from the environment when the gateway starts (`cmd/innsegl/gateway.go`):
 | `INNSEGL_GATEWAY_CERT_NAMES` | empty | extra names (IP or DNS) on the server certificate |
 | `INNSEGL_MCP_MESSAGE_KEY_DIR` | unset | where the derived message key is written for `innsegl api` |
 | `INNSEGL_GATEWAY_CLIENT_AUTH` | empty | `spiffe` is hosted mode: every route needs an enrolled client certificate |
-| `INNSEGL_GATEWAY_ACCOUNTS_DSN` | unset | accounts writer; required in hosted mode |
+| `INNSEGL_GATEWAY_ACCOUNTS_DSN` | unset | the enroller (`innsegl_enroller`); required in hosted mode; the auth writer is refused at start |
 | `INNSEGL_GATEWAY_PORT` | `28095` | compose host port |
 | `INNSEGL_GATEWAY_CA_HOST_DIR` | `~/.innsegl/ca` | host folder the CA certificate is published to |
 | `INNSEGL_ACME` | `off` | `on`: the server certificate is publicly trusted, obtained through ACME DNS-01 (ADR-0081); the own CA otherwise |

@@ -412,7 +412,7 @@ for a hosted shape, set in `deploy/compose/.env` or the shell:
 | `INNSEGL_BIND` | host address the gateway (host port 28095) and dashboard are published on. Unset means `127.0.0.1`. Example: `192.0.2.10` |
 | `INNSEGL_GATEWAY_CLIENT_AUTH` | `spiffe` requires a client SVID on the gateway. Required whenever `INNSEGL_BIND` is not loopback |
 | `INNSEGL_GATEWAY_CERT_NAMES` | extra DNS names for the gateway certificate, e.g. `<core-name>` |
-| `INNSEGL_GATEWAY_ACCOUNTS_DSN` | set by the compose file to the auth-writer DSN; not an operator setting |
+| `INNSEGL_GATEWAY_ACCOUNTS_DSN` | set by the compose file to the enroller's DSN; not an operator setting |
 
 The gateway (`innsegl serve -also gateway`) refuses to start when
 `INNSEGL_BIND` is not loopback and `INNSEGL_GATEWAY_CLIENT_AUTH` is not

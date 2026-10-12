@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/accounts"
+	"innsegl.dev/innsegl/internal/api"
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/identity"
 	"innsegl.dev/innsegl/internal/ledger"
@@ -148,10 +149,13 @@ func (a *enAuthority) sign(pub crypto.PublicKey, uris []*url.URL, ttl time.Durat
 
 type enFixture struct {
 	ownerDSN, authDSN string
-	writer            *accounts.Store
-	account           string
-	ids               *gwIdentityFakeSPIRE
-	authority         *enAuthority
+	// enrollerDSN is what the core holds (RM-355): the shipped enroller
+	// grants, provisioned in this database. authDSN stays the API's.
+	enrollerDSN string
+	writer      *accounts.Store
+	account     string
+	ids         *gwIdentityFakeSPIRE
+	authority   *enAuthority
 }
 
 func newEnFixture(t *testing.T) *enFixture {
@@ -210,9 +214,31 @@ func newEnFixture(t *testing.T) *enFixture {
 		t.Fatal(err)
 	}
 
+	if eerr := api.EnsureEnrollerRole(ctx, ownerDSN, api.EnrollerRole, enEnrollerPassword); eerr != nil {
+		t.Fatalf("EnsureEnrollerRole: %v", eerr)
+	}
+	enrollerDSN, derr := withCredential(authDSN, api.EnrollerRole, enEnrollerPassword)
+	if derr != nil {
+		t.Fatal(derr)
+	}
+
 	auth := newEnAuthority(t)
 	t.Cleanup(publishClientAuthority(auth))
-	return &enFixture{ownerDSN: ownerDSN, authDSN: authDSN, writer: writer, account: acct.ID, ids: ids, authority: auth}
+	return &enFixture{ownerDSN: ownerDSN, authDSN: authDSN, enrollerDSN: enrollerDSN, writer: writer,
+		account: acct.ID, ids: ids, authority: auth}
+}
+
+// enEnrollerPassword is the enroller's password in the test database.
+const enEnrollerPassword = "en-enroller-password"
+
+// withCredential answers dsn with its user and password replaced.
+func withCredential(dsn, user, password string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", err
+	}
+	u.User = url.UserPassword(user, password)
+	return u.String(), nil
 }
 
 func (f *enFixture) token(t *testing.T, repos ...string) string {
@@ -283,7 +309,7 @@ func startHostedGatewayWith(t *testing.T, f *enFixture, reply http.Handler) *enG
 	args := []string{
 		"-listen", "127.0.0.1:0", "-upstream", upstream.URL, "-dsn", f.ownerDSN,
 		"-ca-key-dir", keyDir, "-ca-cert-dir", certDir,
-		"-client-auth", clientAuthSPIFFE, "-accounts-dsn", f.authDSN,
+		"-client-auth", clientAuthSPIFFE, "-accounts-dsn", f.enrollerDSN,
 	}
 	stderr := &syncBuffer{}
 	done := make(chan int, 1)

@@ -167,9 +167,11 @@ const (
 	// "spiffe" makes every client-facing route require an enrolled client's
 	// certificate. Unset is single-host mode, exactly as before.
 	envGatewayClientAuth = "INNSEGL_GATEWAY_CLIENT_AUTH"
-	// envGatewayAccountsDSN is the accounts writer (the auth-writer role)
-	// enrolment and renewal write through. The gateway's own ledger role
-	// only reads installations and grants. Required in hosted mode.
+	// envGatewayAccountsDSN is the enroller (api.EnrollerRole, RM-355)
+	// enrolment, renewal and revocation write through. Never the auth-writer:
+	// accounts.OpenEnroller refuses a credential that reaches the sign-in
+	// tables. The gateway's own ledger role only reads installations and
+	// grants. Required in hosted mode.
 	envGatewayAccountsDSN = "INNSEGL_GATEWAY_ACCOUNTS_DSN"
 )
 
@@ -292,8 +294,8 @@ type gatewayOptions struct {
 
 	// clientAuth is "" (single-host) or clientAuthSPIFFE (hosted, RM-284).
 	clientAuth string
-	// accountsDSN is the accounts writer enrolment and renewal use. Required
-	// in hosted mode, unused otherwise.
+	// accountsDSN is the enroller enrolment, renewal and revocation use.
+	// Required in hosted mode, unused otherwise.
 	accountsDSN string
 
 	// upstreamClient overrides the client openGateway hands to
@@ -353,7 +355,7 @@ func (o gatewayOptions) validate() string {
 			"installations and records runs in the ledger database"
 	case o.clientAuth == clientAuthSPIFFE && o.accountsDSN == "":
 		return "-client-auth " + clientAuthSPIFFE + " needs -accounts-dsn (or $" + envGatewayAccountsDSN + "): " +
-			"enrolment and renewal write installations through the accounts writer"
+			"enrolment and renewal write installations through the enroller role"
 	case o.clientAuth == clientAuthSPIFFE && os.Getenv(mirror.EnvDir) == "":
 		return "-client-auth " + clientAuthSPIFFE + " needs $" + mirror.EnvDir + ": a hosted client's commits " +
 			"are read from the core's mirror before they are signed, and the mirror is evidence (ADR-0065)"
@@ -533,8 +535,9 @@ func parseGatewayFlags(args []string, stderr io.Writer) (gatewayOptions, int, bo
 				"client's certificate, and /_core/enrol and /_core/renew are served (ADR-0063). Unset is "+
 				"single-host mode ($"+envGatewayClientAuth+")")
 		accountsDSN = fs.String("accounts-dsn", os.Getenv(envGatewayAccountsDSN),
-			"accounts writer connection string enrolment and renewal write through; required in hosted "+
-				"mode -- prefer the environment variable ($"+envGatewayAccountsDSN+")")
+			"the enroller's connection string (the innsegl_enroller role, never the auth-writer) "+
+				"enrolment and renewal write through; required in hosted mode -- prefer the environment "+
+				"variable ($"+envGatewayAccountsDSN+")")
 	)
 
 	fs.Usage = func() { gatewayUsage(stderr, fs) }
@@ -1060,9 +1063,11 @@ func openHostedCore(ctx context.Context, o gatewayOptions, running *runningGatew
 	}
 	installations := accountsInstallations{store: accounts.New(pool)}
 
-	writer, err := accounts.Open(ctx, o.accountsDSN)
+	// RM-355: the enroller, asserted against the server before anything is
+	// served. The auth-writer handed here by a copied line is refused.
+	writer, err := accounts.OpenEnroller(ctx, o.accountsDSN)
 	if err != nil {
-		return nil, fmt.Errorf("open the accounts writer: %w", err)
+		return nil, fmt.Errorf("open the enroller: %w", err)
 	}
 	running.closers = append(running.closers, writer.Close)
 
