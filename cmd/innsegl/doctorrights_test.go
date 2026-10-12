@@ -449,14 +449,18 @@ func TestCLI039DoctorOnlyTightensInnseglsOwnFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Since #597 (CLI-040) the client tightens its own state as soon as it
+	// reads it, which can happen before doctor's own mode check in the same
+	// run; either way the files must end private and the file outside, reached
+	// only through a symlink, must be untouched.
 	_, out := d.run(t)
-	if !strings.Contains(out, "modes: tightened") {
-		t.Errorf("no tightening reported:\n%s", out)
+	if !strings.Contains(out, "modes: tightened") && !strings.Contains(out, "modes: ok") {
+		t.Errorf("no mode result reported:\n%s", out)
 	}
 	for path, want := range map[string]os.FileMode{
 		p.Key: 0o600, p.Dir: 0o700, p.TrustIdentity: 0o600, filepath.Dir(p.TrustIdentity): 0o700,
 		p.TrustBackups: 0o700, backup: 0o600,
-		p.Authors: 0o400, p.Cert: 0o644, outside: 0o644,
+		p.Authors: 0o400, p.Cert: 0o600, outside: 0o644,
 	} {
 		fi, err := os.Stat(path)
 		if err != nil {

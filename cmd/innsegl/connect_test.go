@@ -252,7 +252,8 @@ func TestCLI015ConnectEnrolsWritesFilesSettingsAndService(t *testing.T) {
 
 	dir := filepath.Join(f.home, ".innsegl", "client")
 	for name, mode := range map[string]os.FileMode{
-		"key.pem": 0o600, "cert.pem": 0o644, "bundle.pem": 0o644, "gateway-ca.pem": 0o644, "core.json": 0o644,
+		// #597 (CLI-040): every file the client keeps is private to its user.
+		"key.pem": 0o600, "cert.pem": 0o600, "bundle.pem": 0o600, "gateway-ca.pem": 0o600, "core.json": 0o600,
 	} {
 		st, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
