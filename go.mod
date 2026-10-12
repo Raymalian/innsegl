@@ -20,7 +20,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/spiffe/go-spiffe/v2 v2.9.0
 	github.com/spiffe/spire-api-sdk v1.15.3
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 	google.golang.org/grpc v1.83.2
 	pgregory.net/rapid v1.3.0
 )
