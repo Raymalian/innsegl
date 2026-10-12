@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Re-derive every schema-2 golden fixture with an oracle that is not Go.
+"""Re-derive every schema-3 golden fixture with an oracle that is not Go.
 
 Same job as ../v1/verify.py and, deliberately, the same method: these fixtures
 are the normative, byte-level definition of a protected surface, and a fixture
@@ -17,7 +17,8 @@ What this checks that v1's does not:
     where a run has a parent.
   * ADR-0047 - `commit_intent` and `commit_recorded` carry `patch_id`, a
     40-hex object id from `git patch-id --verbatim`.
-  * every fixture declares `schema_version` "2".
+  * every fixture declares `schema_version` "3" (RM-262, #413: this was
+    "2", copied from ../v2/verify.py, and failed every fixture here).
 
 What it does NOT check, and where that lives instead:
 
@@ -38,7 +39,7 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 GENESIS_SEED = "innsegl-genesis-v1"
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 OBJECT_ID = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 
 

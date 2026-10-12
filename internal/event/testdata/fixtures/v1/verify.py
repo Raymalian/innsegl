@@ -42,6 +42,9 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 GENESIS_SEED = "innsegl-genesis-v1"
+# The version this directory holds. Every oracle declares its own, and
+# internal/event SER-040 holds it to the directory (RM-262, #413).
+SCHEMA_VERSION = "1"
 
 
 def canonical(obj) -> bytes:
@@ -81,6 +84,10 @@ def main() -> int:
               got, (HERE / f"{name}.canonical.json").read_bytes())
         check(f"{name}.hash",
               digest(got), (HERE / f"{name}.hash").read_bytes().decode("ascii"))
+        if obj.get("schema_version") != SCHEMA_VERSION:
+            failures.append(
+                f"{name}: schema_version {obj.get('schema_version')!r}, "
+                f"want {SCHEMA_VERSION!r}")
 
     # --- the 01..14 chain, walked from the genesis constant (doc 02 §4.4, §4.5)
     chain = sorted(n for n in (s.name[: -len(".input.json")] for s in inputs)
