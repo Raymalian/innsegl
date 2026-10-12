@@ -3,6 +3,11 @@
 package custody
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -95,5 +100,72 @@ func TestOPS232TheLogIsPinnedBeforeCustodyComesUp(t *testing.T) {
 			t.Errorf("%s: sigstore-up brings custody up before it pins the log, so a custody "+
 				"failure leaves the log unpinned and the next start is refused", mode)
 		}
+	}
+}
+
+// OPS-234. The last line of `make start` asks whether the pinned tree is still
+// served (OPS-034). rekor-tlog-health.sh looked for the pin under the checkout
+// it ran from, while the pin lives in the repository's main worktree (RM-150).
+// From a linked worktree, which is where a development stack is brought up,
+// the fresh custody bring-up of #622 pinned its tree and the check still said
+// "no tree pinned yet". The check reads the pin where rekor-tlog-pin.sh puts it.
+func TestOPS234TheReadinessCheckReadsThePinWhereTheBringUpWroteIt(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is not on PATH: %v", err)
+	}
+	root := deploytest.RepoRoot(t)
+	main := filepath.Join(t.TempDir(), "main")
+	for _, name := range []string{"rekor-tlog-health.sh", "rekor-tlog-pin.sh", "repo-main-worktree.sh", "rekor-port.sh"} {
+		body := deploytest.ReadFile(t, filepath.Join(root, "scripts", name))
+		path := filepath.Join(main, "scripts", name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		deploytest.WriteFile(t, path, body)
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git(main, "init", "-q", "-b", "main")
+	git(main, "add", ".")
+	git(main, "commit", "-q", "--no-gpg-sign", "-m", "scripts")
+	linked := filepath.Join(t.TempDir(), "linked")
+	git(main, "worktree", "add", "-q", linked)
+
+	const pinned = "579955947091588685"
+	if err := os.MkdirAll(filepath.Join(main, "deploy", "compose"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	deploytest.WriteFile(t, filepath.Join(main, "deploy", "compose", ".rekor-tlog-id.innsegl-dev"), pinned+"\n")
+	rekor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("treeID") != pinned {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"treeID":%q,"treeSize":3}`, pinned)
+	}))
+	defer rekor.Close()
+
+	cmd := exec.CommandContext(t.Context(), filepath.Join(linked, "scripts", "rekor-tlog-health.sh"), "--url", rekor.URL)
+	cmd.Dir = linked
+	cmd.Env = append(os.Environ(), "INNSEGL_STACK_PREFIX=innsegl-dev")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("rekor-tlog-health.sh from a linked worktree: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "no tree pinned yet") || !strings.Contains(string(out), pinned) {
+		t.Errorf("from a linked worktree the readiness check did not read the main worktree's pin "+
+			"(tree %s):\n%s", pinned, out)
 	}
 }

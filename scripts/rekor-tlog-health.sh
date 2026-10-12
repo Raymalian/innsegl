@@ -27,7 +27,8 @@
 #
 #   --url        Rekor's base URL. Default $INNSEGL_REKOR_URL, else
 #                http://127.0.0.1:$INNSEGL_REKOR_PORT (default port 23000).
-#   --pin-file   the pin. Default deploy/compose/.rekor-tlog-id.
+#   --pin-file   the pin. Default: where rekor-tlog-pin.sh path puts it, in the
+#                repository's main worktree, named for INNSEGL_STACK_PREFIX.
 #
 # EXIT
 #   0  the pinned tree is present; its size is printed
@@ -47,7 +48,10 @@ readonly EXIT_TREE_ABSENT=6
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 URL="${INNSEGL_REKOR_URL:-http://127.0.0.1:$("$(dirname "$0")/rekor-port.sh")}"
-PIN_FILE="${REPO_ROOT}/$("$(dirname "$0")/rekor-tlog-pin.sh" rel)"
+# Where rekor-tlog-pin.sh writes it: the repository's MAIN worktree (RM-150).
+# This read it under REPO_ROOT, so from a linked worktree, where a development
+# stack is brought up, a pinned tree read as "no tree pinned yet" (#622, OPS-234).
+PIN_FILE="$("$(dirname "$0")/rekor-tlog-pin.sh" path "${REPO_ROOT}")"
 QUIET=""
 
 usage() { sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; }
