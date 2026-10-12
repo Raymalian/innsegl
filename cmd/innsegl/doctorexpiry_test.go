@@ -266,3 +266,39 @@ func TestCLI051TheCoreReadsTheBackupMarker(t *testing.T) {
 		t.Errorf("unreadable marker read as %+v, want an empty report", got)
 	}
 }
+
+// CLI-049 — expiry is judged against the certificate's own lifetime: a
+// short-lived certificate its owner renews warns only once renewal is overdue
+// (under a quarter of its lifetime left), a long-lived root keeps the
+// seven-day rule.
+func TestCLI049ExpiryIsJudgedAgainstTheCertificatesOwnLifetime(t *testing.T) {
+	lifetime := 48 * time.Hour
+	server := func(left time.Duration) *serverCertStatus {
+		now := time.Now()
+		return &serverCertStatus{Source: "own", NotBefore: now.Add(left - lifetime), NotAfter: now.Add(left)}
+	}
+	for _, tc := range []struct {
+		name  string
+		core  func(c *doctorCore)
+		check string
+		want  string
+	}{
+		{"short-lived server cert, 17h of 48h left", func(c *doctorCore) { c.server = server(17*time.Hour + 30*time.Minute) }, "server certificate:", "ok — expires in 17h"},
+		{"short-lived server cert, 1h of 48h left", func(c *doctorCore) { c.server = server(time.Hour) }, "server certificate:", "EXPIRING — expires in"},
+		{"short-lived server cert, expired", func(c *doctorCore) { c.server = server(-time.Hour) }, "server certificate:", "EXPIRED"},
+		{"10-year root, 6 days left", func(c *doctorCore) {
+			now := time.Now()
+			c.trust = []trusthistory.Expiry{{Name: "gateway CA", Kind: trusthistory.KindGatewayCA,
+				NotBefore: now.AddDate(-10, 0, 6), NotAfter: now.Add(6*24*time.Hour + time.Minute)}}
+		}, "gateway CA:", "EXPIRING — expires in 6d"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core := healthyDoctorCore()
+			tc.core(core)
+			_, out := newDoctorRun(t, core).run(t)
+			if got := lineStarting(out, tc.check); !strings.Contains(got, ": "+tc.want) {
+				t.Fatalf("line %q, want %q\n%s", got, tc.want, out)
+			}
+		})
+	}
+}
