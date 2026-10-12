@@ -28,9 +28,9 @@ import (
 
 type statusDeps struct {
 	home string
-	// localURL overrides where the client service is asked; empty means the
-	// address the enrolment recorded.
-	localURL string
+	// socket overrides the client service's CLI socket; empty means the
+	// enrolment's own (client.SocketPath).
+	socket string
 	// now is the clock; nil is time.Now.
 	now func() time.Time
 }
@@ -75,9 +75,9 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 	}
 	fmt.Fprintf(tw, "this binary\t\t%s\n", version.String())
 
-	local := deps.localURL
+	local := deps.socket
 	if local == "" {
-		local = "http://" + enrolledListen(paths)
+		local = client.SocketPath(paths)
 	}
 	var unrouted []client.UnroutedSession
 	if svc, err := localClientStatus(ctx, local); err != nil {
@@ -169,14 +169,18 @@ func unroutedLines(tw io.Writer, sessions []client.UnroutedSession) {
 // client's status that slow, and must not read as the client being down.
 const localStatusTimeout = 8 * time.Second
 
-func localClientStatus(ctx context.Context, base string) (localStatus, error) {
+// localClientStatus asks the client service for its status on its CLI
+// socket (#600).
+func localClientStatus(ctx context.Context, socket string) (localStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, localStatusTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(base, "/")+client.StatusPath, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, client.SocketBase+client.StatusPath, http.NoBody)
 	if err != nil {
 		return localStatus{}, err
 	}
-	resp, err := (&http.Client{Transport: &http.Transport{Proxy: nil}}).Do(req)
+	rt := client.SocketTransport(socket)
+	defer rt.CloseIdleConnections()
+	resp, err := (&http.Client{Transport: rt}).Do(req)
 	if err != nil {
 		return localStatus{}, err
 	}

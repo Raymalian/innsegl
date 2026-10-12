@@ -338,6 +338,7 @@ func TestCLI023AClientServiceThatIsDownIsRestarted(t *testing.T) {
 	d.onRun = func(argv []string) {
 		if !doctorReadOnly(argv) {
 			svc.Start()
+			serveClientSocket(t, client.SocketPath(client.ClientPaths(f.home)), s.SocketHandler())
 		}
 	}
 

@@ -374,6 +374,7 @@ func TestCLI038DoctorExecsNothingOffItsList(t *testing.T) {
 	d.onRun = func(argv []string) {
 		if argv[0] == "launchctl" {
 			svc.Start()
+			serveClientSocket(t, client.SocketPath(client.ClientPaths(f.home)), s.SocketHandler())
 		}
 	}
 

@@ -70,9 +70,12 @@ type connectDeps struct {
 	// loadHarness has Claude Code read the settings (connectverify.go); nil
 	// means the real one.
 	loadHarness func(settings string, named bool, debugFile, ca string) error
-	// serviceURL is where --disconnect asks the client service to revoke
-	// this machine; empty means the address the enrolment names.
-	serviceURL string
+	// socket is the client service's CLI socket --disconnect asks to revoke
+	// this machine on; empty means the enrolment's own (client.SocketPath).
+	socket string
+	// presence asks the person at this machine to confirm a disconnect,
+	// with the question to show; nil is the terminal (CLI-045, #600).
+	presence func(question string) error
 	// lookPath finds a program on this shell's PATH; nil is exec.LookPath.
 	lookPath func(string) (string, error)
 	// host is the machine the preflight checks; nil is this one.
@@ -256,7 +259,7 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	fs.BoolVar(&f.service, "service", false, "with --update: also rewrite and reload the client service (ADR-0076)")
 	fs.BoolVar(&f.pause, "pause", false, "set the managed settings aside, unchanged")
 	fs.BoolVar(&f.resume, "resume", false, "put paused managed settings back")
-	fs.BoolVar(&f.disconnect, "disconnect", false, "remove what connect wrote: the managed settings keys, the service, ~/.innsegl/client")
+	fs.BoolVar(&f.disconnect, "disconnect", false, "remove what connect wrote: the managed settings keys, the service, ~/.innsegl/client (asks you to confirm on the terminal)")
 	fs.BoolVar(&f.update, "update", false, "rewrite this enrolled machine's managed settings to the chosen mode; no token")
 	fs.StringVar(&f.egress, "egress-control", "", "with --hardened, lock the sandbox's network to the hosts in this file, one per line")
 	fs.BoolVar(&f.hard, "hardened", false, "also lock the harness down: managed hooks only, bypass mode disabled, the sandbox; the user's statusLine is copied in")
@@ -621,6 +624,17 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 
 func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
 	paths := client.ClientPaths(deps.home)
+	// CLI-045 (#600): an enrolled machine is revoked on the core below; the
+	// person at it confirms first, before anything changes.
+	if cfg, cerr := client.ReadCoreConfig(paths); cerr == nil {
+		question := fmt.Sprintf("innsegl connect: this will revoke this machine (installation %s) on %s; its "+
+			"agents stop being recorded there, and it can only enrol again with a new token.",
+			cfg.InstallationID, cfg.CoreURL)
+		if perr := deps.askPresence(question); perr != nil {
+			fprintf(stderr, "innsegl connect: %v. Nothing was changed.\n", perr)
+			return exitConnectFailed
+		}
+	}
 	settings, err := deps.settingsConfig(enrolledListen(paths), false, thisBinary)
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
@@ -639,7 +653,7 @@ func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Wr
 	// reached does not stop the disconnect; it is said, with where to finish.
 	revokedOnCore := false
 	if _, statErr := os.Stat(paths.Core); statErr == nil {
-		if rerr := client.RevokeInstallation(ctx, paths, deps.serviceURL); rerr != nil {
+		if rerr := client.RevokeInstallation(ctx, paths, deps.socket); rerr != nil {
 			fprintf(stderr, "innsegl connect: the core could not revoke this machine (%v); its installation is "+
 				"still active on the core. Revoke it from the Account page, under Machines.\n", rerr)
 		} else {

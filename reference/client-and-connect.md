@@ -89,7 +89,7 @@ installed, with the one command that removes it, and removes nothing itself.
 | `-update` | rewrite this machine's managed settings to the chosen mode; no token |
 | `-service` | with `--update`, also rewrite and reload the client service (rewritten without it when it starts another binary than the hooks run) |
 | `-pause` / `-resume` | set the managed settings aside, or put them back |
-| `-disconnect` | remove what connect wrote: settings keys, the service, `~/.innsegl/client` |
+| `-disconnect` | remove what connect wrote: settings keys, the service, `~/.innsegl/client`; asks you to confirm on the terminal (below) |
 
 `innsegl client serve` takes only `-listen` (default: the address connect
 wrote). `innsegl status` takes no flags.
@@ -180,6 +180,7 @@ Under `~/.innsegl/client/` (`internal/client/files.go:50`):
 | `outbox/` | the signed client journal, for what the core could not record (ADR-0068) |
 | `proxy-ca.pem`, `proxy-ca-key.pem` | the local proxy CA |
 | `session-processes.json` | the harness process of each watched session |
+| `client.sock` | the CLI socket (0600; the folder is 0700): the CLI's calls to the core, and the service's status (below) |
 | `unrouted-sessions.json` | sessions whose model traffic bypassed innsegl (below) |
 | `age-plugins.json` | each pinned age plugin: name, absolute path, SHA-256 (below) |
 
@@ -239,8 +240,9 @@ A Secure Enclave identity (`age-plugin-se`) works on macOS only. A missing
 or refused plugin does not stop connect: it is named, and the CA unlock fails
 until it is installed and pinned.
 
-Local routes: `GET /_client/status`, and `/_client/core/<core path>` for the
-CLI (below). Core routes it calls: `/_core/enrol`, `/_core/renew`,
+Local routes: on the loopback TCP address, `GET /_client/status` and the
+harness's traffic; on the CLI socket, `GET /_client/status` and
+`/_client/core/<core path>` (below). Core routes it calls: `/_core/enrol`, `/_core/renew`,
 `/_core/status`, `/_core/disconnect`, `/_core/journal`, `/_core/git/`,
 `/_core/trust-backup`, `/_core/ca-custody`, `/_core/operator-author`,
 `/_core/unrouted-session`.
@@ -270,11 +272,23 @@ finding. The dashboard overview lists the findings
 
 `innsegl status`, `ca-custody`, `trust-backup fetch`, `author` and
 `connect --disconnect` never dial the core. They send their calls to the
-client service on its loopback address, under `/_client/core`, and the
-service sends them on over its own certificate (`internal/client/corepass.go`).
-On macOS a binary started from a terminal without the Local Network
-permission cannot reach a core on the LAN ("no route to host"); the launchd
-service can, and loopback is never "local network".
+client service on its CLI socket, `~/.innsegl/client/client.sock`, under
+`/_client/core`, and the service sends them on over its own certificate
+(`internal/client/corepass.go`, `socket.go`). On macOS a binary started from
+a terminal without the Local Network permission cannot reach a core on the
+LAN ("no route to host"); the launchd service can.
+
+Only the service's own user may use the socket (#600). The folder is 0700
+and the socket 0600, and the service asks the kernel for each caller's uid
+(`LOCAL_PEERCRED` on macOS, `SO_PEERCRED` on Linux). A connection from any
+other uid is closed before a byte is read, and the service's log says so
+(CLI-043). The loopback TCP address no longer passes these calls: a
+`/_client/core` request there gets 410 naming the socket, and the core is
+not asked (CLI-044). The harness's traffic, the hooks and git stay on the
+TCP address, and so does `GET /_client/status`, which the hooks read.
+`innsegl doctor` and `innsegl status` read the service's status on the
+socket. A socket the service cannot open is said in its log; the TCP
+address serves on.
 
 The service passes exactly these, and refuses anything else itself, without
 asking the core (CLI-018):
@@ -297,7 +311,7 @@ What the CLI says when the way is not there:
 
 | Situation | The CLI says |
 |---|---|
-| the service does not answer | the client service is not answering at `<addr>`; start it: `launchctl kickstart -k gui/$(id -u)/dev.innsegl.client` (macOS) or `systemctl --user restart innsegl-client.service` |
+| the service does not answer | the client service is not answering at `<socket>`; start it: `launchctl kickstart -k gui/$(id -u)/dev.innsegl.client` (macOS) or `systemctl --user restart innsegl-client.service` |
 | the service predates this route (the binary was rebuilt, the service not restarted) | the client service is older than this command; restart it so it runs this build (the same command), or `make client-restart` |
 | the service could not reach the core | the core did not answer the client service |
 | the core does not know a route or method (405, or a path its gateway refuses as an unrecognised harness shape) | the core is older than this client; update the core |
@@ -306,6 +320,16 @@ What the CLI says when the way is not there:
 or older: a disconnect is the last thing the machine does with its key and
 must not depend on the service it removes. Where that dial is refused too, it
 says to revoke the machine from the Account page.
+
+### Disconnect asks the person at the machine
+
+On an enrolled machine, `connect --disconnect` revokes the installation on
+the core, so it first asks for the person at the machine (CLI-045). innsegl
+has no Touch ID prompt of its own, so this is a typed confirmation: it opens
+the terminal (`/dev/tty`) directly, says which installation on which core it
+revokes, and goes on only when `disconnect` is typed. A process without a
+terminal (an agent's shell, a pipe) cannot answer it. Anything else, or no
+terminal, changes nothing: the command says so and exits 24.
 
 ## Exit codes and error classes
 
@@ -332,7 +356,12 @@ says to revoke the machine from the Account page.
   (CLI-020, PROPOSED), `authorcli_test.go` (ENF-016, PROPOSED)
 - `internal/client/*_test.go` (JRN-002, JRN-008, JRN-009, BAK-025 to BAK-028);
   `corepass_test.go` (CLI-017 to CLI-019, PROPOSED: the pass-through over a
-  real loopback listener, its refusals, and what the CLI says);
+  real socket, its refusals, and what the CLI says);
+  `socket_test.go` (CLI-043, CLI-044, PROPOSED: another uid refused by the
+  kernel's peer credentials; the TCP pass-through gone; the socket serves
+  only the CLI)
+- `cmd/innsegl/disconnectpresence_test.go` (CLI-045, PROPOSED: disconnect
+  asks the person on the terminal, and changes nothing without them)
   `operatorauthor_test.go` (ENF-016, PROPOSED)
 - `scripts/codesign-cli-selftest.sh` (OPS-169, PROPOSED),
   `scripts/client-restart-selftest.sh` (OPS-170, PROPOSED),
