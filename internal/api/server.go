@@ -331,13 +331,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// and never added to the list is therefore refused, not silently
 	// admitted, however it got onto the mux.
 	if _, pattern := s.mux.Handler(r); !authAllowedRoutes[pattern] {
-		userID, _, ok := s.sessionFromRequest(r)
-		if !ok {
-			writeError(w, http.StatusUnauthorized, codeUnauthorized,
-				"sign in required (ADR-0062): this dashboard and its read API answer "+
-					"nothing without an operator session")
+		sess, state := s.checkSession(r)
+		if state != SessionLive {
+			writeSignInRequired(w, state)
 			return
 		}
+		userID := sess.UserID
 		// RM-307 (#486): every read below sees only the viewer's runs.
 		scope, scoped, err := s.runScopeFor(r, userID)
 		if err != nil {

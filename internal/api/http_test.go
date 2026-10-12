@@ -227,43 +227,45 @@ func loginWithAuthenticator(t *testing.T, baseURL string, auth *webauthntest.Aut
 
 // addPasskeyViaAPI drives #445's add-a-passkey ceremony (POST
 // /api/v1/account/passkeys/begin, then .../finish) over real HTTP for a
-// signed-in session, the same two-call shape enrolTestUser drives for the
-// first one. It returns the software authenticator it just registered (so a
-// case can sign in with it afterwards) and the AccountPasskey the finish
-// call answered.
-func addPasskeyViaAPI(t *testing.T, baseURL, name string, cookie *http.Cookie) (*webauthntest.Authenticator, AccountPasskey) {
+// signed-in session. #602: confirmer's passkey confirms it, as the
+// dashboard's step-up does; nil sends no confirmation, for a fresh
+// recovery-code session the server asks none of. It returns the software
+// authenticator it just registered and the AccountPasskey finish answered.
+func addPasskeyViaAPI(t *testing.T, baseURL, name string, cookie *http.Cookie,
+	confirmer *webauthntest.Authenticator, userID string,
+) (*webauthntest.Authenticator, AccountPasskey) {
 	t.Helper()
-	beginBody, err := json.Marshal(map[string]string{"name": name})
-	if err != nil {
-		t.Fatalf("encoding account/passkeys/begin body: %v", err)
-	}
-	begin := do(t, http.MethodPost, baseURL+"/api/v1/account/passkeys/begin", string(beginBody), cookie)
+	begin := unlockDo(t, http.MethodPost, baseURL+"/api/v1/account/passkeys/begin",
+		mustJSON(t, PasskeyBeginRequest{Name: name}), testWebAuthnConfig.RPOrigin, cookie)
 	if begin.status != http.StatusOK {
 		t.Fatalf("POST /api/v1/account/passkeys/begin: %d: %s", begin.status, begin.body)
 	}
-	var creation ceremonyResponse
-	if jerr := json.Unmarshal(begin.body, &creation); jerr != nil {
-		t.Fatalf("decoding account/passkeys/begin response: %v: %s", jerr, begin.body)
-	}
+	var challenge passkeyAddChallenge
+	decodeBody(t, begin, &challenge)
 
 	auth := newSoftAuthenticator(t)
-	credentialBody, rerr := auth.Register(creation.CredentialCreation, testWebAuthnConfig.RPOrigin)
+	credentialBody, rerr := auth.Register(challenge.CredentialCreation, testWebAuthnConfig.RPOrigin)
 	if rerr != nil {
 		t.Fatalf("Register: %v", rerr)
 	}
-	finishBody, err := json.Marshal(map[string]any{
-		"ceremony_id": creation.CeremonyID,
-		"credential":  json.RawMessage(credentialBody),
-	})
-	if err != nil {
-		t.Fatalf("encoding account/passkeys/finish body: %v", err)
+	finish := map[string]any{"ceremony_id": challenge.CeremonyID, "credential": json.RawMessage(credentialBody)}
+	if confirmer != nil {
+		if challenge.Confirm == nil {
+			t.Fatal("passkeys/begin asked for no confirmation")
+		}
+		confirmation, aerr := confirmer.Assert(challenge.Confirm, testWebAuthnConfig.RPOrigin, userID)
+		if aerr != nil {
+			t.Fatalf("Assert: %v", aerr)
+		}
+		finish["confirmation"] = json.RawMessage(confirmation)
 	}
-	finish := do(t, http.MethodPost, baseURL+"/api/v1/account/passkeys/finish", string(finishBody), cookie)
-	if finish.status != http.StatusOK {
-		t.Fatalf("POST /api/v1/account/passkeys/finish: %d: %s", finish.status, finish.body)
+	a := unlockDo(t, http.MethodPost, baseURL+"/api/v1/account/passkeys/finish", mustJSON(t, finish),
+		testWebAuthnConfig.RPOrigin, cookie)
+	if a.status != http.StatusOK {
+		t.Fatalf("POST /api/v1/account/passkeys/finish: %d: %s", a.status, a.body)
 	}
 	var pk AccountPasskey
-	decodeBody(t, finish, &pk)
+	decodeBody(t, a, &pk)
 	return auth, pk
 }
 

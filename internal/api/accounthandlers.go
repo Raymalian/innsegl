@@ -8,7 +8,9 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
@@ -33,8 +35,12 @@ func (s *Server) newAccountMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/account/passkeys/begin", s.handlePasskeyBegin)
 	mux.HandleFunc("POST /api/v1/account/passkeys/finish", s.handlePasskeyFinish)
 	mux.HandleFunc("PATCH /api/v1/account/passkeys/{id}", s.handlePasskeyRename)
-	mux.HandleFunc("DELETE /api/v1/account/passkeys/{id}", s.handlePasskeyDelete)
-	mux.HandleFunc("POST /api/v1/account/recovery-codes", s.handleRecoveryCodesRegenerate)
+	// #602: removing a passkey and regenerating recovery codes take a
+	// fresh passkey (stepup.go); adding one carries the same confirmation.
+	mux.HandleFunc("POST /api/v1/account/passkeys/remove/begin", s.handlePasskeyRemoveBegin)
+	mux.HandleFunc("POST /api/v1/account/passkeys/remove/finish", s.handlePasskeyRemoveFinish)
+	mux.HandleFunc("POST /api/v1/account/recovery-codes/begin", s.handleRecoveryCodesBegin)
+	mux.HandleFunc("POST /api/v1/account/recovery-codes/finish", s.handleRecoveryCodesFinish)
 	s.registerOrganisationRoutes(mux)
 	s.registerSSOAccountRoutes(mux)
 	// #613: unlock keys and the dashboard's unlock (ADR-0082).
@@ -85,14 +91,13 @@ func (s *Server) sameOriginSession(w http.ResponseWriter, r *http.Request) (acco
 			"this request's Origin does not match the dashboard's own origin")
 		return accountSession{}, false
 	}
-	userID, passkeyID, ok := s.sessionFromRequest(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, codeUnauthorized,
-			"sign in required (ADR-0062): this dashboard and its read API answer "+
-				"nothing without an operator session")
+	sess, state := s.checkSession(r)
+	if state != SessionLive {
+		writeSignInRequired(w, state)
 		return accountSession{}, false
 	}
-	return accountSession{userID: userID, passkeyID: passkeyID}, true
+	return accountSession{userID: sess.UserID, passkeyID: sess.PasskeyID, openedAt: sess.CreatedAt,
+		recovery: sess.PasskeyID == "" && !sess.SSO}, true
 }
 
 // withAccountSession carries a verified session on a request's context, for
@@ -107,6 +112,11 @@ func withAccountSession(ctx context.Context, sess accountSession) context.Contex
 type accountSession struct {
 	userID    string
 	passkeyID string
+	// openedAt and recovery (#602): when the session began, and whether a
+	// recovery code opened it — the one session that may add a passkey
+	// without a passkey's confirmation, briefly (recoveryStepUpWindow).
+	openedAt time.Time
+	recovery bool
 }
 
 // accountSessionContextKey is unexported, so only this file can set or read
@@ -208,9 +218,42 @@ func (s *Server) handlePatchAccount(w http.ResponseWriter, r *http.Request) {
 // POST /api/v1/account/passkeys/begin, .../finish
 // ---------------------------------------------------------------------------
 
+// Ceremony kinds, migration 0024's (#602).
+const (
+	ceremonyKindAddPasskey         = "add_passkey"
+	ceremonyKindRemovePasskey      = "remove_passkey"
+	ceremonyKindRegenerateRecovery = "regenerate_recovery_codes"
+)
+
+// passkeyAddChallenge answers passkeys/begin: the new passkey's registration
+// and, before it, the step-up — an assertion from one of the account's own
+// passkeys. Confirm is absent only for a recovery-code sign-in still inside
+// recoveryStepUpWindow.
+type passkeyAddChallenge struct {
+	CeremonyID string `json:"ceremony_id"`
+	*protocol.CredentialCreation
+	Confirm *protocol.CredentialAssertion `json:"confirm,omitempty"`
+}
+
+// passkeyAddFinish is passkeys/finish's body: the new credential, and the
+// step-up's assertion.
+type passkeyAddFinish struct {
+	CeremonyID   string          `json:"ceremony_id"`
+	Credential   json.RawMessage `json:"credential"`
+	Confirmation json.RawMessage `json:"confirmation"`
+}
+
+// pendingPasskeyAdd is what an add_passkey ceremony holds: go-webauthn's two
+// SessionData, round-tripped unmodified. Confirm is nil when none was asked.
+type pendingPasskeyAdd struct {
+	Register webauthn.SessionData  `json:"register"`
+	Confirm  *webauthn.SessionData `json:"confirm,omitempty"`
+}
+
 func (s *Server) handlePasskeyBegin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	userID := accountSessionFrom(r).userID
+	sess := accountSessionFrom(r)
+	userID := sess.userID
 	var req PasskeyBeginRequest
 	if !decodeAuthRequest(w, r, &req) {
 		return
@@ -232,6 +275,16 @@ func (s *Server) handlePasskeyBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pending := pendingPasskeyAdd{}
+	var confirm *protocol.CredentialAssertion
+	if !recoveryMayAddPasskey(sess) {
+		assertion, confirmSession, ok := s.beginStepUp(ctx, w, userID)
+		if !ok {
+			return
+		}
+		confirm, pending.Confirm = assertion, confirmSession
+	}
+
 	user := dbUser{id: userID, displayName: u.DisplayName, credentials: existing}
 	creation, sessionData, err := s.webAuthn.BeginRegistration(user,
 		webauthn.WithAuthenticatorSelection(registrationSelection),
@@ -244,7 +297,8 @@ func (s *Server) handlePasskeyBegin(w http.ResponseWriter, r *http.Request) {
 			"registration ceremony: "+err.Error())
 		return
 	}
-	body, err := json.Marshal(sessionData)
+	pending.Register = *sessionData
+	body, err := json.Marshal(pending)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not save the ceremony")
 		return
@@ -253,23 +307,24 @@ func (s *Server) handlePasskeyBegin(w http.ResponseWriter, r *http.Request) {
 	// purpose than 'register' puts them to — see migration 0009's own
 	// comment: here they carry the ALREADY-signed-in user (never a new one)
 	// and the NAME this new passkey is being given.
-	ceremonyID, err := s.authStore.SaveCeremony(ctx, "add_passkey", body, userID, name, authCeremonyTTL)
+	ceremonyID, err := s.authStore.SaveCeremony(ctx, ceremonyKindAddPasskey, body, userID, name, authCeremonyTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not save the ceremony")
 		return
 	}
-	writeJSON(w, http.StatusOK, ceremonyResponse{CeremonyID: ceremonyID, CredentialCreation: creation})
+	writeJSON(w, http.StatusOK, passkeyAddChallenge{CeremonyID: ceremonyID, CredentialCreation: creation, Confirm: confirm})
 }
 
 func (s *Server) handlePasskeyFinish(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	userID := accountSessionFrom(r).userID
-	var req finishRequest
+	sess := accountSessionFrom(r)
+	userID := sess.userID
+	var req passkeyAddFinish
 	if !decodeAuthRequest(w, r, &req) {
 		return
 	}
 
-	ceremony, err := s.authStore.LoadAndConsumeCeremony(ctx, req.CeremonyID, "add_passkey")
+	ceremony, err := s.authStore.LoadAndConsumeCeremony(ctx, req.CeremonyID, ceremonyKindAddPasskey)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, codeUnauthorized, "this ceremony has expired "+
 			"or was already completed; start over")
@@ -284,12 +339,25 @@ func (s *Server) handlePasskeyFinish(w http.ResponseWriter, r *http.Request) {
 			"belong to the signed-in user")
 		return
 	}
-	var sessionData webauthn.SessionData
-	if jerr := json.Unmarshal(ceremony.SessionData, &sessionData); jerr != nil {
+	var pending pendingPasskeyAdd
+	if jerr := json.Unmarshal(ceremony.SessionData, &pending); jerr != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not read the saved ceremony")
 		return
 	}
 
+	// 1. The step-up. A ceremony that asked none is honoured only while
+	// this session is still a fresh recovery-code sign-in.
+	if pending.Confirm != nil {
+		if !s.verifyStepUp(ctx, w, ceremonyKindAddPasskey, userID, *pending.Confirm, req.Confirmation) {
+			return
+		}
+	} else if !recoveryMayAddPasskey(sess) {
+		s.recordAuth(ctx, AuthEventConfirmationRefused, userID, ceremonyKindAddPasskey+": no passkey confirmation")
+		writeError(w, http.StatusUnauthorized, codeUnauthorized, confirmMissingMessage)
+		return
+	}
+
+	// 2. The new passkey.
 	u, err := s.authStore.UserByID(ctx, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not load the account")
@@ -302,7 +370,7 @@ func (s *Server) handlePasskeyFinish(w http.ResponseWriter, r *http.Request) {
 	}
 	user := dbUser{id: userID, displayName: u.DisplayName, credentials: existing}
 
-	cred, err := s.webAuthn.FinishRegistration(user, sessionData, credentialHTTPRequest(req.Credential))
+	cred, err := s.webAuthn.FinishRegistration(user, pending.Register, credentialHTTPRequest(req.Credential))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, codeUnauthorized, "the passkey could not be "+
 			"registered: "+err.Error())
@@ -356,15 +424,55 @@ func (s *Server) handlePasskeyRename(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handlePasskeyDelete(w http.ResponseWriter, r *http.Request) {
+// removablePasskey checks that id is one of userID's passkeys and not the
+// last, writing the refusal itself.
+func (s *Server) removablePasskey(ctx context.Context, w http.ResponseWriter, userID, id string) bool {
+	rows, err := s.authStore.AccountPasskeys(ctx, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, codeInternal, "could not list existing passkeys")
+		return false
+	}
+	found := false
+	for _, p := range rows {
+		found = found || p.ID == id
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, codeNotFound, "no such passkey")
+		return false
+	}
+	if len(rows) == 1 {
+		writeError(w, http.StatusConflict, codeConflict, lastPasskeyMessage)
+		return false
+	}
+	return true
+}
+
+const lastPasskeyMessage = "this is the only passkey on the account; add another one before removing this one"
+
+func (s *Server) handlePasskeyRemoveBegin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := accountSessionFrom(r).userID
-	id := r.PathValue("id")
-	if err := s.authStore.DeletePasskey(ctx, userID, id); err != nil {
+	var req PasskeyRemove
+	if !decodeAuthRequest(w, r, &req) {
+		return
+	}
+	if !s.removablePasskey(ctx, w, userID, req.ID) {
+		return
+	}
+	s.beginConfirmation(ctx, w, ceremonyKindRemovePasskey, userID, req)
+}
+
+func (s *Server) handlePasskeyRemoveFinish(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := accountSessionFrom(r).userID
+	var req PasskeyRemove
+	if !s.finishConfirmation(w, r, ceremonyKindRemovePasskey, userID, &req) {
+		return
+	}
+	if err := s.authStore.DeletePasskey(ctx, userID, req.ID); err != nil {
 		switch {
 		case errors.Is(err, ErrLastPasskey):
-			writeError(w, http.StatusConflict, codeConflict, "this is the only passkey on the "+
-				"account; add another one before removing this one")
+			writeError(w, http.StatusConflict, codeConflict, lastPasskeyMessage)
 		case errors.Is(err, ErrPasskeyNotFound):
 			writeError(w, http.StatusNotFound, codeNotFound, "no such passkey")
 		default:
@@ -377,12 +485,21 @@ func (s *Server) handlePasskeyDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/v1/account/recovery-codes
+// POST /api/v1/account/recovery-codes/begin, .../finish
 // ---------------------------------------------------------------------------
 
-func (s *Server) handleRecoveryCodesRegenerate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRecoveryCodesBegin(w http.ResponseWriter, r *http.Request) {
+	userID := accountSessionFrom(r).userID
+	s.beginConfirmation(r.Context(), w, ceremonyKindRegenerateRecovery, userID, struct{}{})
+}
+
+func (s *Server) handleRecoveryCodesFinish(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := accountSessionFrom(r).userID
+	var req struct{}
+	if !s.finishConfirmation(w, r, ceremonyKindRegenerateRecovery, userID, &req) {
+		return
+	}
 	codes, err := s.authStore.MintRecoveryCodes(ctx, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not mint recovery codes")

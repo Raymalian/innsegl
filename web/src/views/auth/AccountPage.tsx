@@ -47,6 +47,7 @@ import {
   renamePasskey,
   signOutOtherSessions,
   updateAccount,
+  type AddPasskeyStep,
   type WebAuthnBrowser,
 } from "./client";
 import { formatDate, formatDateTime } from "./format";
@@ -222,7 +223,7 @@ function AccountLoaded({
       <RepositoriesSection multiOrg={account.organisations.length > 1} />
       <AgentsSection />
       <PasskeysSection account={account} reload={reload} browser={browser} />
-      <RecoverySection account={account} reload={reload} />
+      <RecoverySection account={account} reload={reload} browser={browser} />
       <SessionsSection />
     </>
   );
@@ -413,7 +414,7 @@ function PasskeysSection({
   const remove = async (passkey: AccountPasskey) => {
     setRow(passkey.id, { status: "removing" });
     try {
-      await removePasskey(passkey.id);
+      await removePasskey(passkey.id, browser);
       setRow(passkey.id, { status: "idle" });
       reload();
     } catch (err) {
@@ -546,7 +547,7 @@ function PasskeysSection({
                           onClick={() => setRow(passkey.id, { status: "confirming-remove" })}
                           className={`${secondaryButton} ${focusRing}`}
                         >
-                          {strings.account.removeButton}
+                          {phase.status === "removing" ? strings.account.removeWorking : strings.account.removeButton}
                         </button>
                       </div>
                     )}
@@ -574,7 +575,7 @@ function PasskeysSection({
 
 type AddPhase =
   | { readonly status: "idle" }
-  | { readonly status: "working" }
+  | { readonly status: "working"; readonly step: AddPasskeyStep | null }
   | { readonly status: "failed"; readonly message: string };
 
 function defaultPasskeyName(count: number): string {
@@ -598,9 +599,9 @@ function AddPasskeySection({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setPhase({ status: "working" });
+    setPhase({ status: "working", step: null });
     try {
-      await addPasskey(name.trim(), browser);
+      await addPasskey(name.trim(), browser, undefined, (step) => setPhase({ status: "working", step }));
       setPhase({ status: "idle" });
       setOpen(false);
       setName(defaultPasskeyName(account.passkeys.length + 1));
@@ -655,8 +656,15 @@ function AddPasskeySection({
         </button>
       </form>
       <span id={nameHintId} className={`text-micro ${secondaryText}`}>
-        {strings.account.addNameHint}
+        {strings.account.addNameHint} {strings.account.addConfirmNote}
       </span>
+      {phase.status === "working" && phase.step !== null && (
+        <p role="status" className={`${noticeBase} ${mutedText}`}>
+          <span className={noticeBody}>
+            {phase.step === "confirm" ? strings.account.addWorkingConfirm : strings.account.addWorkingCreate}
+          </span>
+        </p>
+      )}
       {phase.status === "failed" && (
         <p role="alert" className={`${noticeBase} ${degraded}`}>
           <span className={noticeBody}>{phase.message}</span>
@@ -691,9 +699,11 @@ type RecoveryPhase =
 function RecoverySection({
   account,
   reload,
+  browser,
 }: {
   readonly account: Account;
   readonly reload: () => void;
+  readonly browser: WebAuthnBrowser;
 }) {
   const headingId = useId();
   const [phase, setPhase] = useState<RecoveryPhase>({ status: "idle" });
@@ -701,7 +711,7 @@ function RecoverySection({
   const generate = async () => {
     setPhase({ status: "working" });
     try {
-      const result = await generateRecoveryCodes();
+      const result = await generateRecoveryCodes(browser);
       setPhase({ status: "codes", codes: [...result.codes] });
     } catch (err) {
       setPhase({
@@ -755,7 +765,7 @@ function RecoverySection({
                 onClick={() => setPhase({ status: "confirming" })}
                 className={`${secondaryButton} ${focusRing}`}
               >
-                {strings.account.regenerateButton}
+                {phase.status === "working" ? strings.account.regenerateWorking : strings.account.regenerateButton}
               </button>
             )}
             {phase.status === "failed" && (

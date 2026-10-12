@@ -553,10 +553,6 @@ func (s *Server) handleUnlockKeyBegin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not load the account")
 		return
 	}
-	if len(user.credentials) == 0 {
-		writeError(w, http.StatusForbidden, codeForbidden, confirmNeedsPasskey)
-		return
-	}
 	existing, err := s.authStore.unlockKeys(ctx, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not list the unlock keys")
@@ -579,10 +575,9 @@ func (s *Server) handleUnlockKeyBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confirm, confirmSession, err := s.webAuthn.BeginLogin(user,
-		webauthn.WithUserVerification(protocol.VerificationRequired))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, codeInternal, "could not begin the confirmation: "+err.Error())
+	// The step-up (stepup.go): the person's own sign-in passkey, fresh.
+	confirm, confirmSession, ok := s.beginStepUp(ctx, w, userID)
+	if !ok {
 		return
 	}
 	keyUser := dbUser{id: unlockUserHandle(userID), displayName: user.displayName}
@@ -689,13 +684,7 @@ func (s *Server) handleUnlockKeyFinish(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, codeInternal, "could not load the account")
 		return
 	}
-	passkey, err := s.webAuthn.FinishLogin(user, pending.Confirm, credentialHTTPRequest(req.Confirmation))
-	if err != nil {
-		refuse(http.StatusUnauthorized, "your sign-in passkey did not confirm this: "+err.Error())
-		return
-	}
-	if uerr := s.authStore.UpdatePasskey(ctx, *passkey); uerr != nil {
-		writeError(w, http.StatusInternalServerError, codeInternal, "could not update the passkey")
+	if !s.verifyStepUp(ctx, w, ceremonyKindAddUnlockKey, userID, pending.Confirm, req.Confirmation) {
 		return
 	}
 

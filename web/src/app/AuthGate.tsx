@@ -29,6 +29,7 @@ import { isInvitePath, isSetupPath, setupCodeFrom } from "./routes";
 import { strings as authStrings } from "../views/auth/strings";
 import { SetupPage, SignInPage, useSessionState } from "../views/auth";
 import { InvitePage } from "../views/auth/InvitePage";
+import { useIdleSignOut } from "../views/auth/idle";
 import { mutedText, noticeBase } from "../views/auth/styles";
 
 export interface AuthGateProps {
@@ -45,6 +46,8 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
   // RM-307 (#486): a new organisation choice remounts the dashboard, so
   // every view reads again under the scope the server now applies.
   const [scopeKey, setScopeKey] = useState(0);
+  // #602: 30 minutes without input signs out, and the sign-in page says why.
+  useIdleSignOut(state.status === "authenticated", markSignedOut, apiBase);
 
   if (state.status === "checking") {
     return (
@@ -93,6 +96,7 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
     return (
       <SignInPage
         setupNeeded={state.setupNeeded}
+        endedIdle={state.endedIdle === true}
         onSignedIn={markAuthenticated}
         onRecovered={(displayName) => {
           markAuthenticated(displayName);
@@ -119,7 +123,7 @@ export function AuthGate({ children, apiBase }: AuthGateProps) {
             onChange={() => setScopeKey((k) => k + 1)}
           />
           <div role="group" aria-label={strings.labels.header.account} className="flex items-center">
-            <AccountMenu displayName={state.displayName} onSignedOut={markSignedOut} />
+            <AccountMenu displayName={state.displayName} onSignedOut={() => markSignedOut()} />
           </div>
         </>,
       )}

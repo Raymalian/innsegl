@@ -17,7 +17,7 @@ async function lockedCA(page: Page): Promise<void> {
     const p = new URL(route.request().url()).pathname;
     const json = (b: unknown) =>
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(b) });
-    if (p === "/api/v1/auth/session") return json({ authenticated: true, display_name: "Dev Operator" });
+    if (p === "/api/v1/auth/session") return json({ authenticated: true, display_name: "Dev Operator", organisations: [{ id: "org-1", name: "example-org", role: "owner", operator: true }] });
     if (p === "/api/v1/auth/setup") return json({ needed: false });
     if (p === "/api/v1/account/ca-custody") {
       return json({ enabled: true, initialized: true, sealed: true, can_sign: false, reason: "the CA key store is sealed" });
@@ -42,7 +42,7 @@ test("FE-154: the cannot-sign banner and the unlock page pass axe, and the page 
   await expect(page.getByRole("table", { name: "Unlock keys" })).toBeVisible();
   await axe(page);
 
-  await page.getByRole("button", { name: "Unlock with a security key" }).click();
+  await page.getByRole("link", { name: "Unlock with a security key" }).click();
   await expect(page.getByRole("heading", { name: "Unlock the CA key store" })).toBeFocused();
   await axe(page);
 });

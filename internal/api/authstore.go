@@ -466,28 +466,87 @@ func (a *AuthStore) CreateSession(ctx context.Context, userID, passkeyID string,
 }
 
 // VerifySession reports the user a live, unrevoked, unexpired session token
-// belongs to, and which passkey (if any) issued it — this is the one query
-// server.go's deny-by-default gate runs on every gated request, and also
-// what answers Account.passkeys[].current (#445).
+// belongs to, and which passkey (if any) issued it. It is CheckSession under
+// the dashboard's own idle bound, for callers that need nothing else.
 func (a *AuthStore) VerifySession(ctx context.Context, token string) (userID, passkeyID string, ok bool, err error) {
-	if token == "" {
-		return "", "", false, nil
+	info, state, err := a.CheckSession(ctx, token, sessionIdleTimeout)
+	if err != nil || state != SessionLive {
+		return "", "", false, err
 	}
-	var pk *string
-	err = a.pool.QueryRow(ctx,
-		`SELECT user_id, passkey_id FROM innsegl_auth.sessions
-		 WHERE session_id_hash = $1 AND revoked_at IS NULL AND expires_at > clock_timestamp()`,
-		hashToken(token)).Scan(&userID, &pk)
+	return info.UserID, info.PasskeyID, true, nil
+}
+
+// SessionState is what CheckSession found.
+type SessionState int
+
+const (
+	// SessionNone: no cookie, or one naming no live session.
+	SessionNone SessionState = iota
+	// SessionLive: a live session, whose clock this request moved.
+	SessionLive
+	// SessionIdle: the session went idle longer than the bound and is now
+	// ended (#602).
+	SessionIdle
+)
+
+// SessionInfo is what a live session carries.
+type SessionInfo struct {
+	UserID    string
+	PasskeyID string // empty for a recovery-code or organisation sign-in
+	CreatedAt time.Time
+	SSO       bool // opened by an organisation's sign-in
+}
+
+// CheckSession is the one question server.go's deny-by-default gate and the
+// account surface ask of every request (#602): is this a live session, and
+// has it gone without a request for longer than idle? A live one has its
+// last_seen_at moved to now (a sliding bound). An idle one is revoked on the
+// spot, so it stays ended whatever comes after.
+func (a *AuthStore) CheckSession(ctx context.Context, token string, idle time.Duration) (SessionInfo, SessionState, error) {
+	if token == "" {
+		return SessionInfo{}, SessionNone, nil
+	}
+	var (
+		info             SessionInfo
+		pk               *string
+		revoked, idleEnd bool
+		isIdle           bool
+	)
+	hash := hashToken(token)
+	err := a.pool.QueryRow(ctx,
+		`SELECT user_id, passkey_id, created_at, sso_connection_id IS NOT NULL,
+		        revoked_at IS NOT NULL, idle_ended,
+		        last_seen_at <= clock_timestamp() - make_interval(secs => $2)
+		   FROM innsegl_auth.sessions
+		  WHERE session_id_hash = $1 AND expires_at > clock_timestamp()`,
+		hash, idle.Seconds()).Scan(&info.UserID, &pk, &info.CreatedAt, &info.SSO, &revoked, &idleEnd, &isIdle)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", "", false, nil
+		return SessionInfo{}, SessionNone, nil
 	}
 	if err != nil {
-		return "", "", false, fmt.Errorf("api: verifying a session: %w", err)
+		return SessionInfo{}, SessionNone, fmt.Errorf("api: verifying a session: %w", err)
+	}
+	if revoked {
+		if idleEnd {
+			return SessionInfo{}, SessionIdle, nil
+		}
+		return SessionInfo{}, SessionNone, nil
+	}
+	if isIdle {
+		if _, err = a.pool.Exec(ctx, `UPDATE innsegl_auth.sessions SET revoked_at = clock_timestamp(), idle_ended = true
+			WHERE session_id_hash = $1 AND revoked_at IS NULL`, hash); err != nil {
+			return SessionInfo{}, SessionNone, fmt.Errorf("api: ending an idle session: %w", err)
+		}
+		return SessionInfo{}, SessionIdle, nil
+	}
+	if _, err = a.pool.Exec(ctx, `UPDATE innsegl_auth.sessions SET last_seen_at = clock_timestamp()
+		WHERE session_id_hash = $1`, hash); err != nil {
+		return SessionInfo{}, SessionNone, fmt.Errorf("api: recording a session's use: %w", err)
 	}
 	if pk != nil {
-		passkeyID = *pk
+		info.PasskeyID = *pk
 	}
-	return userID, passkeyID, true, nil
+	return info, SessionLive, nil
 }
 
 // RevokeSession is sign-out: the server-side row is marked revoked, not

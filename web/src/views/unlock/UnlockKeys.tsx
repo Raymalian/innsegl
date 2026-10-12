@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * #616 (ADR-0082): the account page's "Unlock keys" section, the banner
- * shown when the core reports that the CA cannot sign, and the unlock page
- * that banner opens.
+ * #616 (ADR-0082): the account page's "Unlock keys" section, and the
+ * unlock page. The banner shown when the core reports that the CA cannot
+ * sign is on every page now (CannotSignBanner.tsx, mounted by App.tsx).
  *
  * Mounted once, from AccountPage. Only an owner or admin of the operator
  * organisation sees any of it, the same bar the API holds; for anyone else
  * it renders nothing and reads nothing. A 403 or 404 from the API (another
  * role, or an API without these routes) also renders nothing.
  *
- * The unlock page is this component's own region on /account, opened by the
- * banner's action or by `/account?unlock` in the address.
+ * The unlock page is this component's own region on /account, opened by
+ * `/account?unlock` in the address, which is where the banner links.
  */
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 
-import { noticeTitle } from "../../components/common/styles";
 import { CopyButton, wordFor } from "../auth/accountShared";
 import { AuthRequestError, type WebAuthnBrowser } from "../auth/client";
 import { formatDate } from "../auth/format";
@@ -59,7 +58,6 @@ import {
   NotSealedToThisKeyError,
   browserSupport,
   enrolUnlockKey,
-  fetchCustodyStatus,
   fetchUnlockKeys,
   revokeUnlockKey,
   unlockCA,
@@ -69,6 +67,8 @@ import {
   type UnlockKeyList,
 } from "./api";
 import { strings } from "./strings";
+import { custodyChangedEvent } from "./CannotSignBanner";
+import { navigate, usePath } from "../../app/router";
 
 export interface UnlockKeysProps {
   readonly organisations: readonly AccountOrganisation[];
@@ -127,8 +127,13 @@ function UnlockKeysLoaded({
   readonly support: BrowserSupport;
 }) {
   const [list, setList] = useState<ListLoad>({ status: "loading" });
-  const [custody, setCustody] = useState<CustodyStatus | null>(null);
   const [unlockOpen, setUnlockOpen] = useState(initialUnlockOpen);
+  // The banner on every page links here (CannotSignBanner.tsx): opening
+  // /account?unlock while this page is already showing opens the unlock page.
+  const path = usePath();
+  useEffect(() => {
+    if (new URL(path, "http://dashboard.invalid").searchParams.has("unlock")) setUnlockOpen(true);
+  }, [path]);
 
   const reloadList = useCallback(() => {
     void (async () => {
@@ -144,38 +149,26 @@ function UnlockKeysLoaded({
     })();
   }, []);
 
-  const reloadCustody = useCallback(() => {
-    void (async () => {
-      try {
-        setCustody(await fetchCustodyStatus());
-      } catch {
-        setCustody(null);
-      }
-    })();
-  }, []);
-
   useEffect(() => {
     reloadList();
-    reloadCustody();
-  }, [reloadList, reloadCustody]);
+  }, [reloadList]);
 
   if (list.status === "hidden") return null;
 
-  const locked = custody !== null && custody.enabled && !custody.can_sign;
-
   return (
     <>
-      {locked && !unlockOpen && <CannotSignBanner status={custody} onUnlock={() => setUnlockOpen(true)} />}
       {unlockOpen && (
         <UnlockPage
           browser={browser}
           support={support}
-          onUnlocked={(status) => {
-            setCustody(status);
-            reloadCustody();
+          onUnlocked={() => {
             reloadList();
+            window.dispatchEvent(new Event(custodyChangedEvent));
           }}
-          onClose={() => setUnlockOpen(false)}
+          onClose={() => {
+            setUnlockOpen(false);
+            navigate("/account", { replace: true });
+          }}
         />
       )}
       <UnlockKeysSection
@@ -186,27 +179,6 @@ function UnlockKeysLoaded({
         reload={reloadList}
       />
     </>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// The banner
-// ---------------------------------------------------------------------------
-
-function CannotSignBanner({ status, onUnlock }: { readonly status: CustodyStatus; readonly onUnlock: () => void }) {
-  return (
-    <div role="alert" className={`${noticeBase} ${degraded}`}>
-      <div className={noticeBody}>
-        <p className={noticeTitle}>{strings.banner.title}</p>
-        <p>{strings.banner.body}</p>
-        {status.reason !== undefined && status.reason !== "" && (
-          <p className="text-micro">{strings.banner.reason(status.reason)}</p>
-        )}
-        <button type="button" onClick={onUnlock} className={`${secondaryButton} mt-1`}>
-          {strings.banner.action}
-        </button>
-      </div>
-    </div>
   );
 }
 

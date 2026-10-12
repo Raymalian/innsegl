@@ -36,6 +36,7 @@ import { NAV_VIEWS, isAccountPath, navRoute, type Route, type ViewName } from ".
 import { documentTitle, type Strings } from "./strings";
 import { AccountPage } from "../views/auth";
 import { strings as authStrings } from "../views/auth/strings";
+import { CannotSignBanner } from "../views/unlock/CannotSignBanner";
 
 /** Where the main region begins, and where the skip link lands. */
 const MAIN_ID = "main";
@@ -139,6 +140,11 @@ export function App({ views = {}, heartbeat, alerts, account }: AppProps) {
         <ThemeToggle />
         {account}
       </header>
+
+      {/* #616's "the CA cannot sign" banner, on every page: the one mount.
+        * It shows only to an owner or admin of the operator's organisation,
+        * and links to the unlock page. */}
+      <CannotSignBanner />
 
       <div className={`mx-auto flex w-full ${contentWidthClass(route)} flex-wrap gap-4 p-4`}>
         <nav

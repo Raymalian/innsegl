@@ -15,6 +15,7 @@ import type { AccountOrganisation } from "../auth/types";
 import * as api from "./api";
 import { strings } from "./strings";
 import { UnlockKeys } from "./UnlockKeys";
+import { custodyChangedEvent } from "./CannotSignBanner";
 
 vi.mock("./api", async (importOriginal) => {
   const real = await importOriginal<typeof import("./api")>();
@@ -184,27 +185,29 @@ describe("FE-154 the unlock-keys section", () => {
   });
 });
 
-describe("FE-154 the banner and the unlock page", () => {
-  it("shows no banner while the CA can sign", async () => {
+describe("FE-154 the unlock page", () => {
+  // The banner itself is on every page now (CannotSignBanner.test.tsx,
+  // FE-158); this section shows none of its own.
+  it("shows no banner of its own, whatever the CA reports", async () => {
+    fetchStatus.mockResolvedValue(LOCKED);
     renderKeys();
     await screen.findByRole("table", { name: strings.section.heading });
     expect(screen.queryByText(strings.banner.title)).toBeNull();
   });
 
-  it("shows the banner when the CA cannot sign, and unlocks from the page it opens", async () => {
+  it("unlocks from the page ?unlock opens, and tells the banner", async () => {
     const user = userEvent.setup();
-    fetchStatus.mockResolvedValueOnce(LOCKED).mockResolvedValue(SIGNING);
+    window.history.replaceState(null, "", "/account?unlock");
     unlock.mockResolvedValue(SIGNING);
+    const told = vi.fn();
+    window.addEventListener(custodyChangedEvent, told);
     renderKeys();
-    expect(await screen.findByText(strings.banner.title)).toBeInTheDocument();
-    expect(screen.getByText(strings.banner.reason("the store is sealed"))).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: strings.banner.action }));
-
-    const page = screen.getByRole("region", { name: strings.unlock.heading });
+    const page = await screen.findByRole("region", { name: strings.unlock.heading });
     await user.click(within(page).getByRole("button", { name: strings.unlock.button }));
     await waitFor(() => expect(unlock).toHaveBeenCalledWith(browser));
     expect(await screen.findByText(strings.unlock.done)).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText(strings.banner.title)).toBeNull());
+    expect(told).toHaveBeenCalled();
+    window.removeEventListener(custodyChangedEvent, told);
   });
 
   it("opens the unlock page from ?unlock in the address", async () => {
@@ -216,21 +219,19 @@ describe("FE-154 the banner and the unlock page", () => {
 
   it("says when the material is not sealed to the key", async () => {
     const user = userEvent.setup();
-    fetchStatus.mockResolvedValue(LOCKED);
+    window.history.replaceState(null, "", "/account?unlock");
     unlock.mockRejectedValue(new api.NotSealedToThisKeyError("no"));
     renderKeys();
-    await user.click(await screen.findByRole("button", { name: strings.banner.action }));
-    await user.click(screen.getByRole("button", { name: strings.unlock.button }));
+    await user.click(await screen.findByRole("button", { name: strings.unlock.button }));
     expect(await screen.findByText(strings.unlock.notSealed)).toBeInTheDocument();
   });
 
   it("FE-156: says when the key returned no PRF, and Safari cannot start", async () => {
     const user = userEvent.setup();
-    fetchStatus.mockResolvedValue(LOCKED);
+    window.history.replaceState(null, "", "/account?unlock");
     unlock.mockRejectedValue(new api.NoPRFError("no"));
     renderKeys();
-    await user.click(await screen.findByRole("button", { name: strings.banner.action }));
-    await user.click(screen.getByRole("button", { name: strings.unlock.button }));
+    await user.click(await screen.findByRole("button", { name: strings.unlock.button }));
     expect(await screen.findByText(strings.support.noPRF)).toBeInTheDocument();
   });
 

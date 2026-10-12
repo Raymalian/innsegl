@@ -79,8 +79,20 @@ type PasskeyRename struct {
 	Name string `json:"name"`
 }
 
-// RecoveryCodes answers POST /api/v1/account/recovery-codes: ten new codes,
-// shown once; every earlier code is void.
+// PasskeyRemove is POST /api/v1/account/passkeys/remove/begin's body (#602):
+// the passkey to remove, once a fresh passkey confirms it.
+type PasskeyRemove struct {
+	ID string `json:"id"`
+}
+
+// SignInUnlink is POST /api/v1/account/sign-ins/unlink/begin's body (#602):
+// the linked organisation sign-in to disconnect.
+type SignInUnlink struct {
+	ID int64 `json:"id"`
+}
+
+// RecoveryCodes answers POST /api/v1/account/recovery-codes/finish: ten new
+// codes, shown once; every earlier code is void.
 type RecoveryCodes struct {
 	Codes []string `json:"codes"`
 }

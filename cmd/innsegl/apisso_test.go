@@ -14,11 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/jackc/pgx/v5"
 
 	"innsegl.dev/innsegl/internal/accounts"
 	"innsegl.dev/innsegl/internal/api"
 	"innsegl.dev/innsegl/internal/oidctest"
+	"innsegl.dev/innsegl/internal/webauthntest"
 )
 
 // AUTH-011 end to end (#485): the real `innsegl api`, the real accounts
@@ -111,9 +113,12 @@ func TestAUTH011TheOrganisationSignInEndToEndThroughTheCommand(t *testing.T) {
 	}
 	memberCookie := &http.Cookie{Name: "innsegl_session", Value: token}
 
-	// They link the organisation's sign-in: they are now its member.
-	where, _ := ssoFlightThrough(t, idp, base, "/api/v1/account/sso/link",
-		`{"organisation_id":"`+org.AccountID+`"}`, memberCookie)
+	// They add a passkey while their sign-in is fresh, and it confirms the
+	// link (#602): they are now the organisation's member.
+	memberKey := addFreshPasskey(t, base, memberCookie)
+	where, _ := ssoFlightThrough(t, idp, base, "/api/v1/account/sso/link/finish",
+		confirmed(t, base, "/api/v1/account/sso/link", `{"organisation_id":"`+org.AccountID+`"}`,
+			memberKey, memberID, memberCookie), memberCookie)
 	if where != "/account?notice=sso-linked" {
 		t.Fatalf("link landed on %s", where)
 	}
@@ -177,6 +182,73 @@ func TestAUTH011TheOrganisationSignInEndToEndThroughTheCommand(t *testing.T) {
 // ssoFlightThrough begins at path, walks the provider and lands at the
 // callback as one browser would, answering where it was sent and the
 // session cookie it was given.
+// addFreshPasskey adds a passkey to a session no passkey opened, inside the
+// window a fresh recovery-style sign-in has to do so without one (#602).
+func addFreshPasskey(t *testing.T, base string, cookie *http.Cookie) *webauthntest.Authenticator {
+	t.Helper()
+	status, _, body := postJSON(t, base+"/api/v1/account/passkeys/begin", `{"name":"member key"}`, cookie)
+	if status != http.StatusOK {
+		t.Fatalf("passkeys/begin: %d %s", status, body)
+	}
+	var begin struct {
+		CeremonyID string `json:"ceremony_id"`
+	}
+	var creation protocol.CredentialCreation
+	if err := json.Unmarshal(body, &begin); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &creation); err != nil {
+		t.Fatal(err)
+	}
+	key, err := webauthntest.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := key.Register(&creation, apiIntegrationOrigin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish, err := json.Marshal(map[string]any{"ceremony_id": begin.CeremonyID, "credential": json.RawMessage(created)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, _, body = postJSON(t, base+"/api/v1/account/passkeys/finish", string(finish), cookie); status != http.StatusOK {
+		t.Fatalf("passkeys/finish: %d %s", status, body)
+	}
+	return key
+}
+
+// confirmed runs route's begin with request and answers the finish body
+// that key's fresh assertion makes of it.
+func confirmed(t *testing.T, base, route, request string, key *webauthntest.Authenticator, userID string,
+	cookie *http.Cookie,
+) string {
+	t.Helper()
+	status, _, body := postJSON(t, base+route+"/begin", request, cookie)
+	if status != http.StatusOK {
+		t.Fatalf("%s/begin: %d %s", route, status, body)
+	}
+	var begin struct {
+		CeremonyID string `json:"ceremony_id"`
+	}
+	var assertion protocol.CredentialAssertion
+	if err := json.Unmarshal(body, &begin); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &assertion); err != nil {
+		t.Fatal(err)
+	}
+	signed, err := key.Assert(&assertion, apiIntegrationOrigin, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish, err := json.Marshal(map[string]any{"ceremony_id": begin.CeremonyID, "credential": json.RawMessage(signed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(finish)
+}
+
 func ssoFlightThrough(t *testing.T, idp *oidctest.Provider, base, path, body string, cookies ...*http.Cookie) (string, *http.Cookie) {
 	t.Helper()
 	status, header, raw := postJSON(t, base+path, body, cookies...)

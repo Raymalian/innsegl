@@ -147,7 +147,7 @@ class MockAPI {
 
     switch (`${method} ${p}`) {
       case "GET /api/v1/auth/session":
-        return json({ authenticated: true, display_name: "Dev Operator" });
+        return json({ authenticated: true, display_name: "Dev Operator", organisations: [{ id: "org-1", name: "example-org", role: "owner", operator: true }] });
       case "GET /api/v1/auth/setup":
         return json({ needed: false });
       case "GET /api/v1/account/unlock-keys":
@@ -337,7 +337,7 @@ test.describe("FE-154: unlock keys with a PRF security key, under the dashboard'
     await expect(section.getByRole("table", { name: "Unlock keys" }).getByText("Active")).toBeVisible();
 
     // Unlock from the banner.
-    await page.getByRole("button", { name: "Unlock with a security key" }).click();
+    await page.getByRole("link", { name: "Unlock with a security key" }).click();
     const unlock = page.getByRole("region", { name: "Unlock the CA key store" });
     await expect(unlock).toBeVisible();
     await shot(page, "4-unlock-page");
@@ -386,7 +386,7 @@ test.describe("FE-156: a security key without PRF", () => {
     const created = (await key.credentials()).find((c) => !c.resident);
     expect(created).toBeDefined();
     api.salts.set(created!.id, b64url(randomBytes(32)));
-    await page.getByRole("button", { name: "Unlock with a security key" }).click();
+    await page.getByRole("link", { name: "Unlock with a security key" }).click();
     const unlock = page.getByRole("region", { name: "Unlock the CA key store" });
     await unlock.getByRole("button", { name: "Unlock with a security key" }).click();
     await expect(unlock.getByText(fallback)).toBeVisible();

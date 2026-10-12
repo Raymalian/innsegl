@@ -41,6 +41,8 @@ export interface SignInPageProps {
   /** `SetupStatus.needed`: true when no account exists yet, in which case
    * there is nothing to offer a passkey button for. */
   readonly setupNeeded?: boolean;
+  /** #602: the last session ended for 30 minutes idle. */
+  readonly endedIdle?: boolean;
   readonly onSignedIn: (displayName: string) => void;
   /** A recovery code signed in; `remaining` is the server's own count of
    * codes left, read fresh rather than decremented client-side. */
@@ -68,6 +70,7 @@ type Phase =
 
 export function SignInPage({
   setupNeeded = false,
+  endedIdle = false,
   onSignedIn,
   onRecovered,
   browser = realBrowser(),
@@ -267,6 +270,11 @@ export function SignInPage({
       <h1 id={headingId} className={pageHeading}>
         {strings.signIn.heading}
       </h1>
+      {endedIdle && phase.status !== "failed" && (
+        <p role="status" className={`${noticeBase} ${degraded}`}>
+          <span className={noticeBody}>{strings.signIn.endedIdle}</span>
+        </p>
+      )}
       <p className={proseText}>{strings.signIn.intro}</p>
       <button
         type="button"

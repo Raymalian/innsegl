@@ -80,13 +80,13 @@ func TestPatchAccountRefusesAnEmptyDisplayName(t *testing.T) {
 // own — and the account page then marks IT current, not the first one.
 func TestAddASecondPasskeyAndSignInWithIt(t *testing.T) {
 	srv, _, authStore := testServerConfigured(t)
-	cookie := signInTestUser(t, srv.URL, authStore)
+	firstAuth, cookie := enrolTestUser(t, srv.URL, authStore)
 	userID, _, ok := verifySessionToken(t, authStore, cookie.Value)
 	if !ok {
 		t.Fatal("the enrolling session does not verify")
 	}
 
-	secondAuth, secondPasskey := addPasskeyViaAPI(t, srv.URL, "laptop", cookie)
+	secondAuth, secondPasskey := addPasskeyViaAPI(t, srv.URL, "laptop", cookie, firstAuth, userID)
 	if secondPasskey.Name != "laptop" {
 		t.Errorf("Name = %q, want %q", secondPasskey.Name, "laptop")
 	}
@@ -169,12 +169,12 @@ func TestRenameAPasskey(t *testing.T) {
 // one is refused (409), and deleting it ends the session it signed in.
 func TestDeletePasskeyNonLastOKLastConflict(t *testing.T) {
 	srv, _, authStore := testServerConfigured(t)
-	cookie := signInTestUser(t, srv.URL, authStore)
+	firstAuth, cookie := enrolTestUser(t, srv.URL, authStore)
 	userID, _, ok := verifySessionToken(t, authStore, cookie.Value)
 	if !ok {
 		t.Fatal("the enrolling session does not verify")
 	}
-	secondAuth, secondPasskey := addPasskeyViaAPI(t, srv.URL, "second", cookie)
+	secondAuth, secondPasskey := addPasskeyViaAPI(t, srv.URL, "second", cookie, firstAuth, userID)
 
 	login := loginWithAuthenticator(t, srv.URL, secondAuth, userID)
 	if login.status != http.StatusOK {
@@ -182,9 +182,10 @@ func TestDeletePasskeyNonLastOKLastConflict(t *testing.T) {
 	}
 	secondCookie := sessionCookieFrom(t, login)
 
-	del := do(t, http.MethodDelete, srv.URL+"/api/v1/account/passkeys/"+secondPasskey.ID, "", cookie)
+	del := stepUpVia(t, srv.URL, "/api/v1/account/passkeys/remove", PasskeyRemove{ID: secondPasskey.ID},
+		firstAuth, userID, cookie)
 	if del.status != http.StatusOK {
-		t.Fatalf("DELETE a non-last passkey returned %d, want 200: %s", del.status, del.body)
+		t.Fatalf("removing a non-last passkey returned %d, want 200: %s", del.status, del.body)
 	}
 
 	// The deleted passkey's own session is ended.
@@ -199,9 +200,10 @@ func TestDeletePasskeyNonLastOKLastConflict(t *testing.T) {
 	}
 
 	lastID := acc.Passkeys[0].ID
-	last := do(t, http.MethodDelete, srv.URL+"/api/v1/account/passkeys/"+lastID, "", cookie)
+	last := stepUpVia(t, srv.URL, "/api/v1/account/passkeys/remove", PasskeyRemove{ID: lastID},
+		firstAuth, userID, cookie)
 	if last.status != http.StatusConflict {
-		t.Fatalf("DELETE the only remaining passkey returned %d, want 409: %s", last.status, last.body)
+		t.Fatalf("removing the only remaining passkey returned %d, want 409: %s", last.status, last.body)
 	}
 }
 
@@ -230,9 +232,10 @@ func TestPasskeyOfAnotherUserIs404(t *testing.T) {
 		t.Fatalf("renaming another user's passkey returned %d, want 404: %s", rename.status, rename.body)
 	}
 
-	del := do(t, http.MethodDelete, srv.URL+"/api/v1/account/passkeys/"+otherID, "", cookie)
+	del := unlockDo(t, http.MethodPost, srv.URL+"/api/v1/account/passkeys/remove/begin",
+		mustJSON(t, PasskeyRemove{ID: otherID}), testWebAuthnConfig.RPOrigin, cookie)
 	if del.status != http.StatusNotFound {
-		t.Fatalf("deleting another user's passkey returned %d, want 404: %s", del.status, del.body)
+		t.Fatalf("removing another user's passkey returned %d, want 404: %s", del.status, del.body)
 	}
 }
 
@@ -248,8 +251,10 @@ func TestAccountRoutesRequireASession(t *testing.T) {
 		{http.MethodPost, "/api/v1/account/passkeys/begin"},
 		{http.MethodPost, "/api/v1/account/passkeys/finish"},
 		{http.MethodPatch, "/api/v1/account/passkeys/anything"},
-		{http.MethodDelete, "/api/v1/account/passkeys/anything"},
-		{http.MethodPost, "/api/v1/account/recovery-codes"},
+		{http.MethodPost, "/api/v1/account/passkeys/remove/begin"},
+		{http.MethodPost, "/api/v1/account/passkeys/remove/finish"},
+		{http.MethodPost, "/api/v1/account/recovery-codes/begin"},
+		{http.MethodPost, "/api/v1/account/recovery-codes/finish"},
 	}
 	for _, c := range cases {
 		a := do(t, c.method, srv.URL+c.path, "{}")

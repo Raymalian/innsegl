@@ -87,8 +87,38 @@ calls them):
 | `POST /api/v1/account/machines/revoke\|suspend\|resume/begin\|finish` | `{machine_id}`, after a fresh passkey; suspended is undone by resume, revoked is final |
 | `GET /api/v1/account/sso?organisation_id=ID` | the organisation's sign-in: name for a member; issuer, client id, redirect URI and whether a secret is saved for the owner; never the secret |
 | `POST /api/v1/account/sso/configure\|remove/begin\|finish` | owner only, after a fresh passkey; configure takes `{organisation_id, sign_in_name, issuer, client_id, client_secret, keep_secret}` |
-| `POST /api/v1/account/sso/link` | `{organisation_id}` or `{sign_in_name}`: where to send the browser to connect the organisation's sign-in to this account; by name is how a person not yet a member joins |
-| `DELETE /api/v1/account/sign-ins/{id}` | disconnect one of your own connected sign-ins |
+| `POST /api/v1/account/sso/link/begin\|finish` | `{organisation_id}` or `{sign_in_name}`, after a fresh passkey: where to send the browser to connect the organisation's sign-in to this account; by name is how a person not yet a member joins |
+| `POST /api/v1/account/sign-ins/unlink/begin\|finish` | `{id}`, after a fresh passkey: disconnect one of your own connected sign-ins |
+
+### Security changes and idle sessions
+
+A session cookie alone cannot change how the account signs in (#602). Each
+change below takes a fresh assertion from one of the person's own passkeys,
+with user verification; the same step-up the member and machine routes use.
+
+| Route | Does |
+|---|---|
+| `POST /api/v1/account/passkeys/begin` | `{name}` -> `publicKey` (the new passkey) and `confirm` (an assertion over your passkeys) |
+| `POST /api/v1/account/passkeys/finish` | `{ceremony_id, confirmation, credential}` -> the passkey |
+| `POST /api/v1/account/passkeys/remove/begin\|finish` | `{id}`, after a fresh passkey; 409 for the last one |
+| `POST /api/v1/account/recovery-codes/begin\|finish` | after a fresh passkey: ten new codes, shown once; every earlier code is void |
+| `POST /api/v1/account/sso/link/begin\|finish`, `.../sign-ins/unlink/begin\|finish` | as above |
+| `POST /api/v1/account/unlock-keys/begin\|finish`, `.../revoke/begin\|finish` | as in [Unlock keys](#unlock-keys) |
+
+A session a recovery code opened adds a passkey without `confirm` for its
+first 10 minutes: the code it spent is the fresh factor, and a person who
+lost every passkey has no other. After that, a passkey confirms it.
+A refused confirmation records `confirmation_refused` with the change's
+ceremony kind.
+
+A session ends after 30 minutes without a request (sliding, checked on
+every request, under the 12-hour lifetime). The API revokes it then; every
+later request with that cookie answers 401 "signed out after 30 minutes
+idle", and `GET /api/v1/auth/session` answers `{"authenticated": false,
+"ended": "idle"}`. The dashboard also signs a person out after 30 minutes
+with no input, and the sign-in page says why. While the person is active
+it reads `/api/v1/auth/session` at most every 5 minutes, so reading one
+page for a long time does not end the session.
 
 ### Unlock keys
 
@@ -133,7 +163,10 @@ and **Revoke**, after a confirmation and a fresh passkey. Until one key is
 active, the section shows the command that applies a pending key from the
 operator machine, `innsegl ca-custody reseal --add <custody recipient>`.
 When `GET /api/v1/account/ca-custody` reports `can_sign: false`, a banner
-says so and opens the unlock page (also at `/account?unlock`): touch an
+says so on every page, to an owner or admin of the operator's organisation
+only (it reads their memberships from `GET /api/v1/auth/session`; nobody
+else's browser asks for the custodian's status), and links to the unlock
+page at `/account?unlock`: touch an
 active key, and the browser derives its identity from the PRF, opens
 `sealed` with the pinned `age-encryption` library (pure JavaScript, no
 eval or WebAssembly, loaded only on the first unlock), and sends the
@@ -313,6 +346,7 @@ Compose: `INNSEGL_BIND` [`127.0.0.1`], `INNSEGL_DASHBOARD_PORT` [`8082`],
 | migrations `0013`, `0014` | alert resolutions and account ceremonies |
 | migration `0019` | organisation sign-in: `sso_connections`, `oidc_identities`, `sessions.sso_connection_id`, the `sso` ceremony kinds |
 | migration `0017` | invitations' acceptor and withdrawal, an inviter-less invitation from the CLI, the member ceremonies |
+| migration `0024` | `sessions.last_seen_at`, `sessions.idle_ended`, and the ceremony kinds `remove_passkey`, `regenerate_recovery_codes`, `link_sso`, `unlink_sso` |
 | migration `0023` | `innsegl_auth.unlock_keys` (never deleted; a revoked key stays revoked; recipients and salts never change, SQLSTATE `IN009`) and the five unlock ceremony kinds |
 | `innsegl_auth.audit` | one row per change to the accounts data; refuses `UPDATE`, `DELETE`, `TRUNCATE` |
 
@@ -378,6 +412,14 @@ organisation holds.
   The provider is `internal/oidctest`: TLS, signed tokens, exact redirect
   URIs, PKCE, single-use codes
 - `internal/api/accountwithdraw_test.go` (ACC-018)
+- step-up and idle sessions (#602): `internal/api/stepup_test.go` (AUTH-019:
+  a session alone cannot add or remove a passkey, regenerate recovery codes
+  or finish one change with another's ceremony, and a fresh recovery-code
+  sign-in's window; AUTH-020: the 30-minute idle end, sliding, and failing
+  closed), `sso_test.go` and `cmd/innsegl/apisso_test.go` (AUTH-019 for
+  link and unlink); `web/tests/auth/step-up.pw.ts` (FE-157: the step-up
+  prompts; FE-158: the cannot-sign banner on every page; FE-159: the idle
+  sign-out, on Playwright's clock)
 - unlock keys (#613): `internal/api/unlockkeys_test.go` (AUTH-013: enrolment
   and its refusals; AUTH-014: the assertion before the material; AUTH-015:
   no material or PRF output in a record or an answer; AUTH-016: Origin and

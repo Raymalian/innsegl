@@ -83,19 +83,23 @@ export function OrganisationSignInSection({
     event.preventDefault();
     setJoining("");
     try {
-      goTo(await beginLinkOrganisationSignInByName(joinName.trim()));
+      goTo(await beginLinkOrganisationSignInByName(joinName.trim(), browser));
     } catch (err) {
       setJoining(message(err, a.ssoConnectFailed));
     }
   };
 
+  const [disconnecting, setDisconnecting] = useState<number | null>(null);
   const disconnect = async (id: number) => {
     setFailure(null);
+    setDisconnecting(id);
     try {
-      await disconnectSignIn(id);
+      await disconnectSignIn(id, browser);
       reload();
     } catch (err) {
       setFailure(message(err, a.ssoDisconnectFailed));
+    } finally {
+      setDisconnecting(null);
     }
   };
 
@@ -116,10 +120,11 @@ export function OrganisationSignInSection({
                 </span>
                 <button
                   type="button"
+                  disabled={disconnecting !== null}
                   onClick={() => void disconnect(s.id)}
                   className={`${secondaryButton} ${focusRing}`}
                 >
-                  {a.ssoDisconnectButton}
+                  {disconnecting === s.id ? a.ssoDisconnectWorking : a.ssoDisconnectButton}
                 </button>
               </li>
             ))}
@@ -193,7 +198,7 @@ function OrganisationSignIn({
   const connect = async () => {
     setConnecting("");
     try {
-      goTo(await beginLinkOrganisationSignIn(org.id));
+      goTo(await beginLinkOrganisationSignIn(org.id, browser));
     } catch (err) {
       setConnecting(message(err, a.ssoConnectFailed));
     }
