@@ -31,7 +31,7 @@ scripts/rekor-port.sh
 | `rekor-tlog-pin.sh guard` | refuse to boot with pin 0 next to an existing log |
 | `rekor-tlog-pin.sh read` on a dev stack | a pin over an absent or empty dev log database reads as 0: the dev stack mints a new tree, the guard says so, and bring-up pins it (OPS-193). A live pin is never overridden (OPS-194) |
 | `rekor-reindex.sh --if-behind` | backfill only when the index holds fewer entries than the log (run by every bring-up) |
-| `rekor-tlog-health.sh` | is the pinned tree still served (run at the end of `make start`) |
+| `rekor-tlog-health.sh` | is the pinned tree still served (run at the end of `make start`); its pin is the one `rekor-tlog-pin.sh path` names, in the main worktree (OPS-234) |
 | `rekor-port.sh` | the host port: `INNSEGL_REKOR_PORT`, else Docker's published port, else `23000` |
 
 `make update` brings the log's services up again and recreates only what
