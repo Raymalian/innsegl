@@ -1037,13 +1037,17 @@ innsegl-canary: innsegl-trust-volumes
 ## innsegl-demo: register an identity, sign a commit under it, retire it
 ##   (dev stack only: it serves the identity lifecycle on the agent listener)
 # The demo agent registers over the MCP wire, which no deployment serves any
-# more (ADR-0083). It recreates the dev core with -lifecycle-on-agent-listener;
-# the next `make update` recreates it without. A live stack refuses.
+# more (ADR-0083). It recreates the dev core with -lifecycle-on-agent-listener
+# for the run, then brings the services up again as `make start` would, which
+# recreates the core without it, pass or fail. A live stack refuses.
 innsegl-demo: innsegl-trust-volumes
 	@[ "$$(scripts/stack-mode.sh mode)" = dev ] || { echo 'innsegl-demo: dev stack only (ADR-0083): it serves the identity lifecycle with no credential'; exit 2; }
-	INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER=true \
+	@INNSEGL_MCP_LIFECYCLE_ON_AGENT_LISTENER=true \
 	INNSEGL_SPIRE_JWT_ISSUER='$(INNSEGL_SPIRE_JWT_ISSUER)' \
-	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent
+	  $(INNSEGL_COMPOSE) --profile demo run --rm demo-agent; status=$$?; \
+	 echo 'innsegl-demo: recreating the core without -lifecycle-on-agent-listener'; \
+	 $(MAKE) --no-print-directory innsegl-here-services || status=1; \
+	 exit $$status
 
 ## innsegl-retire: end a run an operator knows is over (RUN=<run_id>)
 #
