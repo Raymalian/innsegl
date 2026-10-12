@@ -1,6 +1,6 @@
 # ADR-0077: The MCP wire surface is deprecated
 
-- Status: accepted
+- Status: accepted; decision 2 superseded in part by ADR-0083
 - Date: 2026-10-08
 - Deciders: the operator
 

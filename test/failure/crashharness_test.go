@@ -746,6 +746,7 @@ func (c *campaign) startVia(t *testing.T, spireAddr string, extra ...string) *da
 		"-key", filepath.Join(c.pemDir, "key.pem"),
 		"-bundle", filepath.Join(c.pemDir, "bundle.pem"),
 		"-listen", "127.0.0.1:0",
+		"-lifecycle-on-agent-listener", // ADR-0083: this harness registers over the wire
 		"-health-listen", "127.0.0.1:0",
 		"-idempotency-lease", crashLease.String(),
 		// Required configuration that this campaign does not exercise: they

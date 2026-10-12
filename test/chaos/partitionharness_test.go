@@ -1532,6 +1532,7 @@ func (w *prtWorld) startDaemon(t *testing.T) *prtDaemon {
 		"-sign-author-email", prtAuthorEmail,
 		"-sign-author-allow-unlinked",
 		"-listen", "127.0.0.1:0",
+		"-lifecycle-on-agent-listener", // ADR-0083: this harness registers over the wire
 		"-health-listen", "127.0.0.1:0",
 		"-addr-file", addrFile,
 		"-idempotency-lease", prtIdempotencyLease.String(),
