@@ -182,6 +182,11 @@ func TestCLI037AHookBinaryTheUserCanWriteIsFlagged(t *testing.T) {
 			if !strings.Contains(out, "managed settings: WRITABLE") || !strings.Contains(out, self) {
 				t.Fatalf("a hook binary %s:\n%s", name, out)
 			}
+			// #599: the repair is the installed copy, then connect.
+			if !strings.Contains(out, "make install-release") ||
+				strings.Index(out, "make install-release") > strings.Index(out, "innsegl connect --update") {
+				t.Fatalf("the repair does not name make install-release, then innsegl connect --update:\n%s", out)
+			}
 		})
 	}
 	chmod(t, filepath.Dir(self), 0o755)

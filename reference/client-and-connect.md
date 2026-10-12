@@ -20,7 +20,58 @@ innsegl status
 
 `innsegl` by name is `~/.local/bin/innsegl`, the link `make build` makes to
 the checkout's `./innsegl`; with `~/.local/bin` not on PATH, run `./innsegl`
-in the checkout.
+in the checkout. That link is for the CLI only: the hooks, the client service
+and scheduled jobs run the installed copy (below).
+
+### The installed copy
+
+Hooks run on every agent prompt and tool call, and the client service runs
+with nobody watching. So they never run a build in a checkout, which any agent
+working there can rebuild. They run `/usr/local/libexec/innsegl/innsegl`, owned
+by root in a folder owned by root, on macOS and Linux (#599).
+
+```sh
+make build && make install-release && make client-restart
+```
+
+`make install-release` prints one line and, in a terminal, runs it (sudo asks
+for the password):
+
+```sh
+sudo sh -c 'set -e; t=$(mktemp); …; cat <checkout>/innsegl > "$t"; echo "<sha256>  $t" | shasum -a 256 -c -; mkdir -p /usr/local/libexec/innsegl; chown 0:0 …; install -m 0755 "$t" …/.innsegl.new; …; mv -f …/.innsegl.new /usr/local/libexec/innsegl/innsegl'
+```
+
+It copies the build to a file of root's, checks the copy against the SHA-256
+printed, and renames it into place, so a running service is never overwritten
+under it. A build changed after the line was printed fails the check and
+nothing is installed. On Linux the check is `sha256sum -c -`. Without a
+terminal it prints the line, installs nothing and exits 3. The copy keeps the
+signature `make build` gave it.
+
+`innsegl connect` (enrolment and `--update`) names only a binary the user
+cannot change: this binary, when it is owned by root and so is every folder
+above it, or else the installed copy, when it holds this binary's bytes.
+Otherwise it refuses before writing anything, says which file or folder the
+user can change, and names `make install-release`. That holds whenever it
+writes the system managed settings, which every session loads, or a client
+service. Settings of your own (`--managed-settings <path>`) with
+`--no-service` run nothing on their own and name this binary when no
+installed copy of it is there. `--disconnect` is never refused for it.
+`innsegl link` writes the same binary into a repository's git hooks, under
+the same rule. A repository linked earlier, whose hooks name another binary,
+is rewritten onto the installed copy the next time the session hook runs in
+it; with no installed copy of this build there, its hooks stay as they are. `--update` also moves a client service that starts another
+binary (an earlier connect's checkout build) onto the installed copy and
+restarts it. `make build` says when the installed copy is another build; until
+it is installed again, the hooks and the service run the old one.
+`make client-restart` restarts a service that runs the installed copy of this
+build, and leaves alone one that runs the installed copy of another.
+
+Until #237 an older innsegl scheduled the ledger backup on the host
+(LaunchAgent `dev.innsegl.backup-ledger`, or the systemd user timer of that
+name), running `scripts/backup-ledger.sh` from the checkout. The backup now
+runs in the deployment. `innsegl connect` names that job when it is still
+installed, with the one command that removes it, and removes nothing itself.
 
 `innsegl connect` flags:
 
@@ -36,7 +87,7 @@ in the checkout.
 | `-egress-control` | with `--hardened`, limit the sandbox's network to the hosts in this file |
 | `-no-service` | do not install or remove the user service |
 | `-update` | rewrite this machine's managed settings to the chosen mode; no token |
-| `-service` | with `--update`, also rewrite and reload the client service |
+| `-service` | with `--update`, also rewrite and reload the client service (rewritten without it when it starts another binary than the hooks run) |
 | `-pause` / `-resume` | set the managed settings aside, or put them back |
 | `-disconnect` | remove what connect wrote: settings keys, the service, `~/.innsegl/client` |
 
@@ -260,7 +311,8 @@ says to revoke the machine from the Account page.
 
 | Command | Code | Meaning |
 |---|---|---|
-| `connect` | 24 | enrolment or a settings change failed |
+| `connect` | 24 | enrolment or a settings change failed, or this binary is one the user can change and no installed copy of it is there |
+| `make install-release` | 3 | not installed: no terminal to ask for sudo in; the line is printed |
 | `client serve` | 25 | the service could not run |
 | `status` | 1 | something is down; the output names it. With the client service down, both it and the core are down: the core is asked through it |
 
@@ -300,6 +352,14 @@ says to revoke the machine from the Account page.
 - `internal/hostdeps/hostdeps_test.go`, `cmd/innsegl/preflight_test.go`
   (CLI-027, PROPOSED: every missing tool named in one run, with this OS's
   command; connect refuses before writing anything)
+- `cmd/innsegl/connectrelease_test.go`, `linkrelease_test.go` (CLI-041, CLI-042, PROPOSED: connect and link
+  refuses a binary the user can change unless the installed copy holds it;
+  hooks, plist and unit name the installed copy; `--update` moves the service
+  onto it; the leftover host backup job is named with its removal)
+- `scripts/install-release-selftest.sh` (OPS-211, PROPOSED: one hash-checked
+  sudo line, a changed build refused, nothing run without a terminal);
+  `scripts/client-restart-selftest.sh` (OPS-170h, PROPOSED: the installed
+  copy of this build counts as it)
 - `internal/client/settingshooks_test.go` (CLI-034, CLI-035, CLI-036,
   PROPOSED: connect replaces stale innsegl hook entries and keeps foreign
   ones; disconnect removes every innsegl entry; the administrator command
@@ -317,8 +377,8 @@ says to revoke the machine from the Account page.
 ## Runbooks
 
 - [client-update.md](../runbooks/client-update.md): update the client on a
-  machine — `git pull && make build && make client-restart`, in the checkout
-  (or `make -C <checkout> …`). `make build` links the binary as
+  machine — `git pull && make build && make install-release && make client-restart`,
+  in the checkout (or `make -C <checkout> …`). `make build` links the binary as
   `~/.local/bin/innsegl`, so `innsegl status` runs by name once
   `~/.local/bin` is on PATH.
 - [cutover.md](../runbooks/cutover.md)

@@ -204,6 +204,11 @@ jobs:
       # a temporary HOME here; a file there that is not a link is left alone.
       - name: make build puts the binary on the PATH
         run: ./scripts/link-bin-selftest.sh
+      # OPS-211 (#599). `make install-release` installs a root-owned copy
+      # through one hash-checked sudo line; sudo and chown are fakes here,
+      # and the destination is a temporary folder.
+      - name: make install-release installs only the binary whose hash it printed
+        run: ./scripts/install-release-selftest.sh
 
   setup-link:
     name: setup link

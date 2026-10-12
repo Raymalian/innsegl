@@ -11,6 +11,10 @@
 #   - A file there that is not a link: left exactly as it is, with a warning.
 #     It is somebody's own binary, and replacing it is not this script's call.
 #   - ~/.local/bin not on PATH: says how to add it.
+#   - An installed copy (`make install-release`, #599) that is another build:
+#     says so. The link is for the CLI only; hooks and the client service run
+#     the installed copy, and keep running the old build until it is
+#     installed again.
 #
 # It never fails the build: a link it cannot make is a warning.
 #
@@ -50,6 +54,12 @@ else
   else
     echo "link-bin: ${link} -> ${bin}"
   fi
+fi
+
+release="${INNSEGL_RELEASE_DIR:-/usr/local/libexec/innsegl}/innsegl"
+if [ -f "${release}" ] && ! cmp -s "${bin}" "${release}"; then
+  echo "link-bin: hooks and the client service run ${release}, another build than ${bin}." \
+    "Install this one: make install-release" >&2
 fi
 
 case ":${PATH}:" in

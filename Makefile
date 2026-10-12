@@ -20,7 +20,7 @@ LDFLAGS := -X $(VERSION_PKG).version=$(VERSION) \
 
 COVERPROFILE := cover.out
 
-.PHONY: all build client-restart test test-clean lint cover smoke smoke-down spire-up spire-verify \
+.PHONY: all build install-release client-restart test test-clean lint cover smoke smoke-down spire-up spire-verify \
         spire-down spire-services-up spire-admin-relay-up spire-admin-relay-down \
         sigstore-up rekor-log-up rekor-index-ready sigstore-verify sigstore-down rekor-tlog-id rekor-reindex \
         innsegl-verify innsegl-canary innsegl-demo innsegl-init \
@@ -47,7 +47,19 @@ build:
 	@scripts/codesign-cli.sh $(BINARY)
 	@scripts/link-bin.sh $(CURDIR)/$(BINARY)
 
-## client-restart: restart this machine's client service, if it runs the binary build just wrote
+## install-release: install the binary build wrote as the root-owned copy hooks and the client service run (sudo, hash-checked)
+#
+# /usr/local/libexec/innsegl/innsegl (#599). `innsegl connect` names only that
+# copy and refuses a binary the user can change: hooks run on every agent
+# prompt, and ./innsegl is rewritten by any agent building in this checkout.
+# One sudo line, printed first, copies the binary to root, checks its SHA-256
+# and renames it into place (scripts/install-release.sh). Without a terminal
+# it prints the line and exits 3. The dev loop is
+# `make build && make install-release && make client-restart`.
+install-release:
+	@scripts/install-release.sh $(CURDIR)/$(BINARY)
+
+## client-restart: restart this machine's client service, if it runs the binary build just wrote (or its installed copy)
 client-restart:
 	@scripts/client-restart.sh $(CURDIR)/$(BINARY)
 
