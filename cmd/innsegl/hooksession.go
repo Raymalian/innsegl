@@ -93,6 +93,7 @@ Claude Code reaches the model through it, so this prompt would fail.
 func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string,
 	post func(url string, body []byte) error,
 ) int {
+	captureOnly := getenv("INNSEGL_CAPTURE_ONLY") == "1"
 	_ = stdout // never written: a hook's stdout can be read as instructions
 	ctx, cancel := context.WithTimeout(context.Background(), sessionHookTimeout)
 	defer cancel()
@@ -131,7 +132,7 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 		if err != nil {
 			fmt.Fprintf(stderr, "innsegl hook session: signalling the end of the session: %v\n", err)
 		}
-		if in.HookEventName == "SessionEnd" {
+		if in.HookEventName == "SessionEnd" && !captureOnly {
 			// The branch goes to a hosted core's mirror (#465), without
 			// waiting for it.
 			pushBranchAtSessionEnd(ctx, in.Cwd, base, stderr)
@@ -153,8 +154,10 @@ func runHookSession(stdin io.Reader, stdout, stderr io.Writer, getenv func(strin
 		// A repository is signable from its first use: link it when
 		// innsegl's prepare-commit-msg hook is not there yet, so its agent
 		// commits carry the run's trailers the core signs against.
-		if _, lerr := linkEnsure(ctx, derived.Main); lerr != nil {
-			fmt.Fprintf(stderr, "innsegl hook session: linking %s for signing: %v\n", derived.Main, lerr)
+		if !captureOnly {
+			if _, lerr := linkEnsure(ctx, derived.Main); lerr != nil {
+				fmt.Fprintf(stderr, "innsegl hook session: linking %s for signing: %v\n", derived.Main, lerr)
+			}
 		}
 		statement["repo"] = derived.Repo
 		statement["worktree"] = derived.Worktree

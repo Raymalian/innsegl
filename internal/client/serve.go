@@ -52,6 +52,9 @@ const renewRetry = time.Minute
 // Server is `innsegl client serve`: the one holder of the machine's key, a
 // reverse proxy from loopback to the core over the client certificate.
 type Server struct {
+	responsesMu        sync.Mutex
+	responsesSupported bool
+	responsesUntil     time.Time
 	// Now is the clock renewal decisions read; tests replace it.
 	Now func() time.Time
 
@@ -269,7 +272,7 @@ func (s *Server) explainRefusal(resp *http.Response) error {
 	if resp.StatusCode < 400 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 		return nil
 	}
-	session := req.Header.Get("X-Claude-Code-Session-Id")
+	session := requestSession(req)
 	if session == "" {
 		session = "(none)"
 	}
@@ -323,11 +326,11 @@ func (s *Server) attachStatement(out *http.Request) {
 	if out.URL.Path == SessionStatementPath {
 		return
 	}
-	session := out.Header.Get("X-Claude-Code-Session-Id")
+	session := requestSession(out)
 	if session == "" {
 		return
 	}
-	if v, ok := s.statements.lookup(session, out.Header.Get("X-Claude-Code-Agent-Id")); ok {
+	if v, ok := s.statements.lookup(session, requestAgent(out)); ok {
 		out.Header.Set(StatementHeader, v)
 	}
 }
@@ -410,6 +413,31 @@ func (s *Server) Handler() http.Handler {
 			http.Error(w, "innsegl client: this installation was revoked; the core refused its renewal. "+
 				"Run `innsegl connect --disconnect`, then enrol again with a new token.", http.StatusForbidden)
 			return
+		}
+		if r.URL.Path == "/_client/capabilities" {
+			if r.Method != http.MethodGet {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			if !s.responsesAvailable(r) {
+				http.Error(w, "innsegl client: Responses capture is unavailable", http.StatusNotImplemented)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "agents": "root-only", "signing": false}); err != nil {
+				return
+			}
+			return
+		}
+		if responsesPath(r.URL.Path) || responsesModelsPath(r.URL.Path) {
+			if r.Method != http.MethodPost && !responsesModelsPath(r.URL.Path) {
+				http.Error(w, "innsegl client: Responses capture requires HTTP POST; configure supports_websockets=false", http.StatusMethodNotAllowed)
+				return
+			}
+			if !s.responsesAvailable(r) {
+				http.Error(w, "innsegl client: this core has not advertised Responses capture; upgrade the core and check enrollment", http.StatusNotImplemented)
+				return
+			}
 		}
 		if r.URL.Path == SessionStatementPath && r.Method == http.MethodPost {
 			kept, err := s.rememberStatement(r)

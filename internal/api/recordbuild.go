@@ -522,7 +522,7 @@ func outcomeOf(toolName string, body gatewayBody) RecordOutcome {
 	if body.hookShape {
 		return body.hookOutcome
 	}
-	if !body.ResultObserved {
+	if !body.ResultObserved || body.ErrorSignal == "unknown" {
 		return RecordOutcome{Kind: "unknown"}
 	}
 	kind := "ok"

@@ -974,13 +974,24 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/_gateway/capabilities", gateway.ResponsesCapabilities)
 	// WithRetryAfterHeader sets the Retry-After header a GW-013 refusal
 	// carries -- internal/gateway's Guard interface has no access to the
 	// ResponseWriter to do that itself (limit.go's own doc comment explains
 	// why), so this wraps the proxy handler specifically. It is a
 	// transparent pass-through for every response this guard chain does not
 	// refuse, streaming (GW-002) included.
-	mux.Handle("/", gateway.WithRetryAfterHeader(proxy))
+	openaiUpstream, openaiErr := gateway.NewUpstream("https://api.openai.com", nil)
+	if openaiErr != nil {
+		running.Close()
+		return nil, openaiErr
+	}
+	chatgptUpstream, chatgptErr := gateway.NewUpstream("https://chatgpt.com", nil)
+	if chatgptErr != nil {
+		running.Close()
+		return nil, chatgptErr
+	}
+	mux.Handle("/", gateway.WithRetryAfterHeader(gateway.ResponsesRoutes(proxy, openaiUpstream, chatgptUpstream)))
 	if running.sessionEnder != nil {
 		// gatewaySessionEndPath: see sessionEndHandler's own doc comment for
 		// why this is minimal and local-only rather than a documented,

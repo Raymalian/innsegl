@@ -14,6 +14,7 @@ help lines. When the code changes, the code wins; fix the page.
 | Commit hook and signing path (`hook`, `git-hook`, `sign`, `link`, `init`) | [commit-path.md](commit-path.md) |
 | Identity: register, retire, admin credential, identity guard; the MCP server (deprecated wire, ADR-0077) | [identity.md](identity.md) |
 | Gateway capture of model traffic | [gateway.md](gateway.md) |
+| Experimental Codex root-session capture (`codex`) | [codex.md](codex.md) |
 | Ledger, segments, sealing, canary, ledger backup | [ledger-and-segments.md](ledger-and-segments.md) |
 | Repository names: literal or pseudonymous, the switch, erasure (ADR-0080) | [repository-names.md](repository-names.md) |
 | Reconciler and reaper | [reconciler-and-reaper.md](reconciler-and-reaper.md) |

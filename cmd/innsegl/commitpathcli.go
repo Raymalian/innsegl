@@ -30,7 +30,7 @@ func isHelp(args []string) bool {
 }
 
 const (
-	hookUsage    = "usage: innsegl hook pre-tool-use | post-tool-use | session\n"
+	hookUsage    = "usage: innsegl hook pre-tool-use | post-tool-use | session [--capture-only]\n"
 	gitHookUsage = "usage: innsegl git-hook prepare-commit-msg <message file> [<source> [<sha>]]\n" +
 		"       innsegl git-hook post-commit\n" +
 		"       innsegl git-hook reference-transaction prepared|committed|aborted   (run by git; ref updates on stdin)\n" +
@@ -43,8 +43,17 @@ func hookCommand(args []string, stdout, stderr io.Writer) int {
 		fprintf(stdout, hookUsage)
 		return exitOK
 	}
-	if len(args) == 1 && args[0] == "session" {
-		return runHookSession(os.Stdin, stdout, stderr, os.Getenv, postToGateway(os.Getenv))
+	if (len(args) == 1 || (len(args) == 2 && args[1] == "--capture-only")) && args[0] == "session" {
+		getenv := os.Getenv
+		if len(args) == 2 {
+			getenv = func(key string) string {
+				if key == "INNSEGL_CAPTURE_ONLY" {
+					return "1"
+				}
+				return os.Getenv(key)
+			}
+		}
+		return runHookSession(os.Stdin, stdout, stderr, getenv, postToGateway(getenv))
 	}
 	if len(args) == 1 && args[0] == "post-tool-use" {
 		return runHookPostToolUse(os.Stdin, stderr, os.Getenv)

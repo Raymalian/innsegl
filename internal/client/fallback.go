@@ -56,7 +56,7 @@ const maxCaptureBytes = 16 << 20
 
 // isModelPath reports whether path is model traffic the provider answers.
 func isModelPath(path string) bool {
-	return path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages/")
+	return path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages/") || responsesPath(path)
 }
 
 // exchange is one model request held for a possible resend and journal.
@@ -98,7 +98,7 @@ func (e errCoreFailed) Error() string {
 // serveModel handles one model request: held for a resend, then to the core,
 // or straight to the provider while the core is known to be down.
 func (s *Server) serveModel(w http.ResponseWriter, r *http.Request) {
-	s.noteRouted(r.Header.Get("X-Claude-Code-Session-Id"))
+	s.noteRouted(requestSession(r))
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxReplayableBytes+1))
 	if err != nil {
 		http.Error(w, "innsegl client: reading the request: "+err.Error(), http.StatusBadRequest)
@@ -113,8 +113,8 @@ func (s *Server) serveModel(w http.ResponseWriter, r *http.Request) {
 		s.proxy.ServeHTTP(w, r)
 		return
 	}
-	session := r.Header.Get("X-Claude-Code-Session-Id")
-	agent := r.Header.Get("X-Claude-Code-Agent-Id")
+	session := requestSession(r)
+	agent := requestAgent(r)
 	ex := &exchange{
 		body: body, header: r.Header.Clone(), method: r.Method, path: r.URL.Path, query: r.URL.RawQuery,
 		session: session, agent: agent, started: s.Now().UTC(),
@@ -127,6 +127,10 @@ func (s *Server) serveModel(w http.ResponseWriter, r *http.Request) {
 			s.statements.awaitSession(r.Context(), session, statementWait)
 		}
 		ex.statement, ex.hasRepo = s.statements.statement(session, agent)
+	}
+	if responsesPath(r.URL.Path) && len(ex.statement) == 0 {
+		http.Error(w, "innsegl client: Codex has not stated its workspace; review and trust the lifecycle hooks in /hooks, then retry", http.StatusPreconditionRequired)
+		return
 	}
 	s.serveHeld(w, r.WithContext(context.WithValue(r.Context(), exchangeKey{}, ex)), ex)
 }
@@ -271,7 +275,7 @@ func (s *Server) forwardDirect(w http.ResponseWriter, r *http.Request, ex *excha
 	} else {
 		s.logBypass(ex)
 	}
-	target := *s.provider
+	target := *s.providerForPath(ex.path)
 	target.Path = strings.TrimSuffix(target.Path, "/") + ex.path
 	target.RawQuery = ex.query
 	out, err := http.NewRequestWithContext(r.Context(), ex.method, target.String(), bytes.NewReader(ex.body))
@@ -282,6 +286,7 @@ func (s *Server) forwardDirect(w http.ResponseWriter, r *http.Request, ex *excha
 	out.Header = ex.header.Clone()
 	stripHopByHop(out.Header)
 	out.Header.Del(StatementHeader)
+	out.Header.Del("X-Gateway-Key")
 	out.Header.Set("Accept-Encoding", "identity")
 	out.ContentLength = int64(len(ex.body))
 	resp, err := s.providerClient.Do(out)

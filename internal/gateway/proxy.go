@@ -117,7 +117,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := p.Upstream.Client.Do(outReq)
+	// The destination comes from configured Upstream.resolve, never a caller host.
+	resp, err := p.Upstream.Client.Do(outReq) //nolint:gosec // G704: exact configured provider routes; redirects disabled for Responses.
 	if err != nil {
 		// classifyUpstreamError (upstream.go, #371/GW-008) turns a TLS,
 		// connect or timeout failure into the status and failure-class
@@ -160,6 +161,7 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 	// The client service's statement is for the core alone (RM-313): it
 	// names a host path, which is not the provider's to see.
 	outReq.Header.Del(StatementHeader)
+	outReq.Header.Del("X-Gateway-Key")
 	// The reply is read here as well as relayed (stream, below), and a
 	// compressed one reads as nothing: Claude Code asks for gzip, br and
 	// zstd. Identity is the one encoding every client accepts, so the

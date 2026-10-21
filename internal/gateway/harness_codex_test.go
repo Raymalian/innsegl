@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: Apache-2.0
+
+package gateway
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+// OAI-005: the Codex root shape must be identified as itself, never Claude.
+// These are contract examples; live supported-version fixtures remain a gate.
+func TestOAI005CodexRootRecognition(t *testing.T) {
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/backend-api/codex/responses", nil)
+	r.Header.Set("Session-Id", "11111111-1111-4111-8111-111111111111")
+	r.Header.Set("Thread-Id", "11111111-1111-4111-8111-111111111111")
+	r.Header.Set("User-Agent", "codex_exec/0.163.0 (Generic OS; generic)")
+	next, refusal := NewHarnessGuard().Check(r)
+	if refusal != nil {
+		t.Fatalf("refused Codex: %+v", refusal)
+	}
+	id, ok := IdentificationFromContext(next.Context())
+	if !ok || id.Harness != "codex" || id.Version != "0.163.0" || id.AgentID != "main" {
+		t.Fatalf("identification %+v", id)
+	}
+	for _, change := range []string{"session", "version", "child", "method"} {
+		t.Run(change, func(t *testing.T) {
+			bad := r.Clone(r.Context())
+			bad.Header = r.Header.Clone()
+			switch change {
+			case "session":
+				bad.Header.Set("Session-Id", "not-uuid")
+			case "version":
+				bad.Header.Set("User-Agent", "unknown/0.163.0")
+			case "child":
+				bad.Header.Set("Thread-Id", "22222222-2222-4222-8222-222222222222")
+			case "method":
+				bad.Method = http.MethodGet
+			}
+			if _, f := NewHarnessGuard().Check(bad); f == nil {
+				t.Fatal("accepted unverified shape")
+			}
+		})
+	}
+}

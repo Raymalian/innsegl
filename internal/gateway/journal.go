@@ -69,6 +69,9 @@ func unrecordedRepo(ctx context.Context) string {
 // guards permitted.
 func recordedValue(ctx context.Context) string {
 	if runID, ok := RunIDFromContext(ctx); ok && runID != "" {
+		if observationProblem(ctx) != "" {
+			return clientjournal.RecordedFalse
+		}
 		return clientjournal.RecordedTrue
 	}
 	if unrecordedRepo(ctx) != "" {
@@ -164,6 +167,14 @@ func (p *Proxy) replyObserver(r *http.Request, contentType string) io.Writer {
 	var observer ToolUseObserver
 	if p.ToolUse != nil {
 		observer = boundToolUseObserver(r.Context(), p.ToolUse)
+	}
+	if isResponsesPath(r.URL.Path) {
+		interp := newResponsesInterpreter(observer)
+		if p.ReplyText != nil {
+			ctx := r.Context()
+			interp.onText = func(text string) { p.ReplyText.OnReplyText(ctx, text) }
+		}
+		return interp
 	}
 	interp := newMessagesInterpreter(observer)
 	if p.ReplyText != nil {

@@ -56,11 +56,9 @@ package gateway
 // set whenever it is handed a nil result).
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -583,6 +581,7 @@ type gatewayToolCallBody struct {
 	ResultObserved  bool            `json:"result_observed"`
 	Result          json.RawMessage `json:"result,omitempty"`
 	IsError         bool            `json:"is_error,omitempty"`
+	ErrorSignal     string          `json:"error_signal,omitempty"`
 	ResultTruncated bool            `json:"result_truncated,omitempty"`
 	Note            string          `json:"note,omitempty"`
 	// JournalEntry is the hash of the signed client-journal entry whose
@@ -613,6 +612,7 @@ func buildToolCallBody(toolUseID string, call pendingCall, result *observedToolR
 		b.ResultObserved = true
 		b.Result = result.Content
 		b.IsError = result.IsError
+		b.ErrorSignal = result.ErrorSignal
 		b.ResultTruncated = result.Truncated
 	} else {
 		b.Note = "this tool_use was evicted from the gateway's bounded pending set " +
@@ -795,10 +795,11 @@ const (
 // finding that "a failed command surfaced as a tool result carrying
 // is_error... a refused action surfaced the same way".
 type observedToolResult struct {
-	ToolUseID string
-	Content   json.RawMessage
-	IsError   bool
-	Truncated bool
+	ToolUseID   string
+	Content     json.RawMessage
+	IsError     bool
+	Truncated   bool
+	ErrorSignal string
 }
 
 // extractToolResults reads r's body once, bounded by
@@ -809,36 +810,9 @@ type observedToolResult struct {
 // request forwards unchanged (GW-001) no matter what was found, the same
 // contract facts.go's own ExtractRequestFacts holds for r.
 func extractToolResults(r *http.Request) []observedToolResult {
-	if r.Body == nil {
-		return nil
-	}
-
-	orig := r.Body
-	limited := io.LimitReader(orig, maxToolCallRecordBodyBytes+1)
-	buf, readErr := io.ReadAll(limited)
-
-	r.Body = &restoredRecordBody{
-		Reader: io.MultiReader(bytes.NewReader(buf), orig),
-		closer: orig,
-	}
-
-	if readErr != nil || len(buf) > maxToolCallRecordBodyBytes {
-		return nil
-	}
-	return parseToolResults(buf)
+	body := observationBody(r)
+	return requestFormat(r).results(body.decoded)
 }
-
-// restoredRecordBody is facts.go's own restoredBody, restated here rather
-// than reused: that type is unexported to its own file, and this file
-// reads the request body a second, independent time for a different
-// purpose (see this section's own doc comment above) rather than widen
-// what facts.go's single read already extracts.
-type restoredRecordBody struct {
-	io.Reader
-	closer io.Closer
-}
-
-func (b *restoredRecordBody) Close() error { return b.closer.Close() }
 
 // toolResultRawBlock is one Anthropic Messages API content block, read
 // loosely: only the fields a tool_result block carries are read, and a
