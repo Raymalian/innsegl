@@ -6,6 +6,8 @@
 The gateway records function and custom tool calls and pairs results by call ID.
 Custom tool scripts are stored as text; they are never evaluated by the recorder.
 Tool outcomes are `unknown`: this wire format carries no authoritative error flag.
+The exact backend Responses route also observes SSE when Content-Type is absent
+or text/plain, as measured with the supported CLI. Forwarded bytes stay unchanged.
 
 This milestone does not provide subagent correlation, Responses WebSocket capture,
 OTel witness, or Codex commit signing. A transport probe is not proof of signing or

@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"innsegl.dev/innsegl/internal/mcp"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +14,8 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+
+	"innsegl.dev/innsegl/internal/mcp"
 )
 
 const responsesBody = `{"input":[{"role":"developer","content":[{"type":"input_text","text":"context"}]},{"role":"user","content":[{"type":"input_text","text":"inspect files"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"checking"}]},{"type":"custom_tool_call_output","call_id":"call_exec1","output":"exit code 1"},{"type":"function_call_output","call_id":"call_fn1","output":"done"}]}`
@@ -181,6 +182,38 @@ func TestOAI003PlainStreamExceptionIsLimitedToBackendRoute(t *testing.T) {
 		r.URL.Path = path
 		if p.replyObserver(r, "text/plain; charset=utf-8") != nil {
 			t.Errorf("plaintext exception reached %s", path)
+		}
+	}
+}
+
+// OAI-003: the backend can omit Content-Type entirely. HTTP forwarding can
+// then add text/plain, so replaying only the downstream MIME misses this case.
+func TestOAI003BackendStreamWithMissingMIMEStillObservesCalls(t *testing.T) {
+	event := "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"custom_tool_call\",\"name\":\"exec\",\"call_id\":\"call_qa\",\"input\":\"text(1)\"}}\n\n"
+	provider := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header()["Content-Type"] = nil // suppress the server's automatic MIME sniffing
+		discardWriteError(io.WriteString(w, event))
+	}))
+	defer provider.Close()
+	up, err := NewUpstream(provider.URL, provider.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	p := &Proxy{Upstream: up, Guards: []Guard{}, ToolUse: ToolUseObserverFunc(func(ToolUse) { calls++ })}
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, responseRequest([]byte(`{"input":"qa"}`)))
+	if w.Code != http.StatusOK || w.Body.String() != event {
+		t.Fatal("forwarded stream changed")
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d", calls)
+	}
+	for _, path := range []string{"/v1/messages", "/v1/responses"} {
+		r := responseRequest(nil)
+		r.URL.Path = path
+		if p.replyObserver(r, "") != nil {
+			t.Fatalf("missing MIME accepted on %s", path)
 		}
 	}
 }

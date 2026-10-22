@@ -226,12 +226,15 @@ func (r *responsesInterpreter) call(item responseItem) {
 	}
 }
 
-// The Codex backend streams Responses SSE under text/plain. This measured
-// exception belongs to its exact route; it does not widen Messages parsing
-// or infer a wire format by examining response bytes.
+// The Codex backend can omit Content-Type on Responses SSE; a relay may
+// then supply text/plain. This measured exception belongs to its exact
+// route; it does not widen Messages parsing or sniff another wire format.
 func isResponsesBackendStream(r *http.Request, contentType string) bool {
 	if r.URL.Path != "/backend-api/codex/responses" {
 		return false
+	}
+	if strings.TrimSpace(contentType) == "" {
+		return true
 	}
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	return err == nil && mediaType == "text/plain"
