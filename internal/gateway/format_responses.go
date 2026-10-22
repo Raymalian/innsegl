@@ -4,6 +4,8 @@ package gateway
 
 import (
 	"encoding/json"
+	"mime"
+	"net/http"
 	"strings"
 )
 
@@ -222,4 +224,15 @@ func (r *responsesInterpreter) call(item responseItem) {
 	if r.observer != nil {
 		r.observer.OnToolUse(ToolUse{ID: item.CallID, Name: item.Name, Input: input, Truncated: truncated})
 	}
+}
+
+// The Codex backend streams Responses SSE under text/plain. This measured
+// exception belongs to its exact route; it does not widen Messages parsing
+// or infer a wire format by examining response bytes.
+func isResponsesBackendStream(r *http.Request, contentType string) bool {
+	if r.URL.Path != "/backend-api/codex/responses" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mediaType == "text/plain"
 }

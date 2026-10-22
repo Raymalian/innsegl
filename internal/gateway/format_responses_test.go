@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"innsegl.dev/innsegl/internal/mcp"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -141,5 +143,44 @@ func TestOAI005CodexEnvironmentContextIsNotTheBrief(t *testing.T) {
 	r := responseRequest([]byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"<environment_context>\n<cwd>/workspace</cwd>\n</environment_context>"}]},{"role":"user","content":[{"type":"input_text","text":"inspect files"}]}]}`))
 	if got := ExtractRequestFacts(r).Brief; got != "inspect files" {
 		t.Fatalf("brief=%q", got)
+	}
+}
+
+// OAI-004: exercise reply observation and next-request pairing through the
+// same recorder used by production, without claiming identity-service proof.
+func TestOAI004ResponsesReplayPairsCallWithNextRequest(t *testing.T) {
+	recorded := make(chan mcp.GatewayToolCallInput, 1)
+	recorder := NewToolCallRecorder(ToolCallRecorderConfig{record: func(_ context.Context, in mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error) {
+		recorded <- in
+		return mcp.GatewayToolCallOutput{}, nil
+	}})
+	proxy := &Proxy{ToolUse: recorder, Guards: []Guard{NewToolCallRecordGuard(recorder)}}
+	r := responseRequest([]byte(`{"input":"qa"}`))
+	r = r.WithContext(WithRunID(r.Context(), "run-test"))
+	proxy.Replay(r, "text/plain; charset=utf-8", []byte("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"custom_tool_call\",\"name\":\"exec\",\"call_id\":\"call_qa\",\"input\":\"text(await tools.exec_command({cmd: 'exit 7'}))\"}}\n\n"))
+	if recorder.PendingCount() != 1 {
+		t.Fatalf("pending=%d", recorder.PendingCount())
+	}
+	r = responseRequest([]byte(`{"input":[{"type":"custom_tool_call_output","call_id":"call_qa","output":"exit code 7"}]}`))
+	r = r.WithContext(WithRunID(r.Context(), "run-test"))
+	proxy.Replay(r, "text/event-stream", nil)
+	select {
+	case in := <-recorded:
+		if in.Tool != "exec" || !bytes.Contains(in.Body, []byte(`"error_signal":"unknown"`)) {
+			t.Fatalf("record: %s", in.Body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("result not paired")
+	}
+}
+
+func TestOAI003PlainStreamExceptionIsLimitedToBackendRoute(t *testing.T) {
+	p := &Proxy{ToolUse: ToolUseObserverFunc(func(ToolUse) {})}
+	for _, path := range []string{"/v1/messages", "/v1/responses", "/backend-api/codex/responses/extra"} {
+		r := responseRequest(nil)
+		r.URL.Path = path
+		if p.replyObserver(r, "text/plain; charset=utf-8") != nil {
+			t.Errorf("plaintext exception reached %s", path)
+		}
 	}
 }

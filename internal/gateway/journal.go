@@ -161,7 +161,7 @@ func (p *Proxy) replay(r *http.Request, contentType string, reply []byte) Replay
 // replyObserver is the writer a reply of contentType is copied into besides
 // the caller, or nil when nobody watches it (proxy.go's stream).
 func (p *Proxy) replyObserver(r *http.Request, contentType string) io.Writer {
-	if (p.ToolUse == nil && p.ReplyText == nil && p.SubagentEnds == nil) || !isEventStream(contentType) {
+	if (p.ToolUse == nil && p.ReplyText == nil && p.SubagentEnds == nil) || (!isEventStream(contentType) && !isResponsesBackendStream(r, contentType)) {
 		return nil
 	}
 	var observer ToolUseObserver
