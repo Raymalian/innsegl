@@ -10,7 +10,7 @@ The exact backend Responses route also observes SSE when Content-Type is absent
 or text/plain, as measured with the supported CLI. Forwarded bytes stay unchanged.
 
 This milestone does not provide subagent correlation, Responses WebSocket capture,
-OTel witness, or Codex commit signing. A transport probe is not proof of signing or
+or OTel witness. Commit signing is an experimental opt-in described below. A transport probe is not proof of signing or
 provider feature parity. Unsupported client versions and child sessions are refused.
 
 ## Commands
@@ -32,6 +32,36 @@ SessionEnd commands for this invocation. Existing hook sources still apply.
 A model request without a workspace statement receives HTTP 428 with setup guidance.
 The launcher does not bypass hook trust. Its lifecycle commands use capture-only
 mode: they do not install signing hooks or push branches at session end.
+
+## Commit signing
+
+Use `innsegl codex --sign-commits` to select the existing commit path for direct
+shell calls. Both client and core must advertise structured signing support;
+a capture-only core is refused during setup. The supported CLI remains 0.163.0.
+
+This invocation sets `features.code_mode.enabled=true` and
+`features.code_mode.direct_only_tool_namespaces=["functions"]`. That Codex
+configuration is under development. It exposes shell commands directly so the
+core can match the wire call ID, function-call kind and structured command to the hook.
+The supported CLI emits flat `exec_command` names; explicit `functions` namespaces
+are also recognized. Custom-script items cannot qualify as direct functions.
+An arbitrary outer JavaScript script is not eligible for signing.
+
+Review and trust the session and Bash hooks in `/hooks`. The signing lifecycle
+links the repository through the existing Git hooks, and the tool hook adds the
+call ID and existing per-command signing configuration. Codex requires
+`permissionDecision: allow` alongside rewritten input. In this opt-in mode an
+actual linked-repository commit rewrite carries that decision; it can approve
+the whole shell invocation, including other commands in it. The Claude hook and
+default capture mode do not gain that permission output.
+
+The core still independently requires a complete pending call from the same
+installation, recognized Codex harness and direct shell function, inside the existing
+window. Ambiguous, foreign, completed, stale, truncated and unknown calls are
+refused. Trailers, author checks, signing and transparency recording use the
+existing path. No signature is authorized by the hook alone. An installed,
+root-owned build matching the hooks is required; development builds do not
+bypass that existing requirement.
 
 ## Settings
 
@@ -60,6 +90,9 @@ Codex version or routing override is a usage error.
 ## Tests
 
 OAI-001–005 cover decoded request observations, results, SSE calls and root shape;
+OAI-013/014/016/021 cover direct-call provenance, signing hooks, replay
+ambiguity and commit observation. Signing launcher tests also require trusted
+hook selection; replay tests preserve the original signing lifetime.
 OAI-008/010 cover format and upstream separation; OAI-011 covers journal redaction.
 OAI-020 is an opt-in installed-CLI HTTP probe against a synthetic provider through
 the real gateway route. OAI-023–025 cover capability negotiation, provider selection
@@ -78,7 +111,7 @@ as an attestation that every action or successful result has been witnessed.
 
 [ADR-0085](../docs/adr/0085-capture-additional-wire-formats-through-adapters-in-the-one-gateway.md)
 is proposed. ADR-0057 and ADR-0068 continue to govern forwarding and journaling.
-The existing signing call-ID grammar is unchanged.
+The signing path also accepts bounded `call_` IDs, scoped to independently observed direct Codex calls; existing `toolu_` IDs retain their Claude path.
 
 ## Runbooks
 

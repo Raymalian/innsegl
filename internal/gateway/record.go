@@ -56,6 +56,7 @@ package gateway
 // set whenever it is handed a nil result).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -94,6 +95,10 @@ type pendingKey struct {
 // pendingCall is what OnToolUseContext captured about one tool_use block,
 // held until its result arrives or it is evicted.
 type pendingCall struct {
+	wireType   string
+	namespace  string
+	ambiguous  bool
+	harness    string
 	tool       string
 	input      json.RawMessage
 	truncated  bool
@@ -332,17 +337,21 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	r.baselineIfNeeded(runID, workingDirectory)
 	installation, _ := InstallationFromContext(ctx)
 	journalEntry, _ := JournalEntryFromContext(ctx)
+	id, _ := IdentificationFromContext(ctx)
 	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
 	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
 	// comment for why a request/reply's context must never be allowed to cut a recording short.
-	r.addPending(runID, workingDirectory, repo, installation, journalEntry, t)
+	r.addPending(runID, workingDirectory, repo, installation, journalEntry, id.Harness, t)
 }
 
 // addPending records t as pending, evicting and recording the oldest
 // pending entry (input-only) first if the table is already at its cap.
-func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installation, journalEntry string, t ToolUse) {
+func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installation, journalEntry, harness string, t ToolUse) {
 	key := pendingKey{runID: runID, toolUseID: t.ID}
 	call := pendingCall{
+		harness:    harness,
+		namespace:  t.Namespace,
+		wireType:   t.WireType,
 		tool:       t.Name,
 		input:      append(json.RawMessage(nil), t.Input...),
 		truncated:  t.Truncated,
@@ -359,6 +368,13 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installatio
 	evicted := false
 
 	r.mu.Lock()
+	for otherKey, other := range r.pending {
+		if otherKey.toolUseID == key.toolUseID && (otherKey.runID != key.runID || other.ambiguous) {
+			other.ambiguous = true
+			r.pending[otherKey] = other
+			call.ambiguous = true
+		}
+	}
 	if _, exists := r.pending[key]; !exists {
 		if r.max > 0 && len(r.order) >= r.max && len(r.order) > 0 {
 			evictedKey = r.order[0]
@@ -369,6 +385,16 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installatio
 			delete(r.pending, evictedKey)
 		}
 		r.order = append(r.order, key)
+	}
+	if previous, exists := r.pending[key]; exists {
+		// Keep the first observation's lifetime and evidence. A replay with
+		// different provenance or content cannot authorize either command.
+		conflict := previous.harness != call.harness || previous.namespace != call.namespace || previous.wireType != call.wireType ||
+			previous.tool != call.tool || !bytes.Equal(previous.input, call.input) ||
+			previous.truncated != call.truncated || previous.workingDirectory != call.workingDirectory ||
+			previous.installation != call.installation || previous.repo != call.repo
+		previous.ambiguous = previous.ambiguous || call.ambiguous || conflict
+		call = previous
 	}
 	r.pending[key] = call
 	r.mu.Unlock()
@@ -870,13 +896,16 @@ var _ commitpath.Resolver = (*ToolCallRecorder)(nil)
 
 // LookupPending implements commitpath.Resolver: the relayed tool call with
 // this id whose result has not arrived yet, and the run it was relayed on.
-// Tool call ids are unique across runs, so the first match is the only one.
+// Identifiers seen on multiple pending runs remain ineligible for signing.
 func (r *ToolCallRecorder) LookupPending(toolUseID string) (commitpath.RelayedCall, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for key, call := range r.pending {
-		if key.toolUseID == toolUseID {
+		if key.toolUseID == toolUseID && !call.ambiguous {
 			return commitpath.RelayedCall{
+				Harness:          call.harness,
+				WireType:         call.wireType,
+				Namespace:        call.namespace,
 				RunID:            key.runID,
 				WorkingDirectory: call.workingDirectory,
 				Tool:             call.tool,

@@ -4,10 +4,15 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"innsegl.dev/innsegl/internal/client"
 )
 
 // OAI-025: the CLI starts a real child with the route/hook settings and
@@ -61,5 +66,29 @@ func TestOAI025CaptureSessionOptionIsRecognised(t *testing.T) {
 	var out, errs bytes.Buffer
 	if code := hookCommand([]string{"session", "--capture-only"}, &out, &errs); code != exitOK {
 		t.Fatalf("capture option exit=%d: %s", code, errs.String())
+	}
+}
+
+// OAI-014: negotiated signing capability cannot bypass installed-hook trust.
+func TestOAI014CodexLauncherValidatesHookBuild(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte(`{"formats":["responses-http"],"signing":true,"signing_mode":"structured"}`)); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	if err := client.WriteCoreConfig(client.ClientPaths(home), client.CoreConfig{CoreURL: "https://example.invalid", InstallationID: "installation-test", Listen: strings.TrimPrefix(server.URL, "http://")}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	called := false
+	code := codexCommandWithHook([]string{"--sign-commits"}, &out, &errs, func() (string, error) {
+		called = true
+		return "", errors.New("installed hook is another build")
+	})
+	if !called || code != exitConnectFailed || !strings.Contains(errs.String(), "installed hook is another build") {
+		t.Fatalf("hook trust bypassed: called=%v exit=%d stderr=%s", called, code, errs.String())
 	}
 }

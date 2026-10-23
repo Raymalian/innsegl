@@ -55,6 +55,9 @@ func hookCommand(args []string, stdout, stderr io.Writer) int {
 		}
 		return runHookSession(os.Stdin, stdout, stderr, getenv, postToGateway(getenv))
 	}
+	if len(args) == 2 && args[0] == "pre-tool-use" && args[1] == "--codex" {
+		return runCodexPreToolUse(os.Stdin, stdout, stderr, os.Getenv)
+	}
 	if len(args) == 1 && args[0] == "post-tool-use" {
 		return runHookPostToolUse(os.Stdin, stderr, os.Getenv)
 	}

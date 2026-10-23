@@ -20,7 +20,7 @@ func TestOAI025CodexLaunchRoutesAndHooks(t *testing.T) {
 		if api {
 			path = "/v1"
 		}
-		for _, required := range []string{"http://127.0.0.1:28195" + path, "supports_websockets=false", "requires_openai_auth=true", "hook session", "--capture-only", "hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.SessionEnd="} {
+		for _, required := range []string{"http://127.0.0.1:28195" + path, "supports_websockets=false", "agents.enabled=false", "requires_openai_auth=true", "hook session", "--capture-only", "hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.SessionEnd="} {
 			if !strings.Contains(config, required) {
 				t.Errorf("missing %q in launch configuration", required)
 			}
@@ -30,5 +30,30 @@ func TestOAI025CodexLaunchRoutesAndHooks(t *testing.T) {
 		if _, err := CodexLaunchArgs(bad, "/opt/innsegl/bin/innsegl", false); err == nil {
 			t.Fatalf("accepted nonlocal or ambiguous endpoint %s", bad)
 		}
+	}
+}
+
+// OAI-014/025: signing is explicit and exposes shell calls as structured
+// wire evidence, without changing ordinary capture launches.
+func TestOAI014SigningLaunchConfiguration(t *testing.T) {
+	args, err := CodexSigningLaunchArgs("http://127.0.0.1:28195", "/opt/innsegl/bin/innsegl", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.Join(args, "\n")
+	for _, want := range []string{`agents.enabled=false`, `features.code_mode.enabled=true`, `direct_only_tool_namespaces=["functions"]`, `hook pre-tool-use`, `hook post-tool-use`, `hook session`} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(s, "--capture-only") {
+		t.Fatal("signing uses capture-only lifecycle")
+	}
+	ordinary, err := CodexLaunchArgs("http://127.0.0.1:28195", "/opt/innsegl/bin/innsegl", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(ordinary, "\n"), "code_mode") {
+		t.Fatal("changed default capture")
 	}
 }

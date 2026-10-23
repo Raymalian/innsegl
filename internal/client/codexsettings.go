@@ -55,3 +55,28 @@ func CodexLaunchArgs(base, binary string, api bool) ([]string, error) {
 	}
 	return args, nil
 }
+
+// CodexSigningLaunchArgs extends capture with direct shell evidence and the
+// existing lifecycle/signing hooks. Ordinary capture remains unchanged.
+func CodexSigningLaunchArgs(base, binary string, api bool) ([]string, error) {
+	args, err := CodexLaunchArgs(base, binary, api)
+	if err != nil {
+		return nil, err
+	}
+	for i := range args {
+		args[i] = strings.ReplaceAll(args[i], " hook session --capture-only", " hook session")
+	}
+	values := []string{`features.code_mode.enabled=true`, `features.code_mode.direct_only_tool_namespaces=["functions"]`}
+	for _, event := range []string{"PreToolUse", "PostToolUse"} {
+		verb := "pre-tool-use --codex"
+		if event == "PostToolUse" {
+			verb = "post-tool-use"
+		}
+		hook := "env INNSEGL_CORE_URL=" + shellQuote(base) + " " + shellQuote(binary) + " hook " + verb
+		values = append(values, "hooks."+event+"=[{matcher=\"Bash\",hooks=[{type=\"command\",command="+strconv.Quote(hook)+",timeout=10}]}]")
+	}
+	for _, v := range values {
+		args = append(args, "-c", v)
+	}
+	return args, nil
+}

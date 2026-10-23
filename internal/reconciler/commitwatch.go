@@ -149,7 +149,7 @@ func resultText(raw json.RawMessage) (string, bool) {
 	if err := json.Unmarshal(raw, &blocks); err == nil {
 		var b strings.Builder
 		for _, blk := range blocks {
-			if blk.Type == "text" {
+			if blk.Type == "text" || blk.Type == "input_text" {
 				b.WriteString(blk.Text)
 			}
 		}
@@ -304,7 +304,7 @@ func (v *commitWatchView) observe(record event.Fields) {
 		// Cheap filter before the expensive one: only a Bash call could ever
 		// have run `git commit`, and reading every tool call's body would be
 		// a git-commit check that costs like a check of everything.
-		if recordString(record, event.FieldToolName) != "Bash" {
+		if tool := recordString(record, event.FieldToolName); tool != "Bash" && tool != "functions.exec_command" && tool != "exec_command" {
 			return
 		}
 		runID := recordString(record, event.FieldRunID)
@@ -359,7 +359,7 @@ func (r *Reconciler) checkCommits(ctx context.Context, view *ledgerView) CommitW
 			continue
 		}
 		var body commitWatchBody
-		if err := json.Unmarshal(raw, &body); err != nil || body.Tool != "Bash" {
+		if err := json.Unmarshal(raw, &body); err != nil || (body.Tool != "Bash" && body.Tool != "functions.exec_command" && body.Tool != "exec_command") {
 			report.Unchecked++
 			continue
 		}
@@ -367,14 +367,12 @@ func (r *Reconciler) checkCommits(ctx context.Context, view *ledgerView) CommitW
 			report.Unchecked++
 			continue
 		}
-		var input struct {
-			Command string `json:"command"`
-		}
-		if err := json.Unmarshal(body.Input, &input); err != nil {
+		command, readable := commitpath.ShellCommand(body.Tool, body.Input)
+		if !readable {
 			report.Unchecked++
 			continue
 		}
-		if !commitpath.IsGitCommitCommand(input.Command) {
+		if !commitpath.IsGitCommitCommand(command) {
 			continue // not a git commit call: nothing this pass has an opinion about
 		}
 		if !body.ResultObserved {

@@ -19,11 +19,16 @@ import (
 )
 
 func codexCommand(args []string, stdout, stderr io.Writer) int {
+	return codexCommandWithHook(args, stdout, stderr, connectDeps{binPath: innseglBinaryPath, uid: os.Getuid()}.hookBinary)
+}
+
+func codexCommandWithHook(args []string, stdout, stderr io.Writer, selectHook func() (string, error)) int {
 	fs := flag.NewFlagSet("codex", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	signing := fs.Bool("sign-commits", false, "attribute direct shell commits through the existing signing path")
 	api := fs.Bool("api", false, "use the API-key route instead of the ChatGPT-login route")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: innsegl codex [--api] -- [codex arguments]\n\nStart a Codex 0.163.0 root CLI session through the enrolled gateway.\nUses per-invocation routing and lifecycle hooks; does not edit user configuration.\nCapture only: subagents and signed-commit attribution are not supported yet.")
+		fmt.Fprintln(stderr, "usage: innsegl codex [--api] [--sign-commits] -- [codex arguments]\n\nStart a Codex 0.163.0 root CLI session through the enrolled gateway.\nUses per-invocation routing and lifecycle hooks; does not edit user configuration.\nDefault is capture only. --sign-commits enables experimental direct-shell attribution. Subagents are not supported.")
 	}
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return exitOK
@@ -63,7 +68,9 @@ func codexCommand(args []string, stdout, stderr io.Writer) int {
 	}
 	defer resp.Body.Close()
 	var caps struct {
-		Formats []string `json:"formats"`
+		Formats     []string `json:"formats"`
+		Signing     bool     `json:"signing"`
+		SigningMode string   `json:"signing_mode"`
 	}
 	supported := false
 	if resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&caps) == nil {
@@ -75,15 +82,28 @@ func codexCommand(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "innsegl codex: upgrade the client and core for Responses capture and restore enrollment; check innsegl status")
 		return exitConnectFailed
 	}
-	if _, err = os.Stat(client.ReleaseBinary()); err != nil {
-		fmt.Fprintln(stderr, "innsegl codex: install the release binary before running lifecycle hooks")
+	if *signing && (!caps.Signing || caps.SigningMode != "structured") {
+		fmt.Fprintln(stderr, "innsegl codex: upgrade both client and core for direct commit signing")
 		return exitConnectFailed
 	}
-	fmt.Fprintln(stderr, "innsegl: root-session capture; lifecycle hooks set for this invocation; subagents and signed commits are not supported. Review lifecycle hooks with /hooks before the first task.")
-	return runCodexProcess("codex", base, client.ReleaseBinary(), *api, fs.Args(), os.Stdin, stdout, stderr)
+	hookBinary, err := selectHook()
+	if err != nil {
+		fmt.Fprintln(stderr, "innsegl codex:", err)
+		return exitConnectFailed
+	}
+	if *signing {
+		fmt.Fprintln(stderr, "innsegl: experimental root signing with direct shell calls; review lifecycle/tool hooks in /hooks. Commit rewrites carry Codex-required allow decisions, which approve the whole shell invocation. Subagents are unsupported.")
+	} else {
+		fmt.Fprintln(stderr, "innsegl: root-session capture; lifecycle hooks set for this invocation; subagents and signed commits are not supported. Review lifecycle hooks with /hooks before the first task.")
+	}
+	return runCodexProcessMode("codex", base, hookBinary, *api, fs.Args(), os.Stdin, stdout, stderr, *signing)
 }
 
 func runCodexProcess(program, base, hookBinary string, api bool, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runCodexProcessMode(program, base, hookBinary, api, args, stdin, stdout, stderr, false)
+}
+
+func runCodexProcessMode(program, base, hookBinary string, api bool, args []string, stdin io.Reader, stdout, stderr io.Writer, signing bool) int {
 	// A profile, alternate daemon or later config override could select a
 	// different provider or replace the lifecycle hooks installed here.
 	for _, arg := range args {
@@ -98,12 +118,18 @@ func runCodexProcess(program, base, hookBinary string, api bool, args []string, 
 		return exitUsage
 	}
 	fixed, err := client.CodexLaunchArgs(base, hookBinary, api)
+	if signing {
+		fixed, err = client.CodexSigningLaunchArgs(base, hookBinary, api)
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
 	// The executable is selected by the operator; arguments are passed directly without a shell.
 	cmd := exec.CommandContext(context.Background(), program, append(fixed, args...)...) //nolint:gosec // Intentional CLI launcher after routing override validation.
+	if signing {
+		cmd.Env = append(os.Environ(), "INNSEGL_CORE_URL="+base)
+	}
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

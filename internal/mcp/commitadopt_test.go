@@ -647,3 +647,59 @@ func TestADP008OnTheCommitPathAChildCommitIsProvedAgainstItsParent(t *testing.T)
 		t.Errorf("%d run_adopted, want 1", n)
 	}
 }
+
+func TestOAI014DirectCodexCommitAdoption(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		tree          string
+		parents       []string
+		want          string
+	}{
+		{"a plain commit", "git add -A && git commit -m x", "t", []string{"p"}, cpDead},
+		{"a root commit", "git commit -m x", "t", nil, cpDead},
+		{"an amend", "git commit --amend -m x", "t", []string{"p"}, ""},
+		{"a merge", "git merge dev", "t", []string{"p"}, ""},
+		{"no tree sent", "git commit -m x", "", []string{"p"}, ""},
+		{"two parents", "git commit -m x", "t", []string{"p", "q"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := newCPAdoption(t)
+			repo, _ := spLocalRepo(t)
+			call := spPendingGitCommit(spRunID)
+			call.Tool = "functions.exec_command"
+			call.Harness = "codex"
+			call.Namespace = "functions"
+			call.Input = json.RawMessage(`{"cmd":` + jsonString(tc.command) + `}`)
+			call.WorkingDirectory = repo
+			scGit(t, repo, "remote", "add", "origin", "https://"+spRepo+".git")
+			resolver := spResolver{calls: map[string]commitpath.RelayedCall{"call_adopt": call}}
+			sc := newSCWiring()
+			sc.runs.run = CredentialRun{RunID: spRunID, AgentType: "demo", TaskID: spTaskID,
+				SPIFFEID: spSPIFFEID(spRunID), Repo: spRepo}
+			sc.cfg.Adoption = a
+			restore, err := ConfigureCommitSigner(sc.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(restore)
+			restoreSP, err := ConfigureSignPayload(SignPayloadConfig{Resolver: resolver, ClaimFor: spClaimForOK(t)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(restoreSP)
+
+			tree := tc.tree
+			if tree != "" {
+				tree = strings.Repeat("a", 40)
+			}
+			var parents []string
+			for range tc.parents {
+				parents = append(parents, strings.Repeat("b", 40))
+			}
+			got, err := AdoptionForCommit(context.Background(), call, tree, parents)
+			if err != nil || got != tc.want {
+				t.Errorf("AdoptionForCommit = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}

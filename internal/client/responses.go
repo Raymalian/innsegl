@@ -64,10 +64,14 @@ func (s *Server) responsesAvailable(r *http.Request) bool {
 	}
 	defer resp.Body.Close()
 	var capabilities struct {
-		Formats []string `json:"formats"`
+		Formats     []string `json:"formats"`
+		Signing     bool     `json:"signing"`
+		SigningMode string   `json:"signing_mode"`
 	}
 	s.responsesSupported = false
+	s.responsesSigning = false
 	if resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&capabilities) == nil {
+		s.responsesSigning = capabilities.Signing && capabilities.SigningMode == "structured"
 		for _, format := range capabilities.Formats {
 			if format == "responses-http" {
 				s.responsesSupported = true
@@ -79,4 +83,10 @@ func (s *Server) responsesAvailable(r *http.Request) bool {
 		s.responsesUntil = s.Now().Add(time.Minute)
 	}
 	return s.responsesSupported
+}
+
+func (s *Server) responsesSigningAvailable() bool {
+	s.responsesMu.Lock()
+	defer s.responsesMu.Unlock()
+	return s.responsesSupported && s.responsesSigning
 }

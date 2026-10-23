@@ -4,7 +4,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -258,11 +257,9 @@ func AdoptionForCommit(ctx context.Context, call commitpath.RelayedCall, tree st
 	if cfg == nil || svc == nil || svc.commitAdoption() == nil || tree == "" || len(parents) > 1 {
 		return "", nil
 	}
-	var input struct {
-		Command string `json:"command"`
-	}
-	if json.Unmarshal(call.Input, &input) != nil || !commitpath.IsAdoptableCommit(input.Command) {
-		return "", nil //nolint:nilerr // a command that is not a plain commit is no proposal (ADR-0079 decision 2)
+	command, readable := commitpath.ShellCommand(call.Tool, call.Input)
+	if !readable || !commitpath.IsAdoptableCommit(command) {
+		return "", nil
 	}
 	run, _, err := resolveRun(ctx, svc.runs, call.RunID, runGate{})
 	if err != nil || run.Repo == "" {

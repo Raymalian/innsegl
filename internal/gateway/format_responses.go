@@ -16,6 +16,7 @@ type responseItem struct {
 	ID        string          `json:"id"`
 	CallID    string          `json:"call_id"`
 	Name      string          `json:"name"`
+	Namespace string          `json:"namespace"`
 	Arguments string          `json:"arguments"`
 	Input     string          `json:"input"`
 	Output    json.RawMessage `json:"output"`
@@ -222,7 +223,11 @@ func (r *responsesInterpreter) call(item responseItem) {
 	}
 	r.seen[item.CallID] = true
 	if r.observer != nil {
-		r.observer.OnToolUse(ToolUse{ID: item.CallID, Name: item.Name, Input: input, Truncated: truncated})
+		name := item.Name
+		if item.Type == "function_call" && item.Namespace != "" {
+			name = item.Namespace + "." + name
+		}
+		r.observer.OnToolUse(ToolUse{WireType: item.Type, ID: item.CallID, Name: name, Namespace: item.Namespace, Input: input, Truncated: truncated})
 	}
 }
 

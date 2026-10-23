@@ -296,10 +296,13 @@ func simpleCommandWords(cmd string) [][]word {
 const maxToolUseIDBytes = 128
 
 // IsToolUseID reports whether s has the shape of a harness tool call id:
-// "toolu_" and then letters, digits and underscores. The id travels through
+// "toolu_" or "call_", then letters, digits and underscores. The id travels through
 // a shell and into a log line, so nothing else is allowed through.
 func IsToolUseID(s string) bool {
-	const prefix = "toolu_"
+	prefix := "toolu_"
+	if strings.HasPrefix(s, "call_") {
+		prefix = "call_"
+	}
 	if len(s) <= len(prefix) || len(s) > maxToolUseIDBytes || !strings.HasPrefix(s, prefix) {
 		return false
 	}
@@ -641,7 +644,10 @@ const Window = 30 * time.Minute
 
 // RelayedCall is a tool call the core relayed whose result has not arrived.
 type RelayedCall struct {
-	RunID string
+	WireType  string
+	Harness   string
+	Namespace string
+	RunID     string
 	// WorkingDirectory is where the harness said the agent works, on the
 	// request whose reply carried this tool call. The core checks it is the
 	// run's own repository before reading anything from it.
@@ -717,14 +723,34 @@ func Resolve(r Resolver, toolUseID string, now time.Time) (RelayedCall, error) {
 	if call.Truncated {
 		return RelayedCall{}, fmt.Errorf("tool call %s was truncated, so its command cannot be read", toolUseID)
 	}
-	var input struct {
-		Command string `json:"command"`
-	}
-	if call.Tool != "Bash" || json.Unmarshal(call.Input, &input) != nil || !IsGitCommitCommand(input.Command) {
+	command, readable := ShellCommand(call.Tool, call.Input)
+	family := strings.HasPrefix(toolUseID, "toolu_") && call.Tool == "Bash" && call.Harness != "codex"
+	directShell := (call.Tool == "functions.exec_command" && call.Namespace == "functions") || (call.Tool == "exec_command" && call.Namespace == "")
+	family = family || strings.HasPrefix(toolUseID, "call_") && directShell && call.Harness == "codex" && call.WireType == "function_call"
+	if !family || !readable || !IsGitCommitCommand(command) {
 		return RelayedCall{}, fmt.Errorf("tool call %s is not a git commit", toolUseID)
 	}
 	if now.Sub(call.ObservedAt) > Window {
 		return RelayedCall{}, fmt.Errorf("tool call %s is older than %s", toolUseID, Window)
 	}
 	return call, nil
+}
+
+// ShellCommand reads only structured shell arguments. Outer code-mode scripts
+// are never interpreted or treated as command evidence.
+func ShellCommand(tool string, raw json.RawMessage) (string, bool) {
+	var input struct {
+		Command string `json:"command"`
+		Cmd     string `json:"cmd"`
+	}
+	if json.Unmarshal(raw, &input) != nil {
+		return "", false
+	}
+	switch tool {
+	case "Bash":
+		return input.Command, input.Command != ""
+	case "functions.exec_command", "exec_command":
+		return input.Cmd, input.Cmd != ""
+	}
+	return "", false
 }

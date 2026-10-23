@@ -13,8 +13,12 @@ import (
 // content_block_stop event arrives while an Anthropic Messages reply
 // streams -- never batched up and delivered once the stream ends.
 type ToolUse struct {
-	ID   string
-	Name string
+	// WireType preserves the Responses item kind for signing evidence.
+	WireType string
+	// Namespace is the Responses function namespace, when present.
+	Namespace string
+	ID        string
+	Name      string
 	// Input is the tool call's input, exactly as the model produced it,
 	// reassembled from the reply's input_json_delta events -- which may
 	// arrive as a single fragment or split across several. It is always

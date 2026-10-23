@@ -20,7 +20,7 @@ func recogniseCodex163(r *http.Request) (Identification, bool, string) {
 		return Identification{}, false, "unsupported Codex session/thread shape"
 	}
 	ua, _, _ := strings.Cut(r.UserAgent(), " ")
-	if ua != "codex_exec/0.163.0" && ua != "codex_cli_rs/0.163.0" {
+	if ua != "codex_exec/0.163.0" && ua != "codex_cli_rs/0.163.0" && ua != "codex-tui/0.163.0" {
 		return Identification{}, false, "unsupported Codex client version"
 	}
 	if r.Header.Get("X-OpenAI-Subagent") != "" || r.Header.Get("X-Codex-Parent-Thread-Id") != "" {

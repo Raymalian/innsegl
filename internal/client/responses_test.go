@@ -3,6 +3,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -82,5 +83,39 @@ func TestOAI025ResponsesWithoutSessionHookDoesNotReachModel(t *testing.T) {
 	status := scPost(t, front.URL+"/v1/responses", `{"input":"hello"}`, map[string]string{"Session-Id": scSession})
 	if status != http.StatusPreconditionRequired || reached {
 		t.Fatalf("status=%d model reached=%v", status, reached)
+	}
+}
+
+// OAI-023: a client advertises direct signing only when its enrolled core
+// advertises it; an old capture-only core must not be treated as upgraded.
+func TestOAI023SigningCapabilityComesFromCore(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		t.Run(map[bool]string{false: "old", true: "new"}[supported], func(t *testing.T) {
+			core, paths := enrolled(t)
+			core.Mux.HandleFunc("/_gateway/capabilities", func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "signing": supported, "signing_mode": "structured"}); err != nil {
+					t.Error(err)
+				}
+			})
+			_, front, _ := startClient(t, paths)
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, front.URL+"/_client/capabilities", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var got struct {
+				Signing bool `json:"signing"`
+			}
+			if err = json.NewDecoder(resp.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Signing != supported {
+				t.Fatalf("signing=%v want%v", got.Signing, supported)
+			}
+		})
 	}
 }
