@@ -72,7 +72,7 @@ func TestOAI016SameRunReplayPreservesSigningEvidence(t *testing.T) {
 		t.Run(fmt.Sprint(conflict), func(t *testing.T) {
 			rec := NewToolCallRecorder(ToolCallRecorderConfig{})
 			call := ToolUse{ID: "call_replay", Name: "functions.exec_command", Namespace: "functions", Input: json.RawMessage(`{"cmd":"git commit -m first"}`)}
-			rec.addPending("run-a", "", "", "", "", "codex", call)
+			rec.addPending("run-a", "", "", "", "", "codex", call, CodexThreadIdentity{})
 			key := pendingKey{runID: "run-a", toolUseID: call.ID}
 			old := time.Now().Add(-time.Hour)
 			original := rec.pending[key]
@@ -81,7 +81,7 @@ func TestOAI016SameRunReplayPreservesSigningEvidence(t *testing.T) {
 			if conflict {
 				call.Input = json.RawMessage(`{"cmd":"git commit -m replacement"}`)
 			}
-			rec.addPending("run-a", "", "", "", "", "codex", call)
+			rec.addPending("run-a", "", "", "", "", "codex", call, CodexThreadIdentity{})
 			if conflict {
 				if _, ok := rec.LookupPending(call.ID); ok {
 					t.Fatal("conflicting replay remained eligible")
@@ -107,5 +107,22 @@ func TestOAI014LiveFlatFunctionReachesSigningGate(t *testing.T) {
 				t.Fatalf("kind=%s resolve=%v", kind, err)
 			}
 		})
+	}
+}
+
+// OAI-006/021: commit scope must come from the recognized wire context.
+func TestOAI006RecorderPreservesCodexThreadForCommitScope(t *testing.T) {
+	const session = "11111111-1111-4111-8111-111111111111"
+	const child = "22222222-2222-4222-8222-222222222222"
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{})
+	ctx := WithIdentification(WithRunID(context.Background(), "run-child"), Identification{Harness: "codex", SessionID: session, AgentID: child})
+	ctx = context.WithValue(ctx, codexThreadContextKey{}, CodexThreadIdentity{SessionID: session, ThreadID: child})
+	parser := newResponsesInterpreter(ToolUseObserverFunc(func(c ToolUse) { rec.OnToolUseContext(ctx, c) }))
+	parser.event("response.output_item.done", `{"item":{"type":"function_call","name":"exec_command","call_id":"call_child_scoped","arguments":"{\"cmd\":\"git commit -m change\"}"}}`)
+	if _, err := commitpath.Resolve(commitpath.ThreadScopedResolver(rec, session, child), "call_child_scoped", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := commitpath.Resolve(commitpath.ThreadScopedResolver(rec, session, session), "call_child_scoped", time.Now()); err == nil {
+		t.Fatal("parent borrowed child call")
 	}
 }

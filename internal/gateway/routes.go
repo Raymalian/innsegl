@@ -71,7 +71,7 @@ func ResponsesCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "codex_versions": []string{"0.163.0"}, "agents": "root-only", "signing": true, "signing_mode": "structured"}); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "codex_versions": []string{"0.163.0"}, "agents": "linked-threads", "signing": true, "signing_mode": "structured"}); err != nil {
 		return
 	}
 }

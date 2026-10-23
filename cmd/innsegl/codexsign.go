@@ -11,6 +11,7 @@ import (
 
 	"innsegl.dev/innsegl/internal/client"
 	"innsegl.dev/innsegl/internal/commitpath"
+	"innsegl.dev/innsegl/internal/gateway"
 )
 
 // Codex requires allow alongside updatedInput. This adapter adds that field
@@ -27,7 +28,9 @@ func runCodexPreToolUse(stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		return exitBlock
 	}
 	var event struct {
-		ID string `json:"tool_use_id"`
+		ID        string `json:"tool_use_id"`
+		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
 	}
 	if json.Unmarshal(data, &event) != nil {
 		return exitBlock
@@ -54,8 +57,16 @@ func runCodexPreToolUse(stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 		if json.Unmarshal(input["command"], &command) != nil {
 			return exitBlock
 		}
-		// Base is validated as loopback above; JSON values are never shell text.
-		prefix := "export INNSEGL_CORE_URL='" + strings.TrimSuffix(base, "/") + "'; "
+		thread := event.AgentID
+		if thread == "" {
+			thread = event.SessionID
+		}
+		if !gateway.IsSessionID(event.SessionID) || !gateway.IsSessionID(thread) {
+			fmt.Fprintln(stderr, "innsegl Codex hook: missing or invalid originating session/thread")
+			return exitBlock
+		}
+		// Base is validated as loopback above; session/thread are UUIDs.
+		prefix := "export INNSEGL_CORE_URL='" + strings.TrimSuffix(base, "/") + "' " + commitpath.EnvCodexSessionID + "='" + event.SessionID + "' " + commitpath.EnvCodexThreadID + "='" + thread + "'; "
 		input["command"], err = json.Marshal(prefix + command)
 		if err != nil {
 			return exitBlock

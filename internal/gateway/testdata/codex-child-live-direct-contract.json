@@ -1,0 +1,989 @@
+{
+  "measurement": {
+    "cli_version": "0.163.0",
+    "provider_mode": "ChatGPT auth; requires_openai_auth=true; wire_api=responses; supports_websockets=false; backend-api/codex",
+    "configuration": {
+      "features.code_mode.enabled": true,
+      "features.code_mode.direct_only_tool_namespaces": [
+        "functions"
+      ],
+      "agents.enabled": true,
+      "features.multi_agent": true
+    },
+    "cli_exit": 0,
+    "completion": "both done",
+    "request_count": 9
+  },
+  "requests": [
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "turn_id": "00000000-0000-4000-8000-000000000003",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "thread_id": "00000000-0000-4000-8000-000000000001",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "message"
+          }
+        },
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "function_call",
+            "name": "spawn_agent",
+            "namespace": "collaboration",
+            "call_id": "call_00000000000000000000000000000006"
+          },
+          "arguments": "{\"task_name\": \"qa_one\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "thread_id": "00000000-0000-4000-8000-000000000001",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003",
+        "turn_id": "00000000-0000-4000-8000-000000000003",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "session_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "function_call",
+          "name": "spawn_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000006",
+          "arguments": "{\"task_name\": \"qa_one\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000006",
+          "result_keys": [
+            "task_name"
+          ],
+          "task_name": "/root/qa_one"
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "function_call",
+            "name": "spawn_agent",
+            "namespace": "collaboration",
+            "call_id": "call_00000000000000000000000000000004"
+          },
+          "arguments": "{\"task_name\": \"qa_two\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000004:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\",\"agent_name\":\"/root/qa_one\",\"turn_id\":\"00000000-0000-4000-8000-000000000006\",\"window_id\":\"00000000-0000-4000-8000-000000000004:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000005\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733754871,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-openai-subagent": "collab_spawn",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "thread_id": "00000000-0000-4000-8000-000000000004",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\",\"agent_name\":\"/root/qa_one\",\"turn_id\":\"00000000-0000-4000-8000-000000000006\",\"window_id\":\"00000000-0000-4000-8000-000000000004:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000005\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733754871,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "turn_id": "00000000-0000-4000-8000-000000000006",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000004:0",
+        "parent_turn_id": "00000000-0000-4000-8000-000000000003",
+        "x-openai-subagent": "collab_spawn"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "agent_message",
+          "author": "/root",
+          "recipient": "/root/qa_one",
+          "content_types": [
+            "input_text",
+            "encrypted_content"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_00000000000000000000000000000003"
+          }
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "turn_id": "00000000-0000-4000-8000-000000000003",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003",
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "thread_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "function_call",
+          "name": "spawn_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000006",
+          "arguments": "{\"task_name\": \"qa_one\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000006",
+          "result_keys": [
+            "task_name"
+          ],
+          "task_name": "/root/qa_one"
+        },
+        {
+          "type": "function_call",
+          "name": "spawn_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000004",
+          "arguments": "{\"task_name\": \"qa_two\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000004",
+          "result_keys": [
+            "task_name"
+          ],
+          "task_name": "/root/qa_two"
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "function_call",
+            "name": "wait_agent",
+            "namespace": "collaboration",
+            "call_id": "call_00000000000000000000000000000005"
+          }
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000004:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\",\"agent_name\":\"/root/qa_one\",\"turn_id\":\"00000000-0000-4000-8000-000000000006\",\"window_id\":\"00000000-0000-4000-8000-000000000004:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000005\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733754871,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-openai-subagent": "collab_spawn",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "thread_id": "00000000-0000-4000-8000-000000000004",
+        "x-openai-subagent": "collab_spawn",
+        "turn_id": "00000000-0000-4000-8000-000000000006",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000004:0",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "parent_turn_id": "00000000-0000-4000-8000-000000000003",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\",\"agent_name\":\"/root/qa_one\",\"turn_id\":\"00000000-0000-4000-8000-000000000006\",\"window_id\":\"00000000-0000-4000-8000-000000000004:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000005\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733754871,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "agent_message",
+          "author": "/root",
+          "recipient": "/root/qa_one",
+          "content_types": [
+            "input_text",
+            "encrypted_content"
+          ]
+        },
+        {
+          "type": "function_call",
+          "name": "exec_command",
+          "call_id": "call_00000000000000000000000000000003"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000003"
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "message"
+          }
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000007:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000007\",\"agent_name\":\"/root/qa_two\",\"turn_id\":\"00000000-0000-4000-8000-000000000009\",\"window_id\":\"00000000-0000-4000-8000-000000000007:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000008\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733759415,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-openai-subagent": "collab_spawn",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "thread_id": "00000000-0000-4000-8000-000000000007",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000007\",\"agent_name\":\"/root/qa_two\",\"turn_id\":\"00000000-0000-4000-8000-000000000009\",\"window_id\":\"00000000-0000-4000-8000-000000000007:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000008\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733759415,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "turn_id": "00000000-0000-4000-8000-000000000009",
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "parent_turn_id": "00000000-0000-4000-8000-000000000003",
+        "x-openai-subagent": "collab_spawn",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000007:0"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "agent_message",
+          "author": "/root",
+          "recipient": "/root/qa_two",
+          "content_types": [
+            "input_text",
+            "encrypted_content"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_00000000000000000000000000000002"
+          }
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "thread_id": "00000000-0000-4000-8000-000000000001",
+        "turn_id": "00000000-0000-4000-8000-000000000003",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "function_call",
+          "name": "spawn_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000006",
+          "arguments": "{\"task_name\": \"qa_one\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000006",
+          "result_keys": [
+            "task_name"
+          ],
+          "task_name": "/root/qa_one"
+        },
+        {
+          "type": "function_call",
+          "name": "spawn_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000004",
+          "arguments": "{\"task_name\": \"qa_two\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000004",
+          "result_keys": [
+            "task_name"
+          ],
+          "task_name": "/root/qa_two"
+        },
+        {
+          "type": "function_call",
+          "name": "wait_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000005"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000005",
+          "result_keys": [
+            "message",
+            "timed_out"
+          ]
+        },
+        {
+          "type": "agent_message",
+          "author": "/root/qa_one",
+          "recipient": "/root",
+          "content_types": [
+            "input_text"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "function_call",
+            "name": "wait_agent",
+            "namespace": "collaboration",
+            "call_id": "call_00000000000000000000000000000001"
+          }
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000007:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000007\",\"agent_name\":\"/root/qa_two\",\"turn_id\":\"00000000-0000-4000-8000-000000000009\",\"window_id\":\"00000000-0000-4000-8000-000000000007:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000008\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733759415,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-openai-subagent": "collab_spawn",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "parent_turn_id": "00000000-0000-4000-8000-000000000003",
+        "thread_id": "00000000-0000-4000-8000-000000000007",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000007:0",
+        "turn_id": "00000000-0000-4000-8000-000000000009",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000007\",\"agent_name\":\"/root/qa_two\",\"turn_id\":\"00000000-0000-4000-8000-000000000009\",\"window_id\":\"00000000-0000-4000-8000-000000000007:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000008\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733759415,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-openai-subagent": "collab_spawn",
+        "session_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "agent_message",
+          "author": "/root",
+          "recipient": "/root/qa_two",
+          "content_types": [
+            "input_text",
+            "encrypted_content"
+          ]
+        },
+        {
+          "type": "function_call",
+          "name": "exec_command",
+          "call_id": "call_00000000000000000000000000000002"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000002"
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "message"
+          }
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    },
+    {
+      "headers": {
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec"
+      },
+      "client_metadata": {
+        "turn_id": "00000000-0000-4000-8000-000000000003",
+        "thread_id": "00000000-0000-4000-8000-000000000001",
+        "x-codex-installation-id": "00000000-0000-4000-8000-000000000010",
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "root_turn_id": "00000000-0000-4000-8000-000000000003",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000010\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733749324,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}"
+      },
+      "items": [
+        {
+          "type": "additional_tools"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "message"
+        },
+        {
+          "type": "function_call",
+          "name": "spawn_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000006",
+          "arguments": "{\"task_name\": \"qa_one\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000006",
+          "result_keys": [
+            "task_name"
+          ],
+          "task_name": "/root/qa_one"
+        },
+        {
+          "type": "function_call",
+          "name": "spawn_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000004",
+          "arguments": "{\"task_name\": \"qa_two\", \"fork_turns\": \"none\", \"message\": \"<encrypted message omitted>\"}"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000004",
+          "result_keys": [
+            "task_name"
+          ],
+          "task_name": "/root/qa_two"
+        },
+        {
+          "type": "function_call",
+          "name": "wait_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000005"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000005",
+          "result_keys": [
+            "message",
+            "timed_out"
+          ]
+        },
+        {
+          "type": "agent_message",
+          "author": "/root/qa_one",
+          "recipient": "/root",
+          "content_types": [
+            "input_text"
+          ]
+        },
+        {
+          "type": "function_call",
+          "name": "wait_agent",
+          "namespace": "collaboration",
+          "call_id": "call_00000000000000000000000000000001"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_00000000000000000000000000000001",
+          "result_keys": [
+            "message",
+            "timed_out"
+          ]
+        },
+        {
+          "type": "agent_message",
+          "author": "/root/qa_two",
+          "recipient": "/root",
+          "content_types": [
+            "input_text"
+          ]
+        }
+      ],
+      "events": [
+        {
+          "type": "response.output_item.done",
+          "item": {
+            "type": "message"
+          }
+        },
+        {
+          "type": "response.completed"
+        }
+      ],
+      "status": 200
+    }
+  ],
+  "hooks": [
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "qa_two",
+        "fork_turns": "none",
+        "message": "<decrypted task: printf corresponding marker and finish>"
+      },
+      "tool_use_id": "call_00000000000000000000000000000004"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000006",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStart",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "agent_id": "00000000-0000-4000-8000-000000000004",
+      "agent_type": "default"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000009",
+      "agent_id": "00000000-0000-4000-8000-000000000007",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "printf child-two-marker"
+      },
+      "tool_use_id": "call_00000000000000000000000000000002"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000006",
+      "agent_id": "00000000-0000-4000-8000-000000000004",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "printf child-one-marker"
+      },
+      "tool_use_id": "call_00000000000000000000000000000003"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationwait_agent",
+      "tool_input": {
+        "timeout_ms": 60000
+      },
+      "tool_response": "{\"message\":\"Wait completed.\",\"timed_out\":false}",
+      "tool_use_id": "call_00000000000000000000000000000005"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationwait_agent",
+      "tool_input": {
+        "timeout_ms": 60000
+      },
+      "tool_use_id": "call_00000000000000000000000000000005"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000009",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStart",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "agent_id": "00000000-0000-4000-8000-000000000007",
+      "agent_type": "default"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000009",
+      "transcript_path": null,
+      "agent_transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStop",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "stop_hook_active": false,
+      "agent_id": "00000000-0000-4000-8000-000000000007",
+      "agent_type": "default",
+      "last_assistant_message": "child-two-marker"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000006",
+      "transcript_path": null,
+      "agent_transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStop",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "stop_hook_active": false,
+      "agent_id": "00000000-0000-4000-8000-000000000004",
+      "agent_type": "default",
+      "last_assistant_message": "child-one-marker"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationwait_agent",
+      "tool_input": {
+        "timeout_ms": 60000
+      },
+      "tool_use_id": "call_00000000000000000000000000000001"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "qa_two",
+        "fork_turns": "none",
+        "message": "<decrypted task: printf corresponding marker and finish>"
+      },
+      "tool_response": "{\"task_name\":\"/root/qa_two\"}",
+      "tool_use_id": "call_00000000000000000000000000000004"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000006",
+      "agent_id": "00000000-0000-4000-8000-000000000004",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "printf child-one-marker"
+      },
+      "tool_response": "child-one-marker",
+      "tool_use_id": "call_00000000000000000000000000000003"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "qa_one",
+        "fork_turns": "none",
+        "message": "<decrypted task: printf corresponding marker and finish>"
+      },
+      "tool_response": "{\"task_name\":\"/root/qa_one\"}",
+      "tool_use_id": "call_00000000000000000000000000000006"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationwait_agent",
+      "tool_input": {
+        "timeout_ms": 60000
+      },
+      "tool_response": "{\"message\":\"Wait completed.\",\"timed_out\":false}",
+      "tool_use_id": "call_00000000000000000000000000000001"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000009",
+      "agent_id": "00000000-0000-4000-8000-000000000007",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "printf child-two-marker"
+      },
+      "tool_response": "child-two-marker",
+      "tool_use_id": "call_00000000000000000000000000000002"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "qa_one",
+        "fork_turns": "none",
+        "message": "<decrypted task: printf corresponding marker and finish>"
+      },
+      "tool_use_id": "call_00000000000000000000000000000006"
+    }
+  ]
+}

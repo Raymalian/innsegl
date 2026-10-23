@@ -20,15 +20,40 @@ func responsesModelsPath(path string) bool {
 
 func requestSession(r *http.Request) string {
 	if responsesPath(r.URL.Path) {
-		return r.Header.Get("Session-Id")
+		session, _ := codexRequestThread(r)
+		return session
 	}
 	return r.Header.Get("X-Claude-Code-Session-Id")
 }
 func requestAgent(r *http.Request) string {
 	if responsesPath(r.URL.Path) {
+		session, thread := codexRequestThread(r)
+		if thread != session {
+			return thread
+		}
 		return ""
-	} // Only measured root sessions are currently supported.
+	}
 	return r.Header.Get("X-Claude-Code-Agent-Id")
+}
+
+// codexRequestThread reads routing keys only; the core independently validates
+// the full harness contract and observed parent association.
+func codexRequestThread(r *http.Request) (string, string) {
+	session, thread := r.Header.Get("Session-Id"), r.Header.Get("Thread-Id")
+	if raw := r.Header.Get("X-Codex-Turn-Metadata"); raw != "" {
+		var m struct {
+			Session string `json:"session_id"`
+			Thread  string `json:"thread_id"`
+		}
+		if len(raw) > 16384 || json.Unmarshal([]byte(raw), &m) != nil || m.Session == "" || m.Thread == "" || (session != "" && session != m.Session) || (thread != "" && thread != m.Thread) {
+			return "", ""
+		}
+		return m.Session, m.Thread
+	}
+	if thread == "" {
+		thread = session
+	}
+	return session, thread
 }
 
 func (s *Server) providerForPath(path string) *url.URL {
@@ -67,10 +92,15 @@ func (s *Server) responsesAvailable(r *http.Request) bool {
 		Formats     []string `json:"formats"`
 		Signing     bool     `json:"signing"`
 		SigningMode string   `json:"signing_mode"`
+		Agents      string   `json:"agents"`
 	}
 	s.responsesSupported = false
 	s.responsesSigning = false
+	s.responsesAgents = "root-only"
 	if resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&capabilities) == nil {
+		if capabilities.Agents == "linked-threads" {
+			s.responsesAgents = capabilities.Agents
+		}
 		s.responsesSigning = capabilities.Signing && capabilities.SigningMode == "structured"
 		for _, format := range capabilities.Formats {
 			if format == "responses-http" {
@@ -89,4 +119,13 @@ func (s *Server) responsesSigningAvailable() bool {
 	s.responsesMu.Lock()
 	defer s.responsesMu.Unlock()
 	return s.responsesSupported && s.responsesSigning
+}
+
+func (s *Server) responsesAgentMode() string {
+	s.responsesMu.Lock()
+	defer s.responsesMu.Unlock()
+	if s.responsesSupported && s.responsesAgents == "linked-threads" {
+		return s.responsesAgents
+	}
+	return "root-only"
 }

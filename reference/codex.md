@@ -2,16 +2,22 @@
 
 ## Purpose
 
-`innsegl codex` launches experimental HTTP Responses capture for Codex CLI 0.163.0 root sessions.
+`innsegl codex` launches experimental HTTP Responses capture for Codex CLI 0.163.0.
 The gateway records function and custom tool calls and pairs results by call ID.
 Custom tool scripts are stored as text; they are never evaluated by the recorder.
 Tool outcomes are `unknown`: this wire format carries no authoritative error flag.
 The exact backend Responses route also observes SSE when Content-Type is absent
 or text/plain, as measured with the supported CLI. Forwarded bytes stay unchanged.
 
-This milestone does not provide subagent correlation, Responses WebSocket capture,
-or OTel witness. Commit signing is an experimental opt-in described below. A transport probe is not proof of signing or
-provider feature parity. Unsupported client versions and child sessions are refused.
+When both the client and core advertise linked-thread support, child sessions are
+recorded as separate runs and linked only after a matching observed spawn call.
+Session and thread values come from Codex's hook and request metadata. The core
+checks them against the observed spawn and pending call; they are attribution
+assertions rather than cryptographic credentials for isolating hostile processes
+inside one enrolled installation.
+Responses WebSocket capture and an OTel witness are not provided. Commit signing
+is an experimental opt-in described below. A transport probe is not proof of
+signing or provider feature parity. Unsupported client versions are refused.
 
 ## Commands
 
@@ -66,7 +72,10 @@ bypass that existing requirement.
 ## Settings
 
 The launcher chooses a custom Responses provider on the client's loopback listener,
-disables WebSockets and agents, and enables lifecycle hooks for the invocation.
+disables WebSockets, and enables lifecycle hooks for the invocation. It enables
+Codex agents only when the enrolled client and core both advertise linked-thread
+support, and then installs SubagentStart/SubagentStop lifecycle hooks. Older cores
+continue to launch in root-only mode.
 Configuration, profile, alternate provider and remote overrides are rejected.
 Authentication remains with Codex. Provider credentials are forwarded transiently;
 the journal strips authorization, account and gateway credentials.

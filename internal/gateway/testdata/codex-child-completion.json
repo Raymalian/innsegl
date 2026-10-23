@@ -1,0 +1,228 @@
+{
+  "measurement": "Actual Codex 0.163.0 against deterministic SSE provider with output_text delta and completed response; completion projection only.",
+  "hooks": [
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000004",
+      "transcript_path": null,
+      "agent_transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStop",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "stop_hook_active": false,
+      "agent_id": "00000000-0000-4000-8000-000000000003",
+      "agent_type": "default",
+      "last_assistant_message": "probe done"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000004",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStart",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "agent_id": "00000000-0000-4000-8000-000000000003",
+      "agent_type": "default"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000002",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationwait_agent",
+      "tool_input": {
+        "timeout_ms": 10000
+      },
+      "tool_response": "{\"message\":\"Wait completed.\",\"timed_out\":false}",
+      "tool_use_id": "call_wait"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000002",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationwait_agent",
+      "tool_input": {
+        "timeout_ms": 10000
+      },
+      "tool_use_id": "call_wait"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000008",
+      "agent_id": "00000000-0000-4000-8000-000000000006",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "printf child-probe"
+      },
+      "tool_use_id": "call_child_shell"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000002",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "child_two",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_response": "{\"task_name\":\"/root/child_two\"}",
+      "tool_use_id": "call_spawn_child_two"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000008",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStart",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "agent_id": "00000000-0000-4000-8000-000000000006",
+      "agent_type": "default"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000002",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "child_one",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_use_id": "call_spawn_child_one"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000002",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "child_two",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_use_id": "call_spawn_child_two"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000004",
+      "agent_id": "00000000-0000-4000-8000-000000000003",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "nested",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_use_id": "call_spawn_nested"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000004",
+      "agent_id": "00000000-0000-4000-8000-000000000003",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "nested",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_response": "{\"task_name\":\"/root/child_one/nested\"}",
+      "tool_use_id": "call_spawn_nested"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000002",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "child_one",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_response": "{\"task_name\":\"/root/child_one\"}",
+      "tool_use_id": "call_spawn_child_one"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000007",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStart",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "agent_id": "00000000-0000-4000-8000-000000000005",
+      "agent_type": "default"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000007",
+      "transcript_path": null,
+      "agent_transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStop",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "stop_hook_active": false,
+      "agent_id": "00000000-0000-4000-8000-000000000005",
+      "agent_type": "default",
+      "last_assistant_message": "probe done"
+    }
+  ],
+  "completion_messages": [
+    {
+      "type": "agent_message",
+      "id": "amsg_00000000-0000-4000-8000-000000000009",
+      "author": "/root/child_one",
+      "recipient": "/root",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/child_one\nPayload:\nprobe done"
+        }
+      ]
+    }
+  ]
+}

@@ -114,13 +114,15 @@ func mountCommitPath(mux *http.ServeMux, resolver commitpath.Resolver) {
 
 // scopeCommitPath scopes a commit-path request to the installation the
 // client guard verified (hosted shape, ADR-0063): the request then resolves
-// only tool calls that installation relayed (#489). With no installation on
-// the request (single-host), it passes through unchanged.
+// only tool calls that installation relayed (#489). Codex requests also need
+// matching session/thread provenance; non-Codex calls retain existing behavior.
 func scopeCommitPath(resolver commitpath.Resolver, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scoped := commitpath.ThreadScopedResolver(resolver, r.Header.Get(commitpath.HeaderCodexSessionID), r.Header.Get(commitpath.HeaderCodexThreadID))
 		if installation, ok := gateway.InstallationFromContext(r.Context()); ok && installation != "" {
-			r = r.WithContext(commitpath.WithResolver(r.Context(), commitpath.ScopedResolver(resolver, installation)))
+			scoped = commitpath.ScopedResolver(scoped, installation)
 		}
+		r = r.WithContext(commitpath.WithResolver(r.Context(), scoped))
 		next.ServeHTTP(w, r)
 	})
 }

@@ -57,3 +57,25 @@ func TestOAI014SigningLaunchConfiguration(t *testing.T) {
 		t.Fatal("changed default capture")
 	}
 }
+
+// OAI-006/025: child support adds lifecycle hooks only after negotiation.
+func TestOAI006CodexThreadLaunchHooks(t *testing.T) {
+	for _, signing := range []bool{false, true} {
+		args, err := CodexThreadLaunchArgs("http://127.0.0.1:28495", "/opt/innsegl/bin/innsegl", false, signing)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config := strings.Join(args, "\n")
+		for _, want := range []string{"agents.enabled=true", "hooks.SubagentStart=", "hooks.SubagentStop="} {
+			if !strings.Contains(config, want) {
+				t.Errorf("missing %s", want)
+			}
+		}
+		if strings.Contains(config, "agents.enabled=false") {
+			t.Fatal("conflicting agent settings")
+		}
+		if strings.Contains(config, "--capture-only") == signing {
+			t.Fatal("lifecycle signing mode mismatch")
+		}
+	}
+}

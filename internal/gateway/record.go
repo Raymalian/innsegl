@@ -95,14 +95,15 @@ type pendingKey struct {
 // pendingCall is what OnToolUseContext captured about one tool_use block,
 // held until its result arrives or it is evicted.
 type pendingCall struct {
-	wireType   string
-	namespace  string
-	ambiguous  bool
-	harness    string
-	tool       string
-	input      json.RawMessage
-	truncated  bool
-	observedAt time.Time
+	sessionID, threadID string
+	wireType            string
+	namespace           string
+	ambiguous           bool
+	harness             string
+	tool                string
+	input               json.RawMessage
+	truncated           bool
+	observedAt          time.Time
 	// workingDirectory is the one the request carrying this call stated;
 	// the commit path reads the commit's objects there (LookupPending).
 	workingDirectory string
@@ -338,18 +339,20 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	installation, _ := InstallationFromContext(ctx)
 	journalEntry, _ := JournalEntryFromContext(ctx)
 	id, _ := IdentificationFromContext(ctx)
+	thread, _ := CodexThreadFromContext(ctx)
 	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
 	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
 	// comment for why a request/reply's context must never be allowed to cut a recording short.
-	r.addPending(runID, workingDirectory, repo, installation, journalEntry, id.Harness, t)
+	r.addPending(runID, workingDirectory, repo, installation, journalEntry, id.Harness, t, thread)
 }
 
 // addPending records t as pending, evicting and recording the oldest
 // pending entry (input-only) first if the table is already at its cap.
-func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installation, journalEntry, harness string, t ToolUse) {
+func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installation, journalEntry, harness string, t ToolUse, thread CodexThreadIdentity) {
 	key := pendingKey{runID: runID, toolUseID: t.ID}
 	call := pendingCall{
-		harness:    harness,
+		harness:   harness,
+		sessionID: thread.SessionID, threadID: thread.ThreadID,
 		namespace:  t.Namespace,
 		wireType:   t.WireType,
 		tool:       t.Name,
@@ -389,7 +392,7 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installatio
 	if previous, exists := r.pending[key]; exists {
 		// Keep the first observation's lifetime and evidence. A replay with
 		// different provenance or content cannot authorize either command.
-		conflict := previous.harness != call.harness || previous.namespace != call.namespace || previous.wireType != call.wireType ||
+		conflict := previous.sessionID != call.sessionID || previous.threadID != call.threadID || previous.harness != call.harness || previous.namespace != call.namespace || previous.wireType != call.wireType ||
 			previous.tool != call.tool || !bytes.Equal(previous.input, call.input) ||
 			previous.truncated != call.truncated || previous.workingDirectory != call.workingDirectory ||
 			previous.installation != call.installation || previous.repo != call.repo
@@ -903,7 +906,8 @@ func (r *ToolCallRecorder) LookupPending(toolUseID string) (commitpath.RelayedCa
 	for key, call := range r.pending {
 		if key.toolUseID == toolUseID && !call.ambiguous {
 			return commitpath.RelayedCall{
-				Harness:          call.harness,
+				Harness:   call.harness,
+				SessionID: call.sessionID, ThreadID: call.threadID,
 				WireType:         call.wireType,
 				Namespace:        call.namespace,
 				RunID:            key.runID,

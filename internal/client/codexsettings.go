@@ -11,9 +11,9 @@ import (
 	"strings"
 )
 
-// CodexLaunchArgs returns per-invocation settings, leaving the user's
-// config and authentication files untouched. This initial route supports
-// root CLI sessions only; nested execution is observed as wire evidence.
+// CodexLaunchArgs returns per-invocation root-session settings, leaving the
+// user's config and authentication files untouched. Child execution is enabled
+// only by CodexThreadLaunchArgs after client/core capability negotiation.
 func CodexLaunchArgs(base, binary string, api bool) ([]string, error) {
 	u, err := url.Parse(base)
 	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
@@ -77,6 +77,30 @@ func CodexSigningLaunchArgs(base, binary string, api bool) ([]string, error) {
 	}
 	for _, v := range values {
 		args = append(args, "-c", v)
+	}
+	return args, nil
+}
+
+// CodexThreadLaunchArgs is selected only after client/core child negotiation.
+func CodexThreadLaunchArgs(base, binary string, api, signing bool) ([]string, error) {
+	args, err := CodexLaunchArgs(base, binary, api)
+	if signing {
+		args, err = CodexSigningLaunchArgs(base, binary, api)
+	}
+	if err != nil {
+		return nil, err
+	}
+	for i := range args {
+		if args[i] == "agents.enabled=false" {
+			args[i] = "agents.enabled=true"
+		}
+	}
+	hook := "env INNSEGL_CORE_URL=" + shellQuote(strings.TrimSuffix(base, "/")) + " " + shellQuote(binary) + " hook session"
+	if !signing {
+		hook += " --capture-only"
+	}
+	for _, event := range []string{"SubagentStart", "SubagentStop"} {
+		args = append(args, "-c", "hooks."+event+"=[{hooks=[{type=\"command\",command="+strconv.Quote(hook)+",timeout=5}]}]")
 	}
 	return args, nil
 }

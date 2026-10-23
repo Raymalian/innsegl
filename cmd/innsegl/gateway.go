@@ -1459,11 +1459,12 @@ func openIdentityStack(
 	cfg.HeaderStatements = headerStatements{callers: running.callers}
 	cfg.OnUnrecorded = logUnrecorded(running.log)
 	cfg.OnAgentTypeWitness = logAgentTypeWitness(running.log)
-	identityGuard, err = gateway.NewIdentityGuard(cfg)
+	g, err := gateway.NewIdentityGuard(cfg)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
 	}
 
+	identityGuard = g
 	candidates, err := gateway.OpenSilentRunCandidates(ctx, o.dsn)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
@@ -1501,7 +1502,7 @@ func openIdentityStack(
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
 
 	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running, hosted))
-	toolUse = gateway.CombineToolUseObservers(spawnRecorder, toolCallRecorder)
+	toolUse = gateway.CombineToolUseObservers(g, spawnRecorder, toolCallRecorder)
 
 	// The commit path (ADR-0059, E17) authorises a commit by a git commit
 	// tool call this recorder saw relayed and is still waiting on.

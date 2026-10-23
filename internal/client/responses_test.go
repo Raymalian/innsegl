@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -115,6 +116,93 @@ func TestOAI023SigningCapabilityComesFromCore(t *testing.T) {
 			}
 			if got.Signing != supported {
 				t.Fatalf("signing=%v want%v", got.Signing, supported)
+			}
+		})
+	}
+}
+
+// OAI-006: child requests attach their own workspace statement using the
+// measured shared session and distinct thread metadata.
+func TestOAI006CodexMetadataSelectsChildStatement(t *testing.T) {
+	const child = "22222222-2222-4222-8222-222222222222"
+	core, paths := enrolled(t)
+	core.Mux.HandleFunc("/_gateway/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte(`{"formats":["responses-http"]}`)); err != nil {
+			t.Error(err)
+		}
+	})
+	core.Mux.HandleFunc(SessionStatementPath, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	var statement string
+	core.Mux.HandleFunc("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		statement = r.Header.Get(StatementHeader)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	_, front, _ := startClient(t, paths)
+	scPost(t, front.URL+SessionStatementPath, `{"session_id":"`+scSession+`","cwd":"/w/root"}`, nil)
+	scPost(t, front.URL+SessionStatementPath, `{"session_id":"`+scSession+`","agent_id":"`+child+`","cwd":"/w/child"}`, nil)
+	status := scPost(t, front.URL+"/v1/responses", `{"input":"child"}`, map[string]string{"X-Codex-Turn-Metadata": `{"session_id":"` + scSession + `","thread_id":"` + child + `","agent_name":"/root/child"}`})
+	if status != http.StatusNoContent {
+		t.Fatalf("status=%d", status)
+	}
+	if got := decodeStatementHeader(t, statement); got["agent_id"] != child || got["cwd"] != "/w/child" {
+		t.Fatalf("child lost statement: %v", got)
+	}
+}
+
+func TestOAI006CodexMetadataAtCoreLimitStillSelectsChildStatement(t *testing.T) {
+	const child = "22222222-2222-4222-8222-222222222222"
+	core, paths := enrolled(t)
+	core.Mux.HandleFunc("/_gateway/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte(`{"formats":["responses-http"]}`)); err != nil {
+			t.Error(err)
+		}
+	})
+	core.Mux.HandleFunc(SessionStatementPath, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	var statement string
+	core.Mux.HandleFunc("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		statement = r.Header.Get(StatementHeader)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	_, front, _ := startClient(t, paths)
+	scPost(t, front.URL+SessionStatementPath, `{"session_id":"`+scSession+`","agent_id":"`+child+`","cwd":"/w/child"}`, nil)
+	metadata := `{"session_id":"` + scSession + `","thread_id":"` + child + `","agent_name":"/root/child","padding":"` + strings.Repeat("x", 9000) + `"}`
+	status := scPost(t, front.URL+"/v1/responses", `{"input":"child"}`, map[string]string{"X-Codex-Turn-Metadata": metadata})
+	if status != http.StatusNoContent {
+		t.Fatalf("status=%d", status)
+	}
+	if got := decodeStatementHeader(t, statement); got["agent_id"] != child || got["cwd"] != "/w/child" {
+		t.Fatalf("child statement lost at metadata size accepted by core: %v", got)
+	}
+}
+
+// OAI-006/023: a new client never enables children against a root-only core.
+func TestOAI006ChildCapabilityComesFromCore(t *testing.T) {
+	for _, mode := range []string{"root-only", "linked-threads"} {
+		t.Run(mode, func(t *testing.T) {
+			core, paths := enrolled(t)
+			core.Mux.HandleFunc("/_gateway/capabilities", func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "agents": mode}); err != nil {
+					t.Error(err)
+				}
+			})
+			_, front, _ := startClient(t, paths)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, front.URL+"/_client/capabilities", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var caps struct {
+				Agents string `json:"agents"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
+				t.Fatal(err)
+			}
+			if caps.Agents != mode {
+				t.Fatalf("agents=%s want=%s", caps.Agents, mode)
 			}
 		})
 	}

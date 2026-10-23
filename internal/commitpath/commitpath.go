@@ -316,8 +316,12 @@ func IsToolUseID(s string) bool {
 
 // Client calls the core.
 type Client struct {
-	BaseURL string
-	HTTP    *http.Client
+	// CodexSessionID and CodexThreadID are transient hook assertions sent on
+	// each commit request; they do not alter the shared HTTP transport.
+	CodexSessionID string
+	CodexThreadID  string
+	BaseURL        string
+	HTTP           *http.Client
 }
 
 // defaultTimeout bounds one call. Signing reaches Fulcio and Rekor from the
@@ -335,7 +339,7 @@ func ClientFromEnv(getenv func(string) string) Client {
 	if base == "" {
 		base = DefaultCoreURL
 	}
-	return Client{BaseURL: base, HTTP: TrustedHTTPClient(getenv)}
+	return Client{BaseURL: base, HTTP: TrustedHTTPClient(getenv), CodexSessionID: getenv(EnvCodexSessionID), CodexThreadID: getenv(EnvCodexThreadID)}
 }
 
 // EnvExtraCACerts is $NODE_EXTRA_CA_CERTS -- read first, so an installer
@@ -424,6 +428,12 @@ func (c Client) call(ctx context.Context, endpoint string, req, out any) error {
 		return fmt.Errorf("innsegl: build the request to the core: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.CodexSessionID != "" {
+		httpReq.Header.Set(HeaderCodexSessionID, c.CodexSessionID)
+	}
+	if c.CodexThreadID != "" {
+		httpReq.Header.Set(HeaderCodexThreadID, c.CodexThreadID)
+	}
 	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: defaultTimeout}
@@ -644,6 +654,11 @@ const Window = 30 * time.Minute
 
 // RelayedCall is a tool call the core relayed whose result has not arrived.
 type RelayedCall struct {
+	// SessionID and ThreadID are observed Codex request provenance, used
+	// to compare the hook assertion at the commit-path boundary. They are
+	// not part of the canonical ledger event schema.
+	SessionID string
+	ThreadID  string
 	WireType  string
 	Harness   string
 	Namespace string
@@ -753,4 +768,35 @@ func ShellCommand(tool string, raw json.RawMessage) (string, bool) {
 		return input.Cmd, input.Cmd != ""
 	}
 	return "", false
+}
+
+// EnvCodexSessionID and EnvCodexThreadID carry the Codex hook's session and
+// thread assertions into the commit request. They are not credentials.
+const (
+	EnvCodexSessionID    = "INNSEGL_CODEX_SESSION_ID"
+	EnvCodexThreadID     = "INNSEGL_CODEX_THREAD_ID"
+	HeaderCodexSessionID = "X-Innsegl-Codex-Session-Id"
+	HeaderCodexThreadID  = "X-Innsegl-Codex-Thread-Id"
+)
+
+// ThreadScopedResolver restricts Codex calls to their observed session/thread.
+func ThreadScopedResolver(base Resolver, sessionID, threadID string) Resolver {
+	return threadScopedResolver{base: base, sessionID: sessionID, threadID: threadID}
+}
+
+type threadScopedResolver struct {
+	base      Resolver
+	sessionID string
+	threadID  string
+}
+
+func (s threadScopedResolver) LookupPending(toolUseID string) (RelayedCall, bool) {
+	call, ok := s.base.LookupPending(toolUseID)
+	if !ok {
+		return RelayedCall{}, false
+	}
+	if call.Harness == "codex" && (s.sessionID == "" || s.threadID == "" || call.SessionID != s.sessionID || call.ThreadID != s.threadID) {
+		return RelayedCall{}, false
+	}
+	return call, true
 }

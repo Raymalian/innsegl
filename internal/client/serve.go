@@ -55,6 +55,7 @@ type Server struct {
 	responsesMu        sync.Mutex
 	responsesSupported bool
 	responsesSigning   bool
+	responsesAgents    string
 	responsesUntil     time.Time
 	// Now is the clock renewal decisions read; tests replace it.
 	Now func() time.Time
@@ -425,7 +426,7 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "agents": "root-only", "signing": s.responsesSigningAvailable(), "signing_mode": "structured"}); err != nil {
+			if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "agents": s.responsesAgentMode(), "signing": s.responsesSigningAvailable(), "signing_mode": "structured"}); err != nil {
 				return
 			}
 			return

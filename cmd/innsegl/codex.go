@@ -28,7 +28,7 @@ func codexCommandWithHook(args []string, stdout, stderr io.Writer, selectHook fu
 	signing := fs.Bool("sign-commits", false, "attribute direct shell commits through the existing signing path")
 	api := fs.Bool("api", false, "use the API-key route instead of the ChatGPT-login route")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: innsegl codex [--api] [--sign-commits] -- [codex arguments]\n\nStart a Codex 0.163.0 root CLI session through the enrolled gateway.\nUses per-invocation routing and lifecycle hooks; does not edit user configuration.\nDefault is capture only. --sign-commits enables experimental direct-shell attribution. Subagents are not supported.")
+		fmt.Fprintln(stderr, "usage: innsegl codex [--api] [--sign-commits] -- [codex arguments]\n\nStart a Codex 0.163.0 session through the enrolled gateway.\nUses per-invocation routing and lifecycle hooks; does not edit user configuration.\nDefault is capture only. --sign-commits enables experimental direct-shell attribution.")
 	}
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return exitOK
@@ -71,6 +71,7 @@ func codexCommandWithHook(args []string, stdout, stderr io.Writer, selectHook fu
 		Formats     []string `json:"formats"`
 		Signing     bool     `json:"signing"`
 		SigningMode string   `json:"signing_mode"`
+		Agents      string   `json:"agents"`
 	}
 	supported := false
 	if resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&caps) == nil {
@@ -92,11 +93,16 @@ func codexCommandWithHook(args []string, stdout, stderr io.Writer, selectHook fu
 		return exitConnectFailed
 	}
 	if *signing {
-		fmt.Fprintln(stderr, "innsegl: experimental root signing with direct shell calls; review lifecycle/tool hooks in /hooks. Commit rewrites carry Codex-required allow decisions, which approve the whole shell invocation. Subagents are unsupported.")
+		fmt.Fprint(stderr, "innsegl: experimental signing with direct shell calls; review lifecycle/tool hooks in /hooks. Commit rewrites carry Codex-required allow decisions, which approve the whole shell invocation. ")
 	} else {
-		fmt.Fprintln(stderr, "innsegl: root-session capture; lifecycle hooks set for this invocation; subagents and signed commits are not supported. Review lifecycle hooks with /hooks before the first task.")
+		fmt.Fprint(stderr, "innsegl: capture only; lifecycle hooks set for this invocation. ")
 	}
-	return runCodexProcessMode("codex", base, hookBinary, *api, fs.Args(), os.Stdin, stdout, stderr, *signing)
+	if caps.Agents == "linked-threads" {
+		fmt.Fprintln(stderr, "Linked child sessions are captured with separate thread identities. Review lifecycle hooks with /hooks before the first task.")
+	} else {
+		fmt.Fprintln(stderr, "This gateway supports root-session capture only; child agents are disabled. Review lifecycle hooks with /hooks before the first task.")
+	}
+	return runCodexProcessSettings("codex", base, hookBinary, *api, fs.Args(), os.Stdin, stdout, stderr, *signing, caps.Agents == "linked-threads")
 }
 
 func runCodexProcess(program, base, hookBinary string, api bool, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -104,6 +110,10 @@ func runCodexProcess(program, base, hookBinary string, api bool, args []string, 
 }
 
 func runCodexProcessMode(program, base, hookBinary string, api bool, args []string, stdin io.Reader, stdout, stderr io.Writer, signing bool) int {
+	return runCodexProcessSettings(program, base, hookBinary, api, args, stdin, stdout, stderr, signing, false)
+}
+
+func runCodexProcessSettings(program, base, hookBinary string, api bool, args []string, stdin io.Reader, stdout, stderr io.Writer, signing, agents bool) int {
 	// A profile, alternate daemon or later config override could select a
 	// different provider or replace the lifecycle hooks installed here.
 	for _, arg := range args {
@@ -118,7 +128,9 @@ func runCodexProcessMode(program, base, hookBinary string, api bool, args []stri
 		return exitUsage
 	}
 	fixed, err := client.CodexLaunchArgs(base, hookBinary, api)
-	if signing {
+	if agents {
+		fixed, err = client.CodexThreadLaunchArgs(base, hookBinary, api, signing)
+	} else if signing {
 		fixed, err = client.CodexSigningLaunchArgs(base, hookBinary, api)
 	}
 	if err != nil {

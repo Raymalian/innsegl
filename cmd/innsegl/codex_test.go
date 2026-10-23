@@ -92,3 +92,41 @@ func TestOAI014CodexLauncherValidatesHookBuild(t *testing.T) {
 		t.Fatalf("hook trust bypassed: called=%v exit=%d stderr=%s", called, code, errs.String())
 	}
 }
+
+// OAI-006: child launch hooks are installed only when the client/core
+// capability negotiation enables linked threads.
+func TestOAI006CodexLauncherEnablesLinkedThreadsWhenNegotiated(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "codex")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.163.0'; exit 0; fi\nprintf '%s\\n' \"$@\"\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	code := runCodexProcessSettings(binary, "http://127.0.0.1:28195", "/opt/innsegl/bin/innsegl", false, []string{"exec", "hello"}, strings.NewReader(""), &out, &errs, true, true)
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	for _, want := range []string{"agents.enabled=true", "hooks.SubagentStart=", "hooks.SubagentStop=", "SubagentStart", "SubagentStop"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("negotiated child launch missing %q: %s", want, out.String())
+		}
+	}
+}
+
+func TestOAI006CodexLauncherKeepsChildrenDisabledWithoutNegotiation(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "codex")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.163.0'; exit 0; fi\nprintf '%s\\n' \"$@\"\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	code := runCodexProcessSettings(binary, "http://127.0.0.1:28195", "/opt/innsegl/bin/innsegl", false, nil, strings.NewReader(""), &out, &errs, false, false)
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs.String())
+	}
+	if strings.Contains(out.String(), "agents.enabled=true") || strings.Contains(out.String(), "hooks.SubagentStart=") {
+		t.Fatalf("children enabled without negotiation: %s", out.String())
+	}
+}

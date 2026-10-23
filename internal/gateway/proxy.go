@@ -178,12 +178,10 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 
 // stream copies resp's body to w, flushing after every chunk arrives so a
 // streamed reply -- server-sent events above all -- reaches the caller as
-// it is received rather than once the whole body has arrived. When an
-// Anthropic Messages tool_use observer is configured and the reply is
-// text/event-stream, a second writer parses a COPY of the same bytes
-// io.Copy already wrote to the client: see messagesInterpreter, whose Write
-// never errors and so never slows or interrupts the forwarding it rides
-// alongside.
+// it is received rather than once the whole body has arrived. A reply
+// observer parses the same bytes as they are relayed. Responses replies are
+// observed before forwarding each chunk so a child request cannot race its
+// parent's spawn association; the Messages path keeps its existing write order.
 //
 // r is the ORIGINAL request this reply answers -- carried through only so
 // that a ToolUse observer implementing ContextToolUseObserver (below) can
@@ -205,7 +203,11 @@ func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Respon
 	}
 
 	if obs := p.replyObserver(r, resp.Header.Get("Content-Type")); obs != nil {
-		dst = io.MultiWriter(dst, obs)
+		if isResponsesPath(r.URL.Path) {
+			dst = io.MultiWriter(obs, dst)
+		} else {
+			dst = io.MultiWriter(dst, obs)
+		}
 	}
 
 	// A failed copy is discarded deliberately, not silently: by the time

@@ -24,6 +24,44 @@ func responseRequest(body []byte) *http.Request {
 	return httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/backend-api/codex/responses", bytes.NewReader(body))
 }
 
+type responsesOrderWriter struct {
+	http.ResponseWriter
+	seen *bool
+	bad  bool
+}
+
+func (w *responsesOrderWriter) Write(p []byte) (int, error) {
+	if !*w.seen {
+		w.bad = true
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *responsesOrderWriter) Flush() {}
+
+// OAI-006: the observed parent spawn must be registered before the child
+// request can reach the core and pass its independent-parent guard.
+func TestOAI006ResponsesObservesSpawnBeforeForwardingReply(t *testing.T) {
+	seen := false
+	p := &Proxy{ToolUse: ToolUseObserverFunc(func(call ToolUse) {
+		if call.ID == "call_spawn" {
+			seen = true
+		}
+	})}
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/responses", nil)
+	r.Header.Set("Content-Type", "text/event-stream")
+	resp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:   io.NopCloser(strings.NewReader("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_spawn\",\"name\":\"collaboration.spawn_agent\",\"arguments\":\"{\\\"task_name\\\":\\\"child\\\",\\\"message\\\":\\\"task\\\"}\"}}\n\n")),
+	}
+	base := httptest.NewRecorder()
+	w := &responsesOrderWriter{ResponseWriter: base, seen: &seen}
+	p.stream(w, r, resp)
+	if w.bad || !seen {
+		t.Fatalf("reply forwarded before spawn observation completed: bad=%v seen=%v", w.bad, seen)
+	}
+}
+
 // OAI-001/004: decoding is observation only, including repeated consumers.
 func TestOAI001ResponsesFactsPreserveCompressedWireBytes(t *testing.T) {
 	encoder, err := zstd.NewWriter(nil)
