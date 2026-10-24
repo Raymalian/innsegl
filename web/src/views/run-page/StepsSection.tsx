@@ -265,6 +265,7 @@ function utcTime(iso: string): string {
 function resultText(step: RecordStep): string {
   if (step.kind === "spawn") return strings.timeline.returned;
   const { kind, exit_code: exitCode } = step.outcome;
+  if (kind === "unknown") return strings.timeline.outcomeUnknown;
   if (kind === "ok") return exitCode === null ? strings.timeline.done : strings.timeline.exitCode(exitCode);
   return exitCode === null ? strings.timeline.failedNoExitCode : strings.timeline.failedExitCode(exitCode);
 }
@@ -409,6 +410,10 @@ function StepBody({
     <>
       {!agrees ? <WitnessGrid step={step} /> : null}
 
+      {step.observation_incomplete ? (
+        <p role="alert" className={stepRefusedNote}>{strings.timeline.responseObservationIncomplete}</p>
+      ) : null}
+
       {written !== null ? (
         <WrittenPreview path={written.path} isNew={written.isNew} content={written.content} />
       ) : output !== "" && !(showDiff && FILE_EDIT_TOOLS.has(step.tool) && !failed) ? (
@@ -466,6 +471,8 @@ function WitnessGrid({ step }: { readonly step: RecordStep }) {
               ? strings.timeline.witnessSnapshotUnchanged
               : snapshot === "inactive"
                 ? strings.timeline.witnessSnapshotInactive
+                : snapshot === "error"
+                  ? strings.timeline.witnessSnapshotError
                 : strings.timeline.witnessSnapshotNone
         }
       />

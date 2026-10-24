@@ -7,10 +7,10 @@ package gateway
 //
 // # What this is, and is not
 //
-// Claude Code, run with CLAUDE_CODE_ENABLE_TELEMETRY=1 and its OTLP/HTTP JSON
-// exporter pointed at this gateway's own listener, POSTs a batch of OTLP log
+// Claude Code and Codex, run with their OTLP/HTTP JSON exporters pointed at
+// this gateway's own listener, POST batches of OTLP log
 // records to /v1/logs on every export interval. Each tool use produces a
-// `claude_code.tool_result` log record carrying the SAME tool_use_id the
+// `claude_code.tool_result` or `codex.tool_result` log record carrying the SAME tool_use_id/call_id the
 // model API, the harness's own hooks, and this package's own record.go all
 // carry for it (ADR-0057's spike: "the SAME id the model API and hooks use").
 // TelemetryHandler is the receiver for that traffic: it keeps a small,
@@ -81,6 +81,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"innsegl.dev/innsegl/internal/commitpath"
@@ -136,7 +137,7 @@ func (c TelemetryConfig) now() time.Time {
 }
 
 // telemetryRecord is the whole of what TelemetryHandler ever keeps for one
-// tool_result, and the whole of what internal/reconciler's own witness pass
+// tool_result or rejected tool_decision, and the whole of what internal/reconciler's own witness pass
 // ever reads back. See this file's own package doc comment, "Privacy",
 // for why it holds exactly these five fields and nothing wider.
 type telemetryRecord struct {
@@ -364,24 +365,38 @@ func logRecordAttrs(lr otlpLogRecord) map[string]otlpAnyValue {
 	return attrs
 }
 
-// isToolResultLogRecord reports whether lr is a claude_code.tool_result
-// event -- read from the log record's own body (the documented shape) OR
+// telemetryEvent reports whether lr names event -- read from the log record's own body OR
 // its event.name attribute (the shape a real capture actually carries: a
-// SHORT name with no "claude_code." prefix), so a future Claude Code
-// release settling on either convention alone is still recognised.
-func isToolResultLogRecord(lr otlpLogRecord, attrs map[string]otlpAnyValue) bool {
+// short name), so a harness settling on either convention alone is still
+// recognised.
+func telemetryEvent(lr otlpLogRecord, attrs map[string]otlpAnyValue, names ...string) bool {
+	matches := func(value string) bool {
+		for _, name := range names {
+			if value == name {
+				return true
+			}
+		}
+		return false
+	}
 	if lr.Body != nil {
-		if body, ok := lr.Body.asString(); ok &&
-			(body == "claude_code.tool_result" || body == "tool_result") {
+		if body, ok := lr.Body.asString(); ok && matches(body) {
 			return true
 		}
 	}
 	if name, ok := attrs["event.name"]; ok {
-		if s, ok := name.asString(); ok && (s == "tool_result" || s == "claude_code.tool_result") {
+		if s, ok := name.asString(); ok && matches(s) {
 			return true
 		}
 	}
 	return false
+}
+
+func isCodexToolResultLogRecord(lr otlpLogRecord, attrs map[string]otlpAnyValue) bool {
+	return telemetryEvent(lr, attrs, "codex.tool_result")
+}
+
+func isToolResultLogRecord(lr otlpLogRecord, attrs map[string]otlpAnyValue) bool {
+	return isCodexToolResultLogRecord(lr, attrs) || telemetryEvent(lr, attrs, "tool_result", "claude_code.tool_result")
 }
 
 // toolDecisionReject is a tool_decision's decision for a call that did not run.
@@ -392,18 +407,11 @@ const toolDecisionReject = "reject"
 // which therefore has no tool_result. Read by body or event.name, as
 // isToolResultLogRecord does.
 func isRejectedToolDecision(lr otlpLogRecord, attrs map[string]otlpAnyValue) bool {
-	named := false
-	if lr.Body != nil {
-		if body, ok := lr.Body.asString(); ok && (body == "claude_code.tool_decision" || body == "tool_decision") {
-			named = true
-		}
+	if telemetryEvent(lr, attrs, "codex.tool_decision") {
+		d, ok := attrs["decision"].asString()
+		return ok && (d == "denied" || d == "abort")
 	}
-	if name, ok := attrs["event.name"]; ok {
-		if s, ok := name.asString(); ok && (s == "tool_decision" || s == "claude_code.tool_decision") {
-			named = true
-		}
-	}
-	if !named {
+	if !telemetryEvent(lr, attrs, "tool_decision", "claude_code.tool_decision") {
 		return false
 	}
 	d, ok := attrs["decision"].asString()
@@ -423,15 +431,22 @@ func extractToolResultRecords(req otlpLogsRequest, receivedAt time.Time) []telem
 			for _, lr := range sl.LogRecords {
 				attrs := logRecordAttrs(lr)
 				decision := ""
+				codexEvent := isCodexToolResultLogRecord(lr, attrs) || telemetryEvent(lr, attrs, "codex.tool_decision")
 				if !isToolResultLogRecord(lr, attrs) {
 					if !isRejectedToolDecision(lr, attrs) {
 						continue
 					}
 					decision = toolDecisionReject
 				}
-				toolUseID, ok := attrs["tool_use_id"]
+				idKey := "tool_use_id"
+				sessionKey := "session.id"
+				wantPrefix := "toolu_"
+				if codexEvent {
+					idKey, sessionKey, wantPrefix = "call_id", "conversation.id", "call_"
+				}
+				toolUseID, ok := attrs[idKey]
 				id, hasID := toolUseID.asString()
-				if !ok || !hasID || !commitpath.IsToolUseID(id) {
+				if !ok || !hasID || !strings.HasPrefix(id, wantPrefix) || !commitpath.IsToolUseID(id) {
 					continue
 				}
 				rec := telemetryRecord{ToolUseID: id, Success: decision == "" && attrs["success"].asBool(),
@@ -439,7 +454,7 @@ func extractToolResultRecords(req otlpLogsRequest, receivedAt time.Time) []telem
 				if v, ok := attrs["tool_name"]; ok {
 					rec.ToolName, _ = v.asString()
 				}
-				if v, ok := attrs["session.id"]; ok {
+				if v, ok := attrs[sessionKey]; ok {
 					rec.SessionID, _ = v.asString()
 				}
 				out = append(out, rec)

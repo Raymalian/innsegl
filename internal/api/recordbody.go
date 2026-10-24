@@ -30,15 +30,18 @@ import (
 // package, the same reason internal/reconciler's commitwatch.go and
 // witness.go restate it for their own narrower reads.
 type gatewayBody struct {
-	Tool            string          `json:"tool"`
-	ToolUseID       string          `json:"tool_use_id"`
-	Input           json.RawMessage `json:"input"`
-	InputTruncated  bool            `json:"input_truncated"`
-	ResultObserved  bool            `json:"result_observed"`
-	Result          json.RawMessage `json:"result"`
-	IsError         bool            `json:"is_error"`
-	ResultTruncated bool            `json:"result_truncated"`
-	Note            string          `json:"note"`
+	Tool                  string          `json:"tool"`
+	ToolUseID             string          `json:"tool_use_id"`
+	Input                 json.RawMessage `json:"input"`
+	InputTruncated        bool            `json:"input_truncated"`
+	ObservationIncomplete bool            `json:"observation_incomplete"`
+	ResultObserved        bool            `json:"result_observed"`
+	Result                json.RawMessage `json:"result"`
+	IsError               bool            `json:"is_error"`
+	ErrorSignal           string          `json:"error_signal"`
+	ResultTruncated       bool            `json:"result_truncated"`
+	SnapshotError         bool            `json:"snapshot_error"`
+	Note                  string          `json:"note"`
 
 	// hookShape and hookOutcome are this process's own classification of a
 	// retained body, set only by hookBodyAsGateway (RM-273) while mapping a

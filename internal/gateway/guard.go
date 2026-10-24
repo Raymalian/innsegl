@@ -83,7 +83,9 @@ func (g *HarnessGuard) Check(r *http.Request) (*http.Request, *Refusal) {
 		if ok {
 			return r.WithContext(WithIdentification(r.Context(), id)), nil
 		}
-		reason = why
+		if reason == "" || why != reasonUnknownPath {
+			reason = why
+		}
 	}
 	if reason == "" {
 		reason = "the request shape did not match any supported harness version"

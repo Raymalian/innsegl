@@ -600,6 +600,7 @@ func resolveGatewayIdentitySecret(secret, secretFile string) (resolved, problem 
 			" and $" + envIdentitySecretFile + ") are both set: two sources for one secret " +
 			"is a configuration that can disagree with itself. Supply exactly one"
 	}
+	// #nosec G703 -- secretFile is explicitly configured by the operator, who chooses the mounted secret path.
 	body, err := os.ReadFile(filepath.Clean(secretFile))
 	if err != nil {
 		return "", "-identity-secret-file (or $" + envIdentitySecretFile + "): " + err.Error() +
@@ -974,13 +975,24 @@ func openGateway(ctx context.Context, o gatewayOptions, log *serveLog) (servedGa
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/_gateway/capabilities", gateway.ResponsesCapabilities)
 	// WithRetryAfterHeader sets the Retry-After header a GW-013 refusal
 	// carries -- internal/gateway's Guard interface has no access to the
 	// ResponseWriter to do that itself (limit.go's own doc comment explains
 	// why), so this wraps the proxy handler specifically. It is a
 	// transparent pass-through for every response this guard chain does not
 	// refuse, streaming (GW-002) included.
-	mux.Handle("/", gateway.WithRetryAfterHeader(proxy))
+	openaiUpstream, openaiErr := gateway.NewUpstream("https://api.openai.com", nil)
+	if openaiErr != nil {
+		running.Close()
+		return nil, openaiErr
+	}
+	chatgptUpstream, chatgptErr := gateway.NewUpstream("https://chatgpt.com", nil)
+	if chatgptErr != nil {
+		running.Close()
+		return nil, chatgptErr
+	}
+	mux.Handle("/", gateway.WithRetryAfterHeader(gateway.ResponsesRoutes(proxy, openaiUpstream, chatgptUpstream)))
 	if running.sessionEnder != nil {
 		// gatewaySessionEndPath: see sessionEndHandler's own doc comment for
 		// why this is minimal and local-only rather than a documented,
@@ -1448,11 +1460,12 @@ func openIdentityStack(
 	cfg.HeaderStatements = headerStatements{callers: running.callers}
 	cfg.OnUnrecorded = logUnrecorded(running.log)
 	cfg.OnAgentTypeWitness = logAgentTypeWitness(running.log)
-	identityGuard, err = gateway.NewIdentityGuard(cfg)
+	g, err := gateway.NewIdentityGuard(cfg)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("build the identity guard: %w", err)
 	}
 
+	identityGuard = g
 	candidates, err := gateway.OpenSilentRunCandidates(ctx, o.dsn)
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("open the silent-run enumeration: %w", err)
@@ -1490,7 +1503,7 @@ func openIdentityStack(
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
 
 	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running, hosted))
-	toolUse = gateway.CombineToolUseObservers(spawnRecorder, toolCallRecorder)
+	toolUse = gateway.CombineToolUseObservers(g, spawnRecorder, toolCallRecorder)
 
 	// The commit path (ADR-0059, E17) authorises a commit by a git commit
 	// tool call this recorder saw relayed and is still waiting on.

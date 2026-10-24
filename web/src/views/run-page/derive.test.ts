@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   dayMonthTimeUtc,
+  disagreementReason,
   dayMonthUtc,
   daysBetween,
   endedColumnText,
@@ -27,6 +28,7 @@ import {
   sessionStartedText,
   statusRangeText,
   stepOpensByDefault,
+  stepFailed,
   subagentDidText,
 } from "./derive";
 import { agentRecord, sessionRecord } from "./fixtures";
@@ -140,6 +142,7 @@ function step(overrides: Partial<RecordStep>): RecordStep {
     input: "{}",
     output: "",
     truncated: false,
+    observation_incomplete: false,
     clipped: false,
     outcome: { kind: "ok", exit_code: null },
     tree_before: "",
@@ -177,6 +180,16 @@ describe("stepOpensByDefault", () => {
     const record = { ...bareRecord([]), written: [{ path: "a.go", status: "A" as const, step: 3 }] };
     expect(stepOpensByDefault(record, step({ n: 3 }))).toBe(true);
     expect(stepOpensByDefault(record, step({ n: 4 }))).toBe(false);
+  });
+
+  it("does not classify an unknown tool result as a failure", () => {
+    expect(stepFailed(step({ outcome: { kind: "unknown", exit_code: null } }))).toBe(false);
+  });
+});
+
+describe("disagreementReason", () => {
+  it("attributes a failed snapshot to the snapshot witness when telemetry is inactive", () => {
+    expect(disagreementReason({ gateway: "present", snapshot: "error", telemetry: "inactive" })).toBe("snapshot");
   });
 });
 

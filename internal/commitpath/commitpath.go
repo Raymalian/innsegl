@@ -296,10 +296,13 @@ func simpleCommandWords(cmd string) [][]word {
 const maxToolUseIDBytes = 128
 
 // IsToolUseID reports whether s has the shape of a harness tool call id:
-// "toolu_" and then letters, digits and underscores. The id travels through
+// "toolu_" or "call_", then letters, digits and underscores. The id travels through
 // a shell and into a log line, so nothing else is allowed through.
 func IsToolUseID(s string) bool {
-	const prefix = "toolu_"
+	prefix := "toolu_"
+	if strings.HasPrefix(s, "call_") {
+		prefix = "call_"
+	}
 	if len(s) <= len(prefix) || len(s) > maxToolUseIDBytes || !strings.HasPrefix(s, prefix) {
 		return false
 	}
@@ -313,8 +316,12 @@ func IsToolUseID(s string) bool {
 
 // Client calls the core.
 type Client struct {
-	BaseURL string
-	HTTP    *http.Client
+	// CodexSessionID and CodexThreadID are transient hook assertions sent on
+	// each commit request; they do not alter the shared HTTP transport.
+	CodexSessionID string
+	CodexThreadID  string
+	BaseURL        string
+	HTTP           *http.Client
 }
 
 // defaultTimeout bounds one call. Signing reaches Fulcio and Rekor from the
@@ -332,7 +339,7 @@ func ClientFromEnv(getenv func(string) string) Client {
 	if base == "" {
 		base = DefaultCoreURL
 	}
-	return Client{BaseURL: base, HTTP: TrustedHTTPClient(getenv)}
+	return Client{BaseURL: base, HTTP: TrustedHTTPClient(getenv), CodexSessionID: getenv(EnvCodexSessionID), CodexThreadID: getenv(EnvCodexThreadID)}
 }
 
 // EnvExtraCACerts is $NODE_EXTRA_CA_CERTS -- read first, so an installer
@@ -421,6 +428,12 @@ func (c Client) call(ctx context.Context, endpoint string, req, out any) error {
 		return fmt.Errorf("innsegl: build the request to the core: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.CodexSessionID != "" {
+		httpReq.Header.Set(HeaderCodexSessionID, c.CodexSessionID)
+	}
+	if c.CodexThreadID != "" {
+		httpReq.Header.Set(HeaderCodexThreadID, c.CodexThreadID)
+	}
 	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: defaultTimeout}
@@ -641,7 +654,15 @@ const Window = 30 * time.Minute
 
 // RelayedCall is a tool call the core relayed whose result has not arrived.
 type RelayedCall struct {
-	RunID string
+	// SessionID and ThreadID are observed Codex request provenance, used
+	// to compare the hook assertion at the commit-path boundary. They are
+	// not part of the canonical ledger event schema.
+	SessionID string
+	ThreadID  string
+	WireType  string
+	Harness   string
+	Namespace string
+	RunID     string
 	// WorkingDirectory is where the harness said the agent works, on the
 	// request whose reply carried this tool call. The core checks it is the
 	// run's own repository before reading anything from it.
@@ -717,14 +738,65 @@ func Resolve(r Resolver, toolUseID string, now time.Time) (RelayedCall, error) {
 	if call.Truncated {
 		return RelayedCall{}, fmt.Errorf("tool call %s was truncated, so its command cannot be read", toolUseID)
 	}
-	var input struct {
-		Command string `json:"command"`
-	}
-	if call.Tool != "Bash" || json.Unmarshal(call.Input, &input) != nil || !IsGitCommitCommand(input.Command) {
+	command, readable := ShellCommand(call.Tool, call.Input)
+	family := strings.HasPrefix(toolUseID, "toolu_") && call.Tool == "Bash" && call.Harness != "codex"
+	directShell := (call.Tool == "functions.exec_command" && call.Namespace == "functions") || (call.Tool == "exec_command" && call.Namespace == "")
+	family = family || strings.HasPrefix(toolUseID, "call_") && directShell && call.Harness == "codex" && call.WireType == "function_call"
+	if !family || !readable || !IsGitCommitCommand(command) {
 		return RelayedCall{}, fmt.Errorf("tool call %s is not a git commit", toolUseID)
 	}
 	if now.Sub(call.ObservedAt) > Window {
 		return RelayedCall{}, fmt.Errorf("tool call %s is older than %s", toolUseID, Window)
 	}
 	return call, nil
+}
+
+// ShellCommand reads only structured shell arguments. Outer code-mode scripts
+// are never interpreted or treated as command evidence.
+func ShellCommand(tool string, raw json.RawMessage) (string, bool) {
+	var input struct {
+		Command string `json:"command"`
+		Cmd     string `json:"cmd"`
+	}
+	if json.Unmarshal(raw, &input) != nil {
+		return "", false
+	}
+	switch tool {
+	case "Bash":
+		return input.Command, input.Command != ""
+	case "functions.exec_command", "exec_command":
+		return input.Cmd, input.Cmd != ""
+	}
+	return "", false
+}
+
+// EnvCodexSessionID and EnvCodexThreadID carry the Codex hook's session and
+// thread assertions into the commit request. They are not credentials.
+const (
+	EnvCodexSessionID    = "INNSEGL_CODEX_SESSION_ID"
+	EnvCodexThreadID     = "INNSEGL_CODEX_THREAD_ID"
+	HeaderCodexSessionID = "X-Innsegl-Codex-Session-Id"
+	HeaderCodexThreadID  = "X-Innsegl-Codex-Thread-Id"
+)
+
+// ThreadScopedResolver restricts Codex calls to their observed session/thread.
+func ThreadScopedResolver(base Resolver, sessionID, threadID string) Resolver {
+	return threadScopedResolver{base: base, sessionID: sessionID, threadID: threadID}
+}
+
+type threadScopedResolver struct {
+	base      Resolver
+	sessionID string
+	threadID  string
+}
+
+func (s threadScopedResolver) LookupPending(toolUseID string) (RelayedCall, bool) {
+	call, ok := s.base.LookupPending(toolUseID)
+	if !ok {
+		return RelayedCall{}, false
+	}
+	if call.Harness == "codex" && (s.sessionID == "" || s.threadID == "" || call.SessionID != s.sessionID || call.ThreadID != s.threadID) {
+		return RelayedCall{}, false
+	}
+	return call, true
 }

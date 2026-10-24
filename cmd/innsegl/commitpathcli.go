@@ -30,7 +30,7 @@ func isHelp(args []string) bool {
 }
 
 const (
-	hookUsage    = "usage: innsegl hook pre-tool-use | post-tool-use | session\n"
+	hookUsage    = "usage: innsegl hook pre-tool-use | post-tool-use | session [--capture-only]\n"
 	gitHookUsage = "usage: innsegl git-hook prepare-commit-msg <message file> [<source> [<sha>]]\n" +
 		"       innsegl git-hook post-commit\n" +
 		"       innsegl git-hook reference-transaction prepared|committed|aborted   (run by git; ref updates on stdin)\n" +
@@ -43,8 +43,20 @@ func hookCommand(args []string, stdout, stderr io.Writer) int {
 		fprintf(stdout, hookUsage)
 		return exitOK
 	}
-	if len(args) == 1 && args[0] == "session" {
-		return runHookSession(os.Stdin, stdout, stderr, os.Getenv, postToGateway(os.Getenv))
+	if (len(args) == 1 || (len(args) == 2 && args[1] == "--capture-only")) && args[0] == "session" {
+		getenv := os.Getenv
+		if len(args) == 2 {
+			getenv = func(key string) string {
+				if key == "INNSEGL_CAPTURE_ONLY" {
+					return "1"
+				}
+				return os.Getenv(key)
+			}
+		}
+		return runHookSession(os.Stdin, stdout, stderr, getenv, postToGateway(getenv))
+	}
+	if len(args) == 2 && args[0] == "pre-tool-use" && args[1] == "--codex" {
+		return runCodexPreToolUse(os.Stdin, stdout, stderr, os.Getenv)
 	}
 	if len(args) == 1 && args[0] == "post-tool-use" {
 		return runHookPostToolUse(os.Stdin, stderr, os.Getenv)
@@ -102,13 +114,15 @@ func mountCommitPath(mux *http.ServeMux, resolver commitpath.Resolver) {
 
 // scopeCommitPath scopes a commit-path request to the installation the
 // client guard verified (hosted shape, ADR-0063): the request then resolves
-// only tool calls that installation relayed (#489). With no installation on
-// the request (single-host), it passes through unchanged.
+// only tool calls that installation relayed (#489). Codex requests also need
+// matching session/thread provenance; non-Codex calls retain existing behavior.
 func scopeCommitPath(resolver commitpath.Resolver, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scoped := commitpath.ThreadScopedResolver(resolver, r.Header.Get(commitpath.HeaderCodexSessionID), r.Header.Get(commitpath.HeaderCodexThreadID))
 		if installation, ok := gateway.InstallationFromContext(r.Context()); ok && installation != "" {
-			r = r.WithContext(commitpath.WithResolver(r.Context(), commitpath.ScopedResolver(resolver, installation)))
+			scoped = commitpath.ScopedResolver(scoped, installation)
 		}
+		r = r.WithContext(commitpath.WithResolver(r.Context(), scoped))
 		next.ServeHTTP(w, r)
 	})
 }

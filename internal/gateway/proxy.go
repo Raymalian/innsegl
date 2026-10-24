@@ -66,6 +66,11 @@ type Proxy struct {
 	// either way -- the same shape ToolUse already has for an Anthropic
 	// Messages reply.
 	Frames FrameObserver
+
+	// ResponsesWebSocket enables the Responses event observer on an
+	// already-routed Responses WebSocket request. The route sets this only
+	// for the exact configured Responses endpoints; guards still run first.
+	ResponsesWebSocket bool
 }
 
 // ServeHTTP builds the outbound request, sends it, and streams the reply
@@ -106,6 +111,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// before any upgrade is attempted, exactly as it already is before an
 	// ordinary request is forwarded.
 	if isWebSocketUpgrade(r) {
+		if p.ResponsesWebSocket {
+			p.relayWebSocketWithObserver(w, r, p.responsesWebSocketObserver(r))
+			return
+		}
 		p.relayWebSocket(w, r)
 		return
 	}
@@ -117,7 +126,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := p.Upstream.Client.Do(outReq)
+	// The destination comes from configured Upstream.resolve, never a caller host.
+	resp, err := p.Upstream.Client.Do(outReq) //nolint:gosec // G704: exact configured provider routes; redirects disabled for Responses.
 	if err != nil {
 		// classifyUpstreamError (upstream.go, #371/GW-008) turns a TLS,
 		// connect or timeout failure into the status and failure-class
@@ -160,6 +170,7 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 	// The client service's statement is for the core alone (RM-313): it
 	// names a host path, which is not the provider's to see.
 	outReq.Header.Del(StatementHeader)
+	outReq.Header.Del("X-Gateway-Key")
 	// The reply is read here as well as relayed (stream, below), and a
 	// compressed one reads as nothing: Claude Code asks for gzip, br and
 	// zstd. Identity is the one encoding every client accepts, so the
@@ -176,12 +187,10 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 
 // stream copies resp's body to w, flushing after every chunk arrives so a
 // streamed reply -- server-sent events above all -- reaches the caller as
-// it is received rather than once the whole body has arrived. When an
-// Anthropic Messages tool_use observer is configured and the reply is
-// text/event-stream, a second writer parses a COPY of the same bytes
-// io.Copy already wrote to the client: see messagesInterpreter, whose Write
-// never errors and so never slows or interrupts the forwarding it rides
-// alongside.
+// it is received rather than once the whole body has arrived. A reply
+// observer parses the same bytes as they are relayed. Responses replies are
+// observed before forwarding each chunk so a child request cannot race its
+// parent's spawn association; the Messages path keeps its existing write order.
 //
 // r is the ORIGINAL request this reply answers -- carried through only so
 // that a ToolUse observer implementing ContextToolUseObserver (below) can
@@ -202,8 +211,13 @@ func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Respon
 		dst = w
 	}
 
-	if obs := p.replyObserver(r, resp.Header.Get("Content-Type")); obs != nil {
-		dst = io.MultiWriter(dst, obs)
+	obs := p.replyObserver(r, resp.Header.Get("Content-Type"))
+	if obs != nil {
+		if isResponsesPath(r.URL.Path) {
+			dst = io.MultiWriter(obs, dst)
+		} else {
+			dst = io.MultiWriter(dst, obs)
+		}
 	}
 
 	// A failed copy is discarded deliberately, not silently: by the time
@@ -211,7 +225,11 @@ func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Respon
 	// wire, so there is nothing left to change, and this package logs
 	// nothing here either way (see the package doc comment on what never
 	// reaches a log). See discardCopyError.
-	discardCopyError(io.Copy(dst, resp.Body))
+	_, err := io.Copy(dst, resp.Body)
+	if finisher, ok := obs.(interface{ Finish() }); ok {
+		finisher.Finish()
+	}
+	discardCopyError(0, err)
 }
 
 // ContextToolUseObserver is a ToolUseObserver that also wants the request's

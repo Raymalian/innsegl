@@ -169,6 +169,24 @@ func TestJRN005AValidChainIsImportedOnceAndStored(t *testing.T) {
 	}
 }
 
+func TestOAI002JournalReplayStoresUnreadableResponsesAsGap(t *testing.T) {
+	const problem = "compressed request could not be observed within limits"
+	rp := &fakeReplayer{outcome: func(*http.Request) ReplayOutcome {
+		return ReplayOutcome{RunID: "run-1", ObservationProblem: problem}
+	}}
+	im, _ := newImporter(t, rp)
+	c := newJournalChain(t, cgInstA)
+	entry := c.next(t, func(e *clientjournal.Entry) {
+		e.Path = "/backend-api/codex/responses"
+		e.RequestHeaders.Set("Content-Encoding", "zstd")
+		e.RequestBody = []byte("malformed compressed request")
+	})
+	got := im.Import(context.Background(), cgInstA, &c.key.PublicKey, []clientjournal.Sealed{entry})
+	if len(got) != 1 || got[0].Status != clientjournal.ImportStored || !strings.Contains(got[0].Reason, problem) {
+		t.Fatalf("unreadable exchange import=%+v, want durable stored gap", got)
+	}
+}
+
 // JRN-006: a tampered entry is rejected, and nothing after it is processed;
 // an entry signed by another key, or naming another installation, or out of
 // order, is rejected; nothing rejected is stored.

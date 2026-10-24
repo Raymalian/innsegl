@@ -293,6 +293,7 @@ type IdentityGuard struct {
 
 	cache             *identityCache[RunMapping]
 	spawnClaims       *identityCache[spawnClaim]
+	codexSpawns       *codexSpawns
 	sessionEndSignals *SessionEndSignals
 	sessionWorkspaces *SessionWorkspaces
 	pins              *SessionPins
@@ -343,6 +344,7 @@ func NewIdentityGuard(cfg IdentityGuardConfig) (*IdentityGuard, error) {
 		now:               now,
 		cache:             newIdentityCache[RunMapping](size),
 		spawnClaims:       newIdentityCache[spawnClaim](size),
+		codexSpawns:       newCodexSpawns(size),
 		sessionEndSignals: cfg.SessionEndSignals,
 		sessionWorkspaces: cfg.SessionWorkspaces,
 		pins:              cfg.Pins,
@@ -371,6 +373,14 @@ func (g *IdentityGuard) check(r *http.Request) (*http.Request, *Refusal) {
 		// Identification never passed one. Refusing rather than guessing is
 		// the same posture every other guard in this chain already takes.
 		return nil, g.refuse("no harness identification was found on this request")
+	}
+
+	if id.Harness == "codex" {
+		thread, valid := codexThread(r)
+		if !valid {
+			return nil, g.refuse("inconsistent Codex thread metadata")
+		}
+		r = r.WithContext(context.WithValue(r.Context(), codexThreadContextKey{}, thread))
 	}
 
 	// Hosted mode (RM-284, #460): the client guard verified an installation,
@@ -472,7 +482,16 @@ func (g *IdentityGuard) check(r *http.Request) (*http.Request, *Refusal) {
 
 	var parentRunID, spawnAgentType string
 	if !found {
-		parentRunID, spawnAgentType = g.linkParent(ctx, id, facts.Brief)
+		if id.Harness == "codex" && id.AgentID != mainAgentID {
+			thread, _ := CodexThreadFromContext(ctx)
+			parentRunID, err = g.codexParent(ctx, id, thread)
+			if err != nil {
+				return nil, g.refuseErr("resolving the Codex child's observed parent", err)
+			}
+		}
+		if id.Harness != "codex" {
+			parentRunID, spawnAgentType = g.linkParent(ctx, id, facts.Brief)
+		}
 	}
 
 	in := LifecycleInput{
@@ -826,7 +845,9 @@ func (g *IdentityGuard) priorMapping(ctx context.Context, id Identification, fp 
 		g.cache.put(id.SessionID, id.AgentID, m)
 		return m, true, nil
 	}
-	if fp == "" {
+	// Codex child histories may inherit their parent's conversation. A new
+	// thread must prove its observed spawn, never adopt that fingerprint.
+	if fp == "" || id.Harness == "codex" && id.AgentID != mainAgentID {
 		return RunMapping{}, false, nil
 	}
 

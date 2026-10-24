@@ -742,3 +742,52 @@ func TestCommitWatchDoesNotCountAToolThatCannotCommitAsUnchecked(t *testing.T) {
 		t.Fatalf("CommitWatch = %+v, want a Write call neither checked nor unchecked", report)
 	}
 }
+
+func TestOAI021CommitWatchReadsDirectCodexResult(t *testing.T) {
+	const runID = "run-codex-direct"
+	m := newMemLedger(rebaseClock)
+	seedRun(t, m, runID)
+	logDir := t.TempDir()
+
+	inputRaw, err := json.Marshal(map[string]any{"cmd": bypassCommand})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultRaw, err := json.Marshal([]map[string]any{
+		{"type": "input_text", "text": "[main abc1234] innsegl "},
+		{"type": "input_text", "text": "commitwatch test"},
+		{"type": "image", "source": map[string]any{"data": "irrelevant"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"tool": "functions.exec_command", "input": json.RawMessage(inputRaw),
+		"result_observed": true, "result": json.RawMessage(resultRaw),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := plantCommitWatchBody(t, logDir, runID, raw)
+	if _, aerr := m.Append(context.Background(), event.Fields{
+		event.FieldSchemaVersion:  event.SchemaVersion,
+		event.FieldEventType:      event.EventTypeToolCall,
+		event.FieldSource:         event.SourceMCP,
+		event.FieldRunID:          runID,
+		event.FieldSpiffeID:       spiffeIDFor(runID),
+		event.FieldIdempotencyKey: "tool/" + runID + "/" + digest[7:19],
+		event.FieldToolName:       "functions.exec_command",
+		event.FieldPayloadDigest:  digest,
+	}); aerr != nil {
+		t.Fatalf("seed tool_call: %v", aerr)
+	}
+
+	report := runCommitWatchPass(t, m, logDir)
+	if report.Checked != 1 {
+		t.Errorf("checked %d, want 1", report.Checked)
+	}
+	if report.Unsigned != 1 {
+		t.Errorf("unsigned %d, want 1 — the commit-summary line must be read out of a "+
+			"content-block array too: %+v", report.Unsigned, report.Findings)
+	}
+}

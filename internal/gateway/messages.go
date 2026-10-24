@@ -71,11 +71,9 @@ package gateway
 // MCPRegistrar (registrar.go) already is for Registrar.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -349,19 +347,11 @@ func discardAgentMessageResult(string, error) {}
 // reaches this Guard still forwards byte for byte (GW-001) whatever this
 // function found or failed to find.
 func extractAssistantTexts(r *http.Request) []string {
-	if r.Body == nil {
-		return nil
-	}
+	body := observationBody(r)
+	return requestFormat(r).texts(body.decoded)
+}
 
-	orig := r.Body
-	limited := io.LimitReader(orig, maxRequestFactsBodyBytes+1)
-	buf, readErr := io.ReadAll(limited)
-	r.Body = &restoredBody{Reader: io.MultiReader(bytes.NewReader(buf), orig), closer: orig}
-
-	if readErr != nil || len(buf) > maxRequestFactsBodyBytes {
-		return nil
-	}
-
+func parseAssistantTexts(buf []byte) []string {
 	var body struct {
 		Messages []rawMessage `json:"messages"`
 	}

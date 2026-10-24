@@ -36,26 +36,26 @@ const mirrorSnapshotPoll = 200 * time.Millisecond
 // mirrorTree answers the tree the client pushed for toolUseID, or "" when
 // the mirror does not hold one within the wait. Only a call a client
 // installation relayed, in a repository it stated, has one to look for.
-func (r *ToolCallRecorder) mirrorTree(ctx context.Context, toolUseID string, call pendingCall) string {
+func (r *ToolCallRecorder) mirrorTree(ctx context.Context, toolUseID string, call pendingCall) (string, bool) {
 	if r.mirrorSnaps == nil || call.installation == "" || call.repo == "" {
-		return ""
+		return "", false
 	}
 	deadline := time.Now().Add(r.mirrorWait)
 	for {
 		tree, held, err := r.mirrorSnaps.SnapshotTree(ctx, call.repo, call.installation, toolUseID)
 		if err != nil {
 			r.onFailure(fmt.Errorf("gateway: reading the client's workspace snapshot for tool_use %q: %w", toolUseID, err))
-			return ""
+			return "", true
 		}
 		if held {
-			return tree
+			return tree, false
 		}
 		if !time.Now().Add(mirrorSnapshotPoll).Before(deadline) {
-			return ""
+			return "", false
 		}
 		select {
 		case <-ctx.Done():
-			return ""
+			return "", ctx.Err() != nil
 		case <-time.After(mirrorSnapshotPoll):
 		}
 	}

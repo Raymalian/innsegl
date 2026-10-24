@@ -131,6 +131,85 @@ func TestOTW001TelemetryHandlerKeepsToolResultRecords(t *testing.T) {
 	}
 }
 
+// TestOAI012CodexToolResultIsKeptByCallID pins the Codex OTLP result shape.
+// Codex includes call arguments/output and account metadata in the export;
+// only the reconciliation fields may be retained.
+func TestOAI012CodexToolResultIsKeptByCallID(t *testing.T) {
+	dir := t.TempDir()
+	h := TelemetryHandler(TelemetryConfig{Dir: dir})
+	callID := "call_1234567890abcdef"
+	payload := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[` +
+		`{"body":{"stringValue":"codex.tool_result"},"attributes":[` +
+		`{"key":"event.name","value":{"stringValue":"codex.tool_result"}},` +
+		`{"key":"call_id","value":{"stringValue":"` + callID + `"}},` +
+		`{"key":"tool_name","value":{"stringValue":"exec_command"}},` +
+		`{"key":"success","value":{"stringValue":"true"}},` +
+		`{"key":"conversation.id","value":{"stringValue":"codex-session-123"}},` +
+		`{"key":"arguments","value":{"stringValue":"PRIVATE COMMAND"}},` +
+		`{"key":"output","value":{"stringValue":"PRIVATE TOOL OUTPUT"}},` +
+		`{"key":"user.email","value":{"stringValue":"private@example.invalid"}}]}` +
+		`]}]}]}`
+
+	rec := otwPost(t, h, "application/json", []byte(payload))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	got := otwReadStored(t, dir, callID)
+	if got.ToolUseID != callID || got.ToolName != "exec_command" || !got.Success || got.SessionID != "codex-session-123" {
+		t.Errorf("stored Codex result = %+v, want the call id, tool name, success, and conversation id", got)
+	}
+	stored, err := os.ReadFile(filepath.Join(dir, "telemetry", callID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"PRIVATE COMMAND", "PRIVATE TOOL OUTPUT", "private@example.invalid", "arguments", "output", "user.email"} {
+		if strings.Contains(string(stored), secret) {
+			t.Errorf("stored Codex record contains %q: %s", secret, stored)
+		}
+	}
+}
+
+// TestOAI012CodexDeniedToolDecisionIsKeptByCallID records a refusal for a
+// call that has no result event, using the reconciler's existing reject
+// marker and never retaining unrelated Codex attributes.
+func TestOAI012CodexDeniedToolDecisionIsKeptByCallID(t *testing.T) {
+	dir := t.TempDir()
+	h := TelemetryHandler(TelemetryConfig{Dir: dir})
+	callID := "call_denied12345678"
+	payload := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[` +
+		`{"body":{"stringValue":"codex.tool_decision"},"attributes":[` +
+		`{"key":"event.name","value":{"stringValue":"codex.tool_decision"}},` +
+		`{"key":"call_id","value":{"stringValue":"` + callID + `"}},` +
+		`{"key":"tool_name","value":{"stringValue":"exec_command"}},` +
+		`{"key":"decision","value":{"stringValue":"denied"}},` +
+		`{"key":"source","value":{"stringValue":"user"}}]}` +
+		`]}]}]}`
+
+	rec := otwPost(t, h, "application/json", []byte(payload))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	stored, err := os.ReadFile(filepath.Join(dir, "telemetry", callID+".json"))
+	if err != nil {
+		t.Fatalf("denied Codex call was not kept under its call id: %v", err)
+	}
+	var got struct {
+		ToolUseID string `json:"tool_use_id"`
+		ToolName  string `json:"tool_name"`
+		Success   bool   `json:"success"`
+		Decision  string `json:"decision"`
+	}
+	if err := json.Unmarshal(stored, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ToolUseID != callID || got.ToolName != "exec_command" || got.Success || got.Decision != toolDecisionReject {
+		t.Errorf("stored denied decision = %+v, want rejected call under %q", got, callID)
+	}
+	if strings.Contains(string(stored), "source") {
+		t.Errorf("stored denied decision retained its source attribute: %s", stored)
+	}
+}
+
 // TestOTW001TelemetryHandlerAnswersOTLPSuccess: the OTLP/HTTP JSON logs
 // export success reply is 200, Content-Type application/json, and an empty
 // ExportLogsServiceResponse body -- so the harness's own exporter never logs

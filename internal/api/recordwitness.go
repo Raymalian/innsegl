@@ -139,7 +139,11 @@ func stepWitnesses(
 
 	switch {
 	case treeAfter == "":
-		w.Snapshot = "none"
+		if bodyAvailable && body.SnapshotError {
+			w.Snapshot = "error"
+		} else {
+			w.Snapshot = "none"
+		}
 	case treeBefore != "" && treeBefore == treeAfter:
 		w.Snapshot = "unchanged"
 	default:

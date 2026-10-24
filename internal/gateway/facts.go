@@ -47,7 +47,6 @@ package gateway
 // extractor found.
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -83,24 +82,8 @@ const (
 // unchanged (GW-001) no matter what was found. r itself is not otherwise
 // modified.
 func ExtractRequestFacts(r *http.Request) RequestFacts {
-	if r.Body == nil {
-		return RequestFacts{}
-	}
-
-	orig := r.Body
-	limited := io.LimitReader(orig, maxRequestFactsBodyBytes+1)
-	buf, readErr := io.ReadAll(limited)
-
-	// Restored regardless of what follows: the bytes already read, then
-	// whatever is still unread on the original body -- read once, from the
-	// wire's own point of view, whether this function or the eventual
-	// forwarding copy is the one to read a given byte.
-	r.Body = &restoredBody{Reader: io.MultiReader(bytes.NewReader(buf), orig), closer: orig}
-
-	if readErr != nil || len(buf) > maxRequestFactsBodyBytes {
-		return RequestFacts{}
-	}
-	return parseRequestFacts(buf)
+	body := observationBody(r)
+	return requestFormat(r).facts(body.decoded)
 }
 
 // restoredBody is an io.ReadCloser that reads from Reader (a replay of what

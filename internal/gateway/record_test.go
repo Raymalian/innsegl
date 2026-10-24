@@ -16,6 +16,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -200,13 +203,83 @@ func recResult(toolUseID, content string, isError bool) observedToolResult {
 	return observedToolResult{ToolUseID: toolUseID, Content: json.RawMessage(content), IsError: isError}
 }
 
+func TestOAI022ToolCallRecorderPairsWebSocketResponseCreateOutput(t *testing.T) {
+	calls := &fakeRecordCalls{}
+	recorder := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn})
+	facts := RequestFacts{Stated: StatedWorkspace{Repo: "example/repo"}, WorkingDirectory: "/workspace/repo"}
+	ctx := WithIdentification(WithRunID(WithRequestFacts(context.Background(), facts), "run-ws"), Identification{Harness: "codex"})
+	recorder.OnToolUseContext(ctx, ToolUse{WireType: "function_call", ID: "call_ws_pair_12345", Name: "exec_command", Input: json.RawMessage(`{"cmd":"pwd"}`)})
+	recorder.OnResponsesWebSocketMessage(ctx, []byte(`{"type":"response.create","response":{"input":[{"type":"function_call_output","call_id":"call_ws_pair_12345","output":"/workspace/repo"}]}}`))
+	waitForCalls(t, calls, 1)
+	recorded := calls.snapshot()[0]
+	if recorded.RunID != "run-ws" || recorded.WorkspaceTreeHash != "" {
+		t.Fatalf("recorded run/snapshot=%q/%q", recorded.RunID, recorded.WorkspaceTreeHash)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(recorded.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["tool_use_id"] != "call_ws_pair_12345" || body["error_signal"] != "unknown" || body["result_observed"] != true {
+		t.Fatalf("WebSocket tool result was not paired faithfully: %s", recorded.Body)
+	}
+}
+
+func TestOAI025CodexWebSocketPairCarriesRealWorkspaceSnapshot(t *testing.T) {
+	projects := t.TempDir()
+	repo := filepath.Join(projects, "repo")
+	snapNewProject(t, repo, "git@example.com:innsegl-test/oai025.git")
+	store := t.TempDir()
+	snapshotter := snapMustSnapshotter(t, SnapshotConfig{StoreRoot: store, ProjectRoots: []string{projects}})
+	calls := &fakeRecordCalls{}
+	baselined := make(chan struct{}, 1)
+	recorder := NewToolCallRecorder(ToolCallRecorderConfig{
+		record: calls.fn, Snapshots: snapshotter, Trigger: NewSnapshotTrigger(),
+		onBaselined: func() { baselined <- struct{}{} },
+	})
+	const runID = "run-oai-025"
+	facts := RequestFacts{Stated: StatedWorkspace{Repo: "example/repo"}, WorkingDirectory: repo}
+	ctx := WithIdentification(WithRunID(WithRequestFacts(context.Background(), facts), runID), Identification{Harness: "codex"})
+	const callID = "call_oai025snapshot"
+	recorder.OnToolUseContext(ctx, ToolUse{WireType: "function_call", ID: callID, Name: "exec_command", Input: json.RawMessage(`{"cmd":"write file"}`)})
+	waitForBaselined(t, baselined, 1, 5*time.Second)
+	if err := os.WriteFile(filepath.Join(repo, "after-tool.txt"), []byte("created by tool\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	message := []byte(`{"type":"response.create","response":{"input":[{"type":"function_call_output","call_id":"call_oai025snapshot","output":"created"}]}}`)
+	recorder.OnResponsesWebSocketMessage(ctx, message)
+	waitForCalls(t, calls, 1)
+	got := calls.snapshot()[0]
+	if got.RunID != runID || got.WorkspaceTreeHash == "" {
+		t.Fatalf("recorded run/snapshot=%q/%q", got.RunID, got.WorkspaceTreeHash)
+	}
+	storeDir := snapStoreDir(t, store)
+	if !snapObjectExists(t, storeDir, got.WorkspaceTreeHash) {
+		t.Fatalf("recorded snapshot tree %q is absent from the self-contained snapshot store", got.WorkspaceTreeHash)
+	}
+	entries, err := exec.CommandContext(t.Context(), "git", "--git-dir", storeDir, "ls-tree", "-r", got.WorkspaceTreeHash).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(entries), "after-tool.txt") {
+		t.Fatalf("paired after-tool snapshot does not contain the tool's file: %s", entries)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(got.Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["tool_use_id"] != callID || body["result_observed"] != true {
+		t.Fatalf("tool/result/snapshot were not paired by the Codex call id: %s", got.Body)
+	}
+}
+
 // TestGREC001RecorderPairsAPendingToolUseWithItsResultAndRecordsItOnce is
 // this file's own version of GREC-001 (doc 07): a tool_use observed on the
 // reply and the tool_result the next request carries for it are recorded
 // as one call, carrying the tool name, the input and the result together.
 func TestGREC001RecorderPairsAPendingToolUseWithItsResultAndRecordsItOnce(t *testing.T) {
 	calls := &fakeRecordCalls{}
-	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn})
+	recorded := make(chan struct{}, 4)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn, onRecorded: func() { recorded <- struct{}{} }})
 
 	ctx := WithRunID(context.Background(), recTestRunID)
 	rec.OnToolUseContext(ctx, recToolUse("toolu_1", "Bash", `{"command":"echo hi"}`))
@@ -216,7 +289,7 @@ func TestGREC001RecorderPairsAPendingToolUseWithItsResultAndRecordsItOnce(t *tes
 
 	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{},
 		[]observedToolResult{recResult("toolu_1", `{"stdout":"hi\n"}`, false)})
-	waitForCalls(t, calls, 1)
+	waitForRecorded(t, recorded, 1, 5*time.Second)
 
 	if got := rec.PendingCount(); got != 0 {
 		t.Errorf("PendingCount after pairing = %d, want 0", got)
@@ -541,6 +614,13 @@ func TestGREC003RecorderRecordsWithoutATreeHashWhenTheSnapshotFails(t *testing.T
 	}
 	if got[0].WorkspaceTreeHash != "" {
 		t.Errorf("WorkspaceTreeHash = %q, want empty after a snapshot failure", got[0].WorkspaceTreeHash)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(got[0].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["snapshot_error"] != true {
+		t.Errorf("snapshot_error = %v, want true so the run record can distinguish failure from absence", body["snapshot_error"])
 	}
 	if len(failures) == 0 {
 		t.Fatal("OnRecordFailure was never called for the snapshot failure")
@@ -1259,6 +1339,32 @@ func TestRecorderLooksUpARunningToolCallUntilItsResultArrives(t *testing.T) {
 	waitForCalls(t, calls, 1)
 	if _, ok := rec.LookupPending("toolu_1"); ok {
 		t.Error("a tool call was still found after its result arrived")
+	}
+}
+
+func TestOAI017IncompleteCallTombstoneSurvivesLateResultAndReplay(t *testing.T) {
+	calls := &fakeRecordCalls{}
+	recorded := make(chan struct{}, 4)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn, onRecorded: func() { recorded <- struct{}{} }})
+	ctx := WithRunID(context.Background(), recTestRunID)
+	rec.OnToolUseContext(ctx, ToolUse{
+		ID: "call_incomplete123", Name: "exec", ObservationIncomplete: true,
+	})
+	waitForRecorded(t, recorded, 1, 5*time.Second)
+
+	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{},
+		[]observedToolResult{recResult("call_incomplete123", `"late output"`, false)})
+	if _, ok := rec.LookupPending("call_incomplete123"); ok {
+		t.Fatal("incomplete recorded call remained eligible for signing")
+	}
+
+	// A later response replay cannot replace the first, incomplete evidence.
+	rec.OnToolUseContext(ctx, recToolUse("call_incomplete123", "exec_command", `{\"cmd\":\"git commit\"}`))
+	rec.HandleResults(context.Background(), recTestRunID, RequestFacts{},
+		[]observedToolResult{recResult("call_incomplete123", `"replayed output"`, false)})
+	waitForNoFurtherRecording(t, recorded, 200*time.Millisecond)
+	if got := calls.snapshot(); len(got) != 1 {
+		t.Fatalf("incomplete call was recorded again after a late result/replay: %d records", len(got))
 	}
 }
 

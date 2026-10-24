@@ -167,6 +167,9 @@ type RecordStep struct {
 	Input     string `json:"input"`
 	Output    string `json:"output"`
 	Truncated bool   `json:"truncated"`
+	// ObservationIncomplete marks a Responses call whose stream ended before
+	// the gateway received a complete output item.
+	ObservationIncomplete bool `json:"observation_incomplete"`
 	// Clipped is true when the record capped Input or Output to keep the
 	// page light; GET .../steps/{n} serves the step in full (#440).
 	Clipped bool          `json:"clipped"`
@@ -201,7 +204,8 @@ type RecordWitnesses struct {
 	// Gateway is present (the gateway relayed and stored it) or missing.
 	Gateway string `json:"gateway"`
 	// Snapshot is changed, unchanged, none (no snapshot around the step, in a
-	// run that has them) or inactive (this run never had snapshots).
+	// run that has them), error (an attempted snapshot failed), or inactive
+	// (this run never had snapshots).
 	Snapshot string `json:"snapshot"`
 	// Telemetry is matched, missing, pending (inside the window) or
 	// inactive (this run's harness was not yet, or never, exporting it).

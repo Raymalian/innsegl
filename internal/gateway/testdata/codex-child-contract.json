@@ -1,0 +1,597 @@
+{
+  "measurement": {
+    "cli_version": "0.163.0",
+    "provider": "deterministic local SSE recorder; actual CLI tools and child threads",
+    "limitations": "No real upstream inference or encrypted provider payload measured; headers allowlisted, unrelated request instructions omitted."
+  },
+  "requests": [
+    {
+      "headers": {
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553577,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec",
+        "user-agent": "codex_exec/0.163.0 (<platform>; <arch>) <terminal> (codex_exec; 0.163.0)"
+      },
+      "body": {
+        "model": "gpt-6.1-sol",
+        "client_metadata": {
+          "root_turn_id": "00000000-0000-4000-8000-000000000003",
+          "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553577,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "x-codex-installation-id": "00000000-0000-4000-8000-000000000021",
+          "thread_id": "00000000-0000-4000-8000-000000000001",
+          "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+          "turn_id": "00000000-0000-4000-8000-000000000003"
+        },
+        "input": []
+      }
+    },
+    {
+      "headers": {
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553577,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec",
+        "user-agent": "codex_exec/0.163.0 (<platform>; <arch>) <terminal> (codex_exec; 0.163.0)"
+      },
+      "body": {
+        "model": "gpt-6.1-sol",
+        "client_metadata": {
+          "thread_id": "00000000-0000-4000-8000-000000000001",
+          "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553577,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+          "x-codex-installation-id": "00000000-0000-4000-8000-000000000021",
+          "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+          "turn_id": "00000000-0000-4000-8000-000000000003",
+          "root_turn_id": "00000000-0000-4000-8000-000000000003",
+          "session_id": "00000000-0000-4000-8000-000000000001"
+        },
+        "input": [
+          {
+            "type": "function_call",
+            "id": "fc_1",
+            "name": "spawn_agent",
+            "namespace": "collaboration",
+            "arguments": "{\"task_name\": \"child_one\", \"message\": \"Reply probe done, use no tools.\", \"fork_turns\": \"none\"}",
+            "call_id": "call_spawn_child_one"
+          },
+          {
+            "type": "function_call_output",
+            "id": "fco_00000000-0000-4000-8000-000000000007",
+            "call_id": "call_spawn_child_one",
+            "output": "{\"task_name\":\"/root/child_one\"}"
+          }
+        ]
+      }
+    },
+    {
+      "headers": {
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000004:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\",\"agent_name\":\"/root/child_one\",\"turn_id\":\"00000000-0000-4000-8000-000000000006\",\"window_id\":\"00000000-0000-4000-8000-000000000004:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000005\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553609,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-openai-subagent": "collab_spawn",
+        "originator": "codex_exec",
+        "user-agent": "codex_exec/0.163.0 (<platform>; <arch>) <terminal> (codex_exec; 0.163.0)"
+      },
+      "body": {
+        "model": "gpt-6.1-sol",
+        "client_metadata": {
+          "thread_id": "00000000-0000-4000-8000-000000000004",
+          "root_turn_id": "00000000-0000-4000-8000-000000000003",
+          "x-codex-window-id": "00000000-0000-4000-8000-000000000004:0",
+          "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\",\"agent_name\":\"/root/child_one\",\"turn_id\":\"00000000-0000-4000-8000-000000000006\",\"window_id\":\"00000000-0000-4000-8000-000000000004:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000005\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553609,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+          "x-codex-installation-id": "00000000-0000-4000-8000-000000000021",
+          "x-openai-subagent": "collab_spawn",
+          "parent_turn_id": "00000000-0000-4000-8000-000000000003",
+          "turn_id": "00000000-0000-4000-8000-000000000006"
+        },
+        "input": [
+          {
+            "type": "agent_message",
+            "id": "amsg_00000000-0000-4000-8000-000000000008",
+            "author": "/root",
+            "recipient": "/root/child_one",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Message Type: NEW_TASK\nTask name: /root/child_one\nSender: /root\nPayload:\n"
+              },
+              {
+                "type": "encrypted_content",
+                "encrypted_content": "Reply probe done, use no tools."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "headers": {
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553577,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec",
+        "user-agent": "codex_exec/0.163.0 (<platform>; <arch>) <terminal> (codex_exec; 0.163.0)"
+      },
+      "body": {
+        "model": "gpt-6.1-sol",
+        "client_metadata": {
+          "turn_id": "00000000-0000-4000-8000-000000000003",
+          "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553577,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "root_turn_id": "00000000-0000-4000-8000-000000000003",
+          "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+          "x-codex-installation-id": "00000000-0000-4000-8000-000000000021",
+          "thread_id": "00000000-0000-4000-8000-000000000001"
+        },
+        "input": [
+          {
+            "type": "function_call",
+            "id": "fc_1",
+            "name": "spawn_agent",
+            "namespace": "collaboration",
+            "arguments": "{\"task_name\": \"child_one\", \"message\": \"Reply probe done, use no tools.\", \"fork_turns\": \"none\"}",
+            "call_id": "call_spawn_child_one"
+          },
+          {
+            "type": "function_call_output",
+            "id": "fco_00000000-0000-4000-8000-000000000007",
+            "call_id": "call_spawn_child_one",
+            "output": "{\"task_name\":\"/root/child_one\"}"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_2",
+            "name": "spawn_agent",
+            "namespace": "collaboration",
+            "arguments": "{\"task_name\": \"child_two\", \"message\": \"Reply probe done, use no tools.\", \"fork_turns\": \"none\"}",
+            "call_id": "call_spawn_child_two"
+          },
+          {
+            "type": "function_call_output",
+            "id": "fco_00000000-0000-4000-8000-000000000015",
+            "call_id": "call_spawn_child_two",
+            "output": "{\"task_name\":\"/root/child_two\"}"
+          }
+        ]
+      }
+    },
+    {
+      "headers": {
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000004:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\",\"agent_name\":\"/root/child_one\",\"turn_id\":\"00000000-0000-4000-8000-000000000006\",\"window_id\":\"00000000-0000-4000-8000-000000000004:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000005\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553609,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-openai-subagent": "collab_spawn",
+        "originator": "codex_exec",
+        "user-agent": "codex_exec/0.163.0 (<platform>; <arch>) <terminal> (codex_exec; 0.163.0)"
+      },
+      "body": {
+        "model": "gpt-6.1-sol",
+        "client_metadata": {
+          "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+          "x-codex-installation-id": "00000000-0000-4000-8000-000000000021",
+          "x-codex-window-id": "00000000-0000-4000-8000-000000000004:0",
+          "turn_id": "00000000-0000-4000-8000-000000000006",
+          "parent_turn_id": "00000000-0000-4000-8000-000000000003",
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "x-openai-subagent": "collab_spawn",
+          "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\",\"agent_name\":\"/root/child_one\",\"turn_id\":\"00000000-0000-4000-8000-000000000006\",\"window_id\":\"00000000-0000-4000-8000-000000000004:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000005\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553609,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+          "root_turn_id": "00000000-0000-4000-8000-000000000003",
+          "thread_id": "00000000-0000-4000-8000-000000000004"
+        },
+        "input": [
+          {
+            "type": "agent_message",
+            "id": "amsg_00000000-0000-4000-8000-000000000008",
+            "author": "/root",
+            "recipient": "/root/child_one",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Message Type: NEW_TASK\nTask name: /root/child_one\nSender: /root\nPayload:\n"
+              },
+              {
+                "type": "encrypted_content",
+                "encrypted_content": "Reply probe done, use no tools."
+              }
+            ]
+          },
+          {
+            "type": "function_call",
+            "id": "fc_nested",
+            "name": "spawn_agent",
+            "namespace": "collaboration",
+            "arguments": "{\"task_name\": \"nested\", \"message\": \"Reply probe done, use no tools.\", \"fork_turns\": \"none\"}",
+            "call_id": "call_spawn_nested"
+          },
+          {
+            "type": "function_call_output",
+            "id": "fco_00000000-0000-4000-8000-000000000016",
+            "call_id": "call_spawn_nested",
+            "output": "{\"task_name\":\"/root/child_one/nested\"}"
+          }
+        ]
+      }
+    },
+    {
+      "headers": {
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000011:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000011\",\"agent_name\":\"/root/child_two\",\"turn_id\":\"00000000-0000-4000-8000-000000000013\",\"window_id\":\"00000000-0000-4000-8000-000000000011:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000012\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553661,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+        "x-openai-subagent": "collab_spawn",
+        "originator": "codex_exec",
+        "user-agent": "codex_exec/0.163.0 (<platform>; <arch>) <terminal> (codex_exec; 0.163.0)"
+      },
+      "body": {
+        "model": "gpt-6.1-sol",
+        "client_metadata": {
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "turn_id": "00000000-0000-4000-8000-000000000013",
+          "thread_id": "00000000-0000-4000-8000-000000000011",
+          "root_turn_id": "00000000-0000-4000-8000-000000000003",
+          "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000001",
+          "x-openai-subagent": "collab_spawn",
+          "parent_turn_id": "00000000-0000-4000-8000-000000000003",
+          "x-codex-installation-id": "00000000-0000-4000-8000-000000000021",
+          "x-codex-window-id": "00000000-0000-4000-8000-000000000011:0",
+          "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000011\",\"agent_name\":\"/root/child_two\",\"turn_id\":\"00000000-0000-4000-8000-000000000013\",\"window_id\":\"00000000-0000-4000-8000-000000000011:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000012\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553661,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}"
+        },
+        "input": [
+          {
+            "type": "agent_message",
+            "id": "amsg_00000000-0000-4000-8000-000000000018",
+            "author": "/root",
+            "recipient": "/root/child_two",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Message Type: NEW_TASK\nTask name: /root/child_two\nSender: /root\nPayload:\n"
+              },
+              {
+                "type": "encrypted_content",
+                "encrypted_content": "Reply probe done, use no tools."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "headers": {
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000009:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000009\",\"agent_name\":\"/root/child_one/nested\",\"turn_id\":\"00000000-0000-4000-8000-000000000014\",\"window_id\":\"00000000-0000-4000-8000-000000000009:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000010\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000004\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000006\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553661,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000004",
+        "x-openai-subagent": "collab_spawn",
+        "originator": "codex_exec",
+        "user-agent": "codex_exec/0.163.0 (<platform>; <arch>) <terminal> (codex_exec; 0.163.0)"
+      },
+      "body": {
+        "model": "gpt-6.1-sol",
+        "client_metadata": {
+          "root_turn_id": "00000000-0000-4000-8000-000000000003",
+          "thread_id": "00000000-0000-4000-8000-000000000009",
+          "x-codex-window-id": "00000000-0000-4000-8000-000000000009:0",
+          "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000009\",\"agent_name\":\"/root/child_one/nested\",\"turn_id\":\"00000000-0000-4000-8000-000000000014\",\"window_id\":\"00000000-0000-4000-8000-000000000009:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000010\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"parent_thread_id\":\"00000000-0000-4000-8000-000000000004\",\"parent_turn_id\":\"00000000-0000-4000-8000-000000000006\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"subagent_kind\":\"thread_spawn\",\"thread_source\":\"subagent\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553661,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "turn_id": "00000000-0000-4000-8000-000000000014",
+          "x-codex-parent-thread-id": "00000000-0000-4000-8000-000000000004",
+          "x-openai-subagent": "collab_spawn",
+          "x-codex-installation-id": "00000000-0000-4000-8000-000000000021",
+          "parent_turn_id": "00000000-0000-4000-8000-000000000006"
+        },
+        "input": [
+          {
+            "type": "agent_message",
+            "id": "amsg_00000000-0000-4000-8000-000000000017",
+            "author": "/root/child_one",
+            "recipient": "/root/child_one/nested",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Message Type: NEW_TASK\nTask name: /root/child_one/nested\nSender: /root/child_one\nPayload:\n"
+              },
+              {
+                "type": "encrypted_content",
+                "encrypted_content": "Reply probe done, use no tools."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "headers": {
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+        "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553577,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+        "originator": "codex_exec",
+        "user-agent": "codex_exec/0.163.0 (<platform>; <arch>) <terminal> (codex_exec; 0.163.0)"
+      },
+      "body": {
+        "model": "gpt-6.1-sol",
+        "client_metadata": {
+          "x-codex-turn-metadata": "{\"installation_id\":\"00000000-0000-4000-8000-000000000021\",\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"thread_id\":\"00000000-0000-4000-8000-000000000001\",\"agent_name\":\"/root\",\"turn_id\":\"00000000-0000-4000-8000-000000000003\",\"window_id\":\"00000000-0000-4000-8000-000000000001:0\",\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000002\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"00000000-0000-4000-8000-000000000003\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"seatbelt\",\"sandbox_mode\":\"read-only\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":true,\"node_repl_disabled\":false,\"turn_started_at_unix_ms\":1792733553577,\"analytics_enabled\":true,\"model\":\"gpt-6.1-sol\",\"reasoning_effort\":\"low\"}",
+          "thread_id": "00000000-0000-4000-8000-000000000001",
+          "x-codex-window-id": "00000000-0000-4000-8000-000000000001:0",
+          "turn_id": "00000000-0000-4000-8000-000000000003",
+          "session_id": "00000000-0000-4000-8000-000000000001",
+          "root_turn_id": "00000000-0000-4000-8000-000000000003",
+          "x-codex-installation-id": "00000000-0000-4000-8000-000000000021"
+        },
+        "input": [
+          {
+            "type": "function_call",
+            "id": "fc_1",
+            "name": "spawn_agent",
+            "namespace": "collaboration",
+            "arguments": "{\"task_name\": \"child_one\", \"message\": \"Reply probe done, use no tools.\", \"fork_turns\": \"none\"}",
+            "call_id": "call_spawn_child_one"
+          },
+          {
+            "type": "function_call_output",
+            "id": "fco_00000000-0000-4000-8000-000000000007",
+            "call_id": "call_spawn_child_one",
+            "output": "{\"task_name\":\"/root/child_one\"}"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_2",
+            "name": "spawn_agent",
+            "namespace": "collaboration",
+            "arguments": "{\"task_name\": \"child_two\", \"message\": \"Reply probe done, use no tools.\", \"fork_turns\": \"none\"}",
+            "call_id": "call_spawn_child_two"
+          },
+          {
+            "type": "function_call_output",
+            "id": "fco_00000000-0000-4000-8000-000000000015",
+            "call_id": "call_spawn_child_two",
+            "output": "{\"task_name\":\"/root/child_two\"}"
+          },
+          {
+            "type": "function_call",
+            "id": "fc_4",
+            "name": "wait_agent",
+            "namespace": "collaboration",
+            "arguments": "{\"timeout_ms\": 10000}",
+            "call_id": "call_wait"
+          },
+          {
+            "type": "function_call_output",
+            "id": "fco_00000000-0000-4000-8000-000000000019",
+            "call_id": "call_wait",
+            "output": "{\"message\":\"Wait completed.\",\"timed_out\":false}"
+          },
+          {
+            "type": "agent_message",
+            "id": "amsg_00000000-0000-4000-8000-000000000020",
+            "author": "/root/child_one",
+            "recipient": "/root",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/child_one\nPayload:\n"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "hooks": [
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "child_one",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_use_id": "call_spawn_child_one"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "child_two",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_use_id": "call_spawn_child_two"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000013",
+      "agent_id": "00000000-0000-4000-8000-000000000011",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "printf child-probe"
+      },
+      "tool_use_id": "call_child_shell"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "child_two",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_response": "{\"task_name\":\"/root/child_two\"}",
+      "tool_use_id": "call_spawn_child_two"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000014",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStart",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "agent_id": "00000000-0000-4000-8000-000000000009",
+      "agent_type": "default"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "child_one",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_response": "{\"task_name\":\"/root/child_one\"}",
+      "tool_use_id": "call_spawn_child_one"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000006",
+      "agent_id": "00000000-0000-4000-8000-000000000004",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "nested",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_use_id": "call_spawn_nested"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000006",
+      "transcript_path": null,
+      "agent_transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStop",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "stop_hook_active": false,
+      "agent_id": "00000000-0000-4000-8000-000000000004",
+      "agent_type": "default",
+      "last_assistant_message": null
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000013",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStart",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "agent_id": "00000000-0000-4000-8000-000000000011",
+      "agent_type": "default"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationwait_agent",
+      "tool_input": {
+        "timeout_ms": 10000
+      },
+      "tool_response": "{\"message\":\"Wait completed.\",\"timed_out\":false}",
+      "tool_use_id": "call_wait"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000003",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PreToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationwait_agent",
+      "tool_input": {
+        "timeout_ms": 10000
+      },
+      "tool_use_id": "call_wait"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000006",
+      "agent_id": "00000000-0000-4000-8000-000000000004",
+      "agent_type": "default",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "PostToolUse",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "tool_name": "collaborationspawn_agent",
+      "tool_input": {
+        "task_name": "nested",
+        "message": "Reply probe done, use no tools.",
+        "fork_turns": "none"
+      },
+      "tool_response": "{\"task_name\":\"/root/child_one/nested\"}",
+      "tool_use_id": "call_spawn_nested"
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000014",
+      "transcript_path": null,
+      "agent_transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStop",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "stop_hook_active": false,
+      "agent_id": "00000000-0000-4000-8000-000000000009",
+      "agent_type": "default",
+      "last_assistant_message": null
+    },
+    {
+      "session_id": "00000000-0000-4000-8000-000000000001",
+      "turn_id": "00000000-0000-4000-8000-000000000006",
+      "transcript_path": null,
+      "cwd": "<workspace>",
+      "hook_event_name": "SubagentStart",
+      "model": "gpt-6.1-sol",
+      "permission_mode": "bypassPermissions",
+      "agent_id": "00000000-0000-4000-8000-000000000004",
+      "agent_type": "default"
+    }
+  ]
+}

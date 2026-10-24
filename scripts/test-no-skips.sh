@@ -201,6 +201,16 @@ fi
 #       identity opens (TestASecureEnclaveRecipientEncryptsWithNoPlugin), and
 #       every other path of the bundle is exercised with an X25519 identity.
 #
+#   TestOAI020InstalledCodexHTTPProbe
+#       OAI-020. It invokes an installed Codex CLI against a synthetic local
+#       Responses provider with a synthetic API key. Codex is an operator
+#       binary, not a Go or CI dependency, so the probe is opt-in rather than
+#       making the whole suite depend on its installation. Run it with
+#       INNSEGL_CODEX_PROBE=1 go test ./internal/client -run
+#       '^TestOAI020InstalledCodexHTTPProbe$' -count=1. The probe was run on
+#       the implementation workstation; ordinary CI continues to cover its
+#       routing configuration and wire handling with deterministic tests.
+#
 #   TestOPS208AnInPlaceUpdateKeepsTheDevStacksDataAndServesTheNewSurface
 #   TestOPS209AnUnlockKeyAloneUnlocksTheDevStack
 #       #617, ADR-0082. They run against a dev stack the developer brought up
@@ -214,7 +224,7 @@ fi
 #       carries the command, and the rehearsal that ran them is recorded on
 #       #617.
 #
-ALLOWED='TestOPS208AnInPlaceUpdateKeepsTheDevStacksDataAndServesTheNewSurface|TestOPS209AnUnlockKeyAloneUnlocksTheDevStack|TestASecureEnclaveIdentityOpensABundle|TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures|TestGenerateV5Fixtures'
+ALLOWED='TestOPS208AnInPlaceUpdateKeepsTheDevStacksDataAndServesTheNewSurface|TestOPS209AnUnlockKeyAloneUnlocksTheDevStack|TestASecureEnclaveIdentityOpensABundle|TestSEG002CrashChild|TestINIT008SigningPathAgainstRealSPIREFulcioRekor|TestGH001NoContributorAppearsForAnUnlinkedAuthor|TestGH003ACommitClaimingAnAgentIdentityCarriesAnAgentSignature|TestGenerateV2Fixtures|TestGenerateV3Fixtures|TestGenerateV4Fixtures|TestGenerateV5Fixtures|TestOAI020InstalledCodexHTTPProbe'
 
 unexpected=$(grep -F '"Action":"skip"' "${out}" | grep -F '"Test":' | grep -Ev "\"Test\":\"(${ALLOWED})\"" || true)
 skipped=$(printf '%s' "${unexpected}" | grep -c . || true)

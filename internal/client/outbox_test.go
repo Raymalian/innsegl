@@ -78,7 +78,14 @@ func deliveryRoutes(t *testing.T, mux *http.ServeMux, a *arrivals, answer func(k
 	})
 }
 
-func telemetryBody(n int) string { return `{"resourceLogs":[],"n":` + strconv.Itoa(n) + `}` }
+func telemetryBody(n int) string {
+	return `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"claude_code.tool_result"},"attributes":[{"key":"event.name","value":{"stringValue":"claude_code.tool_result"}},{"key":"tool_use_id","value":{"stringValue":"toolu_telemetry_` + strconv.Itoa(n) + `"}},{"key":"tool_name","value":{"stringValue":"Bash"}},{"key":"success","value":{"boolValue":true}},{"key":"session.id","value":{"stringValue":"session"}}]}]}]}]}`
+}
+
+func postTelemetryJSON(t *testing.T, url, body string) (int, http.Header, string) {
+	t.Helper()
+	return postJSON(t, url, body, map[string]string{"Content-Type": "application/json"})
+}
 
 // Items of every kind held while the core is down reach it in the order
 // they were held, once it answers.
@@ -90,7 +97,7 @@ func TestOutboxDeliversEveryKindOldestFirst(t *testing.T) {
 	postJSON(t, front.URL+SessionStatementPath, repoStatement(jrnRepoSession), nil)
 	core.Stop()
 
-	if status, _, _ := postJSON(t, front.URL+TelemetryLogsPath, telemetryBody(1), nil); status != http.StatusOK {
+	if status, _, _ := postTelemetryJSON(t, front.URL+TelemetryLogsPath, telemetryBody(1)); status != http.StatusOK {
 		t.Fatalf("telemetry while the core is down: %d, want 200 (held)", status)
 	}
 	if status, _, _ := postJSON(t, front.URL+"/v1/messages", `{"messages":[]}`, modelHeaders(jrnRepoSession)); status != http.StatusOK {
@@ -99,7 +106,7 @@ func TestOutboxDeliversEveryKindOldestFirst(t *testing.T) {
 	if status, _, _ := postJSON(t, front.URL+SessionEndPath, `{"session_id":"`+jrnRepoSession+`"}`, nil); status != http.StatusAccepted {
 		t.Fatalf("session end while the core is down: %d, want 202 (held)", status)
 	}
-	if status, _, _ := postJSON(t, front.URL+TelemetryLogsPath, telemetryBody(2), nil); status != http.StatusOK {
+	if status, _, _ := postTelemetryJSON(t, front.URL+TelemetryLogsPath, telemetryBody(2)); status != http.StatusOK {
 		t.Fatalf("telemetry while the core is down: %d", status)
 	}
 	st := srv.outbox.status()
@@ -157,9 +164,9 @@ func TestOutboxStopsAtTheFirstItemTheCoreDoesNotTake(t *testing.T) {
 	})
 	srv, front, logs := startClient(t, paths)
 	core.Stop()
-	postJSON(t, front.URL+TelemetryLogsPath, telemetryBody(1), nil)
+	postTelemetryJSON(t, front.URL+TelemetryLogsPath, telemetryBody(1))
 	postJSON(t, front.URL+SessionEndPath, `{"session_id":"s-1"}`, nil)
-	postJSON(t, front.URL+TelemetryLogsPath, telemetryBody(2), nil)
+	postTelemetryJSON(t, front.URL+TelemetryLogsPath, telemetryBody(2))
 	postJSON(t, front.URL+SessionEndPath, `{"session_id":"s-2"}`, nil)
 	if n := srv.outbox.status().Items; n != 4 {
 		t.Fatalf("held %d, want 4", n)
@@ -217,10 +224,10 @@ func TestOutboxBoundDropsTelemetryBeforeRefusingAModelRequest(t *testing.T) {
 	postJSON(t, front.URL+SessionStatementPath, repoStatement(jrnRepoSession), nil)
 	core.Close()
 
-	export := `{"pad":"` + strings.Repeat("x", 1000) + `"}`
+	export := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"claude_code.tool_result"},"attributes":[{"key":"event.name","value":{"stringValue":"claude_code.tool_result"}},{"key":"tool_use_id","value":{"stringValue":"toolu_large_export"}},{"key":"tool_name","value":{"stringValue":"` + strings.Repeat("x", 1000) + `"}},{"key":"success","value":{"boolValue":true}}]}]}]}]}`
 	held := 0
 	for range 20 {
-		status, _, _ := postJSON(t, front.URL+TelemetryLogsPath, export, nil)
+		status, _, _ := postTelemetryJSON(t, front.URL+TelemetryLogsPath, export)
 		if status != http.StatusOK {
 			if status != http.StatusServiceUnavailable {
 				t.Fatalf("telemetry past the bound: %d, want 503", status)
@@ -425,7 +432,7 @@ func TestOutboxStatusReportsKindsBytesAndOldest(t *testing.T) {
 	_, front, _ := startJournalClient(t, paths, newProvider(t), ServerOptions{OutboxMaxBytes: 1 << 20})
 	postJSON(t, front.URL+SessionStatementPath, repoStatement(jrnRepoSession), nil)
 	core.Stop()
-	postJSON(t, front.URL+TelemetryLogsPath, telemetryBody(1), nil)
+	postTelemetryJSON(t, front.URL+TelemetryLogsPath, telemetryBody(1))
 	postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession))
 	postJSON(t, front.URL+SessionEndPath, `{"session_id":"s-1"}`, nil)
 
@@ -555,7 +562,7 @@ func TestOutboxARejectedExchangeDoesNotHoldBackEndsOrTelemetry(t *testing.T) {
 	core.Stop()
 	postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession))
 	postJSON(t, front.URL+SessionEndPath, `{"session_id":"`+jrnRepoSession+`"}`, nil)
-	postJSON(t, front.URL+TelemetryLogsPath, telemetryBody(1), nil)
+	postTelemetryJSON(t, front.URL+TelemetryLogsPath, telemetryBody(1))
 	if st := srv.outbox.status(); st.Items != 3 {
 		t.Fatalf("held %+v, want an exchange, an end and an export", st)
 	}

@@ -291,6 +291,9 @@ func (im *JournalImporter) importOne(
 	case out.Refusal != nil:
 		res.Status = clientjournal.ImportStored
 		res.Reason = fmt.Sprintf("not recorded: the replayed request was refused (%d): %s", out.Refusal.Status, out.Refusal.Reason)
+	case out.ObservationProblem != "":
+		res.Status = clientjournal.ImportStored
+		res.Reason = "not recorded: the request observation is incomplete: " + out.ObservationProblem
 	case out.RunID != "":
 		res.Status = clientjournal.ImportRecorded
 	case out.UnrecordedRepo != "":

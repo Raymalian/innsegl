@@ -208,6 +208,7 @@
       "input": "{\"command\":\"golangci-lint run ./internal/reconciler/ ./internal/api/\"}",
       "output": "0 issues.",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -237,6 +238,7 @@
       "input": "{\"command\":\"sed -i … && scripts/innsegl-commit.sh -p internal/api/recordhandler_test.go -F m8.txt\"}",
       "output": "innsegl-commit: signed 8619ee7",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -266,6 +268,7 @@
       "input": "{\"command\":\"gh issue create --title \\\"RM-273 …\\\"\"}",
       "output": "https://github.com/Raymalian/innsegl/issues/436",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -295,6 +298,7 @@
       "input": "{\"description\":\"Read hook-format step bodies\",\"prompt\":\"You are fixing GitHub issue #436 (RM-273) …\"}",
       "output": "",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -324,6 +328,7 @@
       "input": "{\"description\":\"Baseline snapshot before first step\",\"prompt\":\"You are fixing GitHub issue #437 (RM-274) …\"}",
       "output": "",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",

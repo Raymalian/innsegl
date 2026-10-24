@@ -158,6 +158,7 @@ func (s Sealed) Open(pub crypto.PublicKey) (Entry, error) {
 var droppedHeaders = map[string]bool{
 	"Authorization": true, "X-Api-Key": true, "Cookie": true, "Set-Cookie": true,
 	"Proxy-Authorization": true, "Proxy-Authenticate": true,
+	"Chatgpt-Account-Id": true, "X-Gateway-Key": true,
 	"Connection": true, "Keep-Alive": true, "Te": true, "Trailer": true,
 	"Transfer-Encoding": true, "Upgrade": true,
 	"X-Innsegl-Statement": true,

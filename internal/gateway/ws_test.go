@@ -162,8 +162,11 @@ type recordedFrame struct {
 // same opcode and payload straight back. A close frame ends that
 // connection's loop after the echo.
 type echoWSUpstream struct {
-	mu       sync.Mutex
-	received []recordedFrame
+	mu        sync.Mutex
+	received  []recordedFrame
+	path      string
+	auth      string
+	onConnect func(io.Writer)
 }
 
 func (u *echoWSUpstream) recorded() []recordedFrame {
@@ -187,6 +190,9 @@ func (u *echoWSUpstream) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = conn.Close() }()
+	u.mu.Lock()
+	u.path, u.auth = r.URL.Path, r.Header.Get("Authorization")
+	u.mu.Unlock()
 
 	accept := wsAcceptKey(r.Header.Get("Sec-WebSocket-Key"))
 	resp := "HTTP/1.1 101 Switching Protocols\r\n" +
@@ -198,6 +204,12 @@ func (u *echoWSUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := rw.Flush(); err != nil {
 		return
+	}
+	if u.onConnect != nil {
+		u.onConnect(rw)
+		if err := rw.Flush(); err != nil {
+			return
+		}
 	}
 
 	for {
@@ -916,5 +928,38 @@ func TestWriteSwitchingProtocolsResponseFailsWhenTheConnectionIsGone(t *testing.
 
 	if err := writeSwitchingProtocolsResponse(bw, http.Header{"Upgrade": {"websocket"}}); err == nil {
 		t.Error("writeSwitchingProtocolsResponse succeeded writing to a closed connection, want an error")
+	}
+}
+
+func TestWriteUpgradeRequestStripsGatewayOnlyHeaders(t *testing.T) {
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+	target, err := url.Parse("https://provider.example/backend-api/codex/responses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/backend-api/codex/responses", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set(StatementHeader, "workspace-secret")
+	req.Header.Set("X-Gateway-Key", "gateway-secret")
+	req.Header.Set("Authorization", "Bearer provider-canary")
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- writeUpgradeRequest(server, req, target) }()
+	parsed, err := http.ReadRequest(bufio.NewReader(client))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Header.Get(StatementHeader); got != "" {
+		t.Errorf("workspace statement leaked to provider: %q", got)
+	}
+	if got := parsed.Header.Get("X-Gateway-Key"); got != "" {
+		t.Errorf("gateway credential leaked to provider: %q", got)
+	}
+	if got := parsed.Header.Get("Authorization"); got != "Bearer provider-canary" {
+		t.Errorf("provider credential=%q, want preserved provider credential", got)
 	}
 }

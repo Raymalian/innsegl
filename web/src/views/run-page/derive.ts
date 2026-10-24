@@ -74,9 +74,9 @@ export function firstDisagreeingStep(record: RunRecord): RecordStep | undefined 
  * mockup's "the gateway relayed a tool call the harness's telemetry never
  * reported", generalised to the other shapes a disagreement can take. */
 export function disagreementReason(w: RecordWitnesses): "telemetry-missing" | "gateway-missing" | "snapshot" | "generic" {
-  if (w.gateway === "present" && w.telemetry !== "matched") return "telemetry-missing";
+  if (w.gateway === "present" && (w.telemetry === "missing" || w.telemetry === "pending")) return "telemetry-missing";
   if (w.gateway === "missing") return "gateway-missing";
-  if (w.snapshot === "none") return "snapshot";
+  if (w.snapshot === "none" || w.snapshot === "error") return "snapshot";
   return "generic";
 }
 
@@ -273,7 +273,7 @@ export function parseInlineMarkdown(text: string): InlineToken[] {
 /* ── step rows: what opens by default, and what collapses ────────────────── */
 
 export function stepFailed(step: RecordStep): boolean {
-  return step.outcome.kind !== "ok";
+	return step.outcome.kind === "error" || step.outcome.kind === "refused";
 }
 
 /** A step this run wrote a file in: named by the run-level `written` list
@@ -294,6 +294,8 @@ export function stepHasCommit(step: RecordStep): boolean {
 export function stepOpensByDefault(record: RunRecord, step: RecordStep): boolean {
   return (
     stepFailed(step) ||
+    step.outcome.kind === "unknown" ||
+    step.observation_incomplete ||
     stepWroteFile(record, step) ||
     stepHasCommit(step) ||
     !stepWitnessesAgree(step.witnesses)

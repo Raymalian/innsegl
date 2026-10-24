@@ -375,6 +375,7 @@ func (rs *recordServer) buildSteps(
 			step.ToolUseID = body.ToolUseID
 			step.Input = string(body.Input)
 			step.Truncated = body.InputTruncated || body.ResultTruncated
+			step.ObservationIncomplete = body.ObservationIncomplete
 			if body.ResultObserved {
 				if text, ok := resultText(body.Result); ok {
 					step.Output = text
@@ -522,7 +523,7 @@ func outcomeOf(toolName string, body gatewayBody) RecordOutcome {
 	if body.hookShape {
 		return body.hookOutcome
 	}
-	if !body.ResultObserved {
+	if !body.ResultObserved || body.ErrorSignal == "unknown" {
 		return RecordOutcome{Kind: "unknown"}
 	}
 	kind := "ok"
