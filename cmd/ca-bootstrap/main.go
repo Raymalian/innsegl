@@ -177,6 +177,7 @@ func envOr(name, fallback string) string {
 // however the path is spelled — os.Root enforces that in the kernel calls
 // rather than in a check a later edit can drift past.
 func copyConfig(src, dstDir, name string) error {
+	// #nosec G703 -- src is an operator-supplied source file path; the bootstrap must read the configured file as named.
 	body, err := os.ReadFile(filepath.Clean(src))
 	if err != nil {
 		return fmt.Errorf("reading the issuer config at %s: %w", src, err)
@@ -220,6 +221,7 @@ func copyIssuerConfig(out string) error {
 // mid-bootstrap or a broken volume, and minting over it would replace a root
 // that is about to exist with one nothing has seen.
 func adoptExistingRoot(src, out string) (bool, error) {
+	// #nosec G703 -- src is an operator-supplied existing-root path; reading that configured file is intentional.
 	body, err := os.ReadFile(filepath.Clean(src))
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
