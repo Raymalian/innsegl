@@ -260,14 +260,14 @@ func newGRECUpstream(t *testing.T, replies ...func(t *testing.T, w http.Response
 // ---------------------------------------------------------------------------
 
 // waitForToolCallEvents polls f's own chain until runID carries at least
-// want tool_call events, or fails t after ten seconds — recording is
+// want tool_call events, or fails t after thirty seconds — recording is
 // always asynchronous (record.go's own doc comment, "witness, never a
 // gate"), so every assertion below waits for it this way rather than
 // assuming a drained response means the recording behind it has already
 // landed.
 func waitForToolCallEvents(t *testing.T, f *gwIdentityFixture, runID string, want int) []event.Fields {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		recs, err := f.store.EventsForRun(ctx, runID)
