@@ -54,7 +54,7 @@ export interface RecordOutcome {
 
 export interface RecordWitnesses {
   gateway: "present" | "missing";
-  snapshot: "changed" | "unchanged" | "none" | "inactive";
+  snapshot: "changed" | "unchanged" | "none" | "error" | "inactive";
   telemetry: "matched" | "missing" | "pending" | "inactive";
 }
 
@@ -83,6 +83,7 @@ export interface RecordStep {
   input: string;
   output: string;
   truncated: boolean;
+  observation_incomplete: boolean;
   /** The record capped input or output; GET .../steps/{n} serves it in full (#440). */
   clipped: boolean;
   outcome: RecordOutcome;

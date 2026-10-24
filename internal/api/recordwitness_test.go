@@ -79,6 +79,10 @@ func TestRPG005StepWitnessesSnapshot(t *testing.T) {
 			}
 		})
 	}
+	w := stepWitnesses("", gatewayBody{SnapshotError: true}, true, "", "", false, time.Time{}, now, now, time.Minute)
+	if w.Snapshot != "error" {
+		t.Errorf("failed snapshot attempt = %q, want error", w.Snapshot)
+	}
 }
 
 func TestRPG005StepWitnessesTelemetryIntegration(t *testing.T) {

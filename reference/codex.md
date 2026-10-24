@@ -15,9 +15,18 @@ Session and thread values come from Codex's hook and request metadata. The core
 checks them against the observed spawn and pending call; they are attribution
 assertions rather than cryptographic credentials for isolating hostile processes
 inside one enrolled installation.
-Responses WebSocket capture and an OTel witness are not provided. Commit signing
-is an experimental opt-in described below. A transport probe is not proof of
-signing or provider feature parity. Unsupported client versions are refused.
+The launcher selects HTTP/SSE by setting `supports_websockets=false`; the
+installed Codex 0.163.0 API-key probe completed over HTTP without attempting a
+WebSocket upgrade. The gateway also accepts Responses WebSocket upgrades on
+the exact API and ChatGPT route paths. It observes complete upstream JSON
+events, pairs client `response.create` tool outputs, reassembles bounded
+text-message fragments, and marks known calls incomplete when a connection
+ends before their complete event. The frame relay remains byte-for-byte. The
+gateway records Codex tool-result and denied/aborted
+tool-decision OTel events when OTel is enabled. The run page labels incomplete
+Responses observations explicitly. Commit signing is an experimental opt-in
+described below. Synthetic transport probes do not establish every provider
+feature or auth-refresh behavior. Unsupported client versions are refused.
 
 ## Commands
 
@@ -104,17 +113,22 @@ ambiguity and commit observation. Signing launcher tests also require trusted
 hook selection; replay tests preserve the original signing lifetime.
 OAI-008/010 cover format and upstream separation; OAI-011 covers journal redaction.
 OAI-020 is an opt-in installed-CLI HTTP probe against a synthetic provider through
-the real gateway route. OAI-023–025 cover capability negotiation, provider selection
-and missing lifecycle statements. Run the probe with:
+the real gateway route; it asserts that the supported CLI does not attempt a
+WebSocket upgrade. OAI-022 verifies complete and fragmented Responses WebSocket
+events, connection-end observations, and the routed handshake. OAI-024 also verifies the fixed model-catalog routes for API
+and ChatGPT endpoints. OAI-023–025 cover capability negotiation, provider
+selection, missing lifecycle statements and explicit incomplete observations.
+Run the probe with:
 
 ```sh
 INNSEGL_CODEX_PROBE=1 go test ./internal/client -run TestOAI020 -v -count=1
 ```
 
 This uses a temporary CLI home and synthetic key, not a deployed identity service
-or a live model provider. Interrupted/malformed reply streams may leave incomplete
-observations; complete durable gap reporting remains pending. Do not treat capture
-as an attestation that every action or successful result has been witnessed.
+or a live model provider. Interrupted and malformed reply streams with a known
+tool-call ID are stored as incomplete, input-free observations and shown as a
+warning on the run page. An unknown tool-call ID remains unknown. Do not treat
+capture as an attestation that every action or successful result has been witnessed.
 
 ## Decisions
 

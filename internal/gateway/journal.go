@@ -120,6 +120,10 @@ type ReplayOutcome struct {
 	// UnrecordedRepo names the repository the exchange was not recorded in
 	// (an installation that may not record it).
 	UnrecordedRepo string
+	// ObservationProblem is a safe, bounded explanation for why the replay
+	// could not fully interpret the journaled request. A run ID alone does
+	// not turn such an exchange into a successful recording.
+	ObservationProblem string
 }
 
 // Replayer replays one journaled exchange. *Proxy is one.
@@ -150,10 +154,16 @@ func (p *Proxy) replay(r *http.Request, contentType string, reply []byte) Replay
 			r = next
 		}
 	}
-	out := ReplayOutcome{UnrecordedRepo: unrecordedRepo(r.Context())}
+	out := ReplayOutcome{
+		UnrecordedRepo:     unrecordedRepo(r.Context()),
+		ObservationProblem: observationProblem(r.Context()),
+	}
 	out.RunID, _ = RunIDFromContext(r.Context())
 	if obs := p.replyObserver(r, contentType); obs != nil {
 		discardWriteError(obs.Write(reply))
+		if finisher, ok := obs.(interface{ Finish() }); ok {
+			finisher.Finish()
+		}
 	}
 	return out
 }
@@ -183,6 +193,28 @@ func (p *Proxy) replyObserver(r *http.Request, contentType string) io.Writer {
 	}
 	p.watchSubagentEnd(r.Context(), interp)
 	return interp
+}
+
+func (p *Proxy) responsesWebSocketObserver(r *http.Request) FrameObserver {
+	if p.Frames == nil && p.ToolUse == nil && p.ReplyText == nil {
+		return nil
+	}
+	var observer ToolUseObserver
+	if p.ToolUse != nil {
+		observer = boundToolUseObserver(r.Context(), p.ToolUse)
+	}
+	frames := newResponsesWebSocketObserver(observer)
+	frames.frames = p.Frames
+	if messages, ok := p.ToolUse.(ResponsesWebSocketMessageObserver); ok {
+		frames.messages = messages
+	}
+	frames.ctx = r.Context()
+	if p.ReplyText != nil {
+		ctx := r.Context()
+		frames.onText = func(text string) { p.ReplyText.OnReplyText(ctx, text) }
+		frames.current.onText = frames.onText
+	}
+	return frames
 }
 
 // SubagentEndRecorder is told that a subagent finished (SessionEnder).

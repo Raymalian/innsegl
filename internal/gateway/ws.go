@@ -96,6 +96,9 @@ const (
 type Frame struct {
 	Direction Direction
 	Opcode    Opcode
+	// Fin is the RFC 6455 FIN bit. Message parsers wait for the final
+	// fragment before interpreting a payload.
+	Fin bool
 	// Payload holds at most maxObservedFramePayload bytes of the frame's
 	// payload -- see that constant's own doc comment. It is never more than
 	// what was actually relayed, and the relay itself is never bounded by
@@ -123,6 +126,14 @@ type Frame struct {
 // single ordered view across both synchronizes itself.
 type FrameObserver interface {
 	OnFrame(Frame)
+}
+
+// frameBeforeForwardObserver is an optional causal hook for protocols where
+// the peer can act as soon as a complete frame is delivered. The ordinary
+// FrameObserver callback still runs after forwarding and remains the witness
+// contract for every existing observer.
+type frameBeforeForwardObserver interface {
+	OnFrameBeforeForward(Frame)
 }
 
 // FrameObserverFunc adapts an ordinary func to a FrameObserver.
@@ -164,6 +175,10 @@ func isWebSocketUpgrade(r *http.Request) bool {
 // http.Flusher in proxy.go; an unusual wrapper that is not one gets a clean
 // JSON refusal instead of a panic.
 func (p *Proxy) relayWebSocket(w http.ResponseWriter, r *http.Request) {
+	p.relayWebSocketWithObserver(w, r, p.Frames)
+}
+
+func (p *Proxy) relayWebSocketWithObserver(w http.ResponseWriter, r *http.Request, observer FrameObserver) {
 	tlsConfig, ok := upstreamTLSConfig(p.Upstream)
 	if !ok {
 		writeGatewayError(w, http.StatusBadGateway,
@@ -231,7 +246,7 @@ func (p *Proxy) relayWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	relayFrames(clientRW.Reader, clientConn, upstreamReader, upstreamConn, p.Frames)
+	relayFrames(clientRW.Reader, clientConn, upstreamReader, upstreamConn, observer)
 }
 
 // upstreamTLSConfig extracts the *tls.Config the SAME Upstream.Client
@@ -299,6 +314,11 @@ func stripHopByHopKeepingUpgrade(h http.Header) {
 func writeUpgradeRequest(conn net.Conn, r *http.Request, target *url.URL) error {
 	header := cloneHeader(r.Header)
 	stripHopByHopKeepingUpgrade(header)
+	// These are for the local core/client boundary only. The ordinary HTTP
+	// request builder strips both before contacting a provider; WebSocket
+	// upgrades must enforce the same credential and workspace boundary.
+	header.Del(StatementHeader)
+	header.Del("X-Gateway-Key")
 	header.Set("Host", target.Host)
 
 	requestURI := target.EscapedPath()
@@ -362,6 +382,9 @@ func relayFrames(clientReader *bufio.Reader, clientConn net.Conn,
 	_ = clientConn.Close()
 	_ = upstreamConn.Close()
 	<-done
+	if finisher, ok := observer.(interface{ Finish() }); ok {
+		finisher.Finish()
+	}
 }
 
 // copyFrames reads frames from src and writes each one, unchanged, to dst,
@@ -388,6 +411,7 @@ func copyFrames(direction Direction, src *bufio.Reader, dst io.Writer, observer 
 // harness's event format, and this file never parses one.
 type wsFrameHeader struct {
 	opcode  Opcode
+	fin     bool
 	masked  bool
 	maskKey [4]byte
 	length  uint64
@@ -406,6 +430,7 @@ func readFrameHeader(r *bufio.Reader) (wsFrameHeader, []byte, error) {
 
 	header := wsFrameHeader{
 		opcode: Opcode(first[0] & 0x0f),
+		fin:    first[0]&0x80 != 0,
 		masked: first[1]&0x80 != 0,
 	}
 	length := uint64(first[1] & 0x7f)
@@ -469,6 +494,31 @@ const maxObservedFramePayload = 1 << 20 // 1 MiB
 // maxObservedFramePayload; the copy to dst below is not.
 func relayOneFrame(direction Direction, header wsFrameHeader, raw []byte,
 	src *bufio.Reader, dst io.Writer, observer FrameObserver) error {
+	if before, ok := observer.(frameBeforeForwardObserver); ok && header.length <= maxObservedFramePayload {
+		wirePayload := make([]byte, int(header.length))
+		if _, err := io.ReadFull(src, wirePayload); err != nil {
+			return err
+		}
+		observed := append([]byte(nil), wirePayload...)
+		if header.masked {
+			for i := range observed {
+				observed[i] ^= header.maskKey[i%4]
+			}
+		}
+		frame := Frame{Direction: direction, Opcode: header.opcode, Fin: header.fin,
+			Payload: observed, Length: header.length}
+		before.OnFrameBeforeForward(frame)
+		if _, err := dst.Write(raw); err != nil {
+			return err
+		}
+		if len(wirePayload) > 0 {
+			if _, err := dst.Write(wirePayload); err != nil {
+				return err
+			}
+		}
+		observer.OnFrame(frame)
+		return nil
+	}
 	if _, err := dst.Write(raw); err != nil {
 		return err
 	}
@@ -522,6 +572,7 @@ func relayOneFrame(direction Direction, header wsFrameHeader, raw []byte,
 		observer.OnFrame(Frame{
 			Direction: direction,
 			Opcode:    header.opcode,
+			Fin:       header.fin,
 			Payload:   observed,
 			Length:    header.length,
 			Truncated: truncated,

@@ -66,6 +66,11 @@ type Proxy struct {
 	// either way -- the same shape ToolUse already has for an Anthropic
 	// Messages reply.
 	Frames FrameObserver
+
+	// ResponsesWebSocket enables the Responses event observer on an
+	// already-routed Responses WebSocket request. The route sets this only
+	// for the exact configured Responses endpoints; guards still run first.
+	ResponsesWebSocket bool
 }
 
 // ServeHTTP builds the outbound request, sends it, and streams the reply
@@ -106,6 +111,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// before any upgrade is attempted, exactly as it already is before an
 	// ordinary request is forwarded.
 	if isWebSocketUpgrade(r) {
+		if p.ResponsesWebSocket {
+			p.relayWebSocketWithObserver(w, r, p.responsesWebSocketObserver(r))
+			return
+		}
 		p.relayWebSocket(w, r)
 		return
 	}
@@ -202,7 +211,8 @@ func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Respon
 		dst = w
 	}
 
-	if obs := p.replyObserver(r, resp.Header.Get("Content-Type")); obs != nil {
+	obs := p.replyObserver(r, resp.Header.Get("Content-Type"))
+	if obs != nil {
 		if isResponsesPath(r.URL.Path) {
 			dst = io.MultiWriter(obs, dst)
 		} else {
@@ -215,7 +225,11 @@ func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Respon
 	// wire, so there is nothing left to change, and this package logs
 	// nothing here either way (see the package doc comment on what never
 	// reaches a log). See discardCopyError.
-	discardCopyError(io.Copy(dst, resp.Body))
+	_, err := io.Copy(dst, resp.Body)
+	if finisher, ok := obs.(interface{ Finish() }); ok {
+		finisher.Finish()
+	}
+	discardCopyError(0, err)
 }
 
 // ContextToolUseObserver is a ToolUseObserver that also wants the request's

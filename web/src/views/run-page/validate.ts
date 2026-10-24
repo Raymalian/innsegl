@@ -60,7 +60,7 @@ const GATEWAY = ["present", "missing"];
 // recorded before the snapshot witness existed has nothing to say either,
 // which is not the same fact as "none" (a snapshot witness that ran and saw
 // nothing worth reporting).
-const SNAPSHOT = ["changed", "unchanged", "none", "inactive"];
+const SNAPSHOT = ["changed", "unchanged", "none", "error", "inactive"];
 const TELEMETRY = ["matched", "missing", "pending", "inactive"];
 const DIFF_LINE_KINDS = ["context", "add", "del"];
 const AGENT_ROLES = ["session", "subagent"];
@@ -162,6 +162,7 @@ function isRecordStep(v: unknown): v is RecordStep {
     isString(v["input"]) &&
     isString(v["output"]) &&
     isBoolean(v["truncated"]) &&
+    isBoolean(v["observation_incomplete"]) &&
     isBoolean(v["clipped"]) &&
     okOutcome &&
     isString(v["tree_before"]) &&

@@ -45,6 +45,14 @@ POST /api/v1/alert-resolutions/begin
 POST /api/v1/alert-resolutions/finish
 ```
 
+`GET /api/v1/runs/{run_id}/record` reports each step's snapshot witness as
+`changed`, `unchanged`, `none`, `error` or `inactive`. `error` means the
+gateway attempted a snapshot but could not produce one; `none` means no
+snapshot was taken for that step while the run had snapshot evidence, and
+`inactive` means the run had no snapshot witness. The underlying failure
+reason stays in gateway diagnostics; the retained tool-call body records only
+the boolean `snapshot_error` marker.
+
 ### Scoped reads
 
 Every ledger read answers only the viewer's runs: runs list, run pages and

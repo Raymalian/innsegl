@@ -38,9 +38,14 @@ func ResponsesRoutes(base *Proxy, api, chatgpt *Upstream) http.Handler {
 		if model {
 			method = http.MethodGet
 		}
-		if r.Method != method {
-			w.Header().Set("Allow", method)
-			writeGatewayError(w, http.StatusMethodNotAllowed, "innsegl gateway: this Responses route supports HTTP only")
+		websocket := !model && isWebSocketUpgrade(r)
+		if r.Method != method && !websocket {
+			allow := method
+			if !model {
+				allow += ", GET (WebSocket upgrade)"
+			}
+			w.Header().Set("Allow", allow)
+			writeGatewayError(w, http.StatusMethodNotAllowed, "innsegl gateway: unsupported method for this Responses route")
 			return
 		}
 		if up == nil {
@@ -54,6 +59,7 @@ func ResponsesRoutes(base *Proxy, api, chatgpt *Upstream) http.Handler {
 		selected.Client = &client
 		proxy := *base
 		proxy.Upstream = &selected
+		proxy.ResponsesWebSocket = websocket
 		if model {
 			proxy.Guards = []Guard{}
 			proxy.ToolUse = nil
@@ -71,7 +77,7 @@ func ResponsesCapabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "codex_versions": []string{"0.163.0"}, "agents": "linked-threads", "signing": true, "signing_mode": "structured"}); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http", "responses-websocket"}, "codex_versions": []string{"0.163.0"}, "agents": "linked-threads", "signing": true, "signing_mode": "structured"}); err != nil {
 		return
 	}
 }

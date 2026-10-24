@@ -71,6 +71,7 @@ export const strings = {
     exitCode: (code: number) => `exit ${code}`,
     failedExitCode: (code: number) => `failed · exit ${code}`,
     failedNoExitCode: "failed",
+    outcomeUnknown: "outcome unknown",
     /* The mockup's exact sentence is shown only when the record itself says
      * the step was refused (`outcome.kind === "refused"`) — this view cannot
      * truthfully claim a sandbox refusal for an ordinary "error" the contract
@@ -87,11 +88,13 @@ export const strings = {
     witnessSnapshotChanged: "tree changed as the diff shows",
     witnessSnapshotUnchanged: "tree unchanged",
     witnessSnapshotNone: "no snapshot taken",
+    witnessSnapshotError: "snapshot attempt failed",
     witnessSnapshotInactive: "no snapshots for this run",
     witnessTelemetryMatched: "matches the gateway's record",
     witnessTelemetryMissing: "no event for this tool call",
     witnessTelemetryPending: "not yet reported",
     witnessTelemetryInactive: "telemetry inactive for this run",
+    responseObservationIncomplete: "The response stream ended before this tool call was complete.",
     returned: "returned",
     newFile: "new file",
     modifiedFile: "modified",

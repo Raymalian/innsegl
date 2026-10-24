@@ -25,9 +25,18 @@ type responseItem struct {
 
 func responseItems(b []byte) ([]responseItem, error) {
 	var body struct {
-		Input json.RawMessage `json:"input"`
+		Input    json.RawMessage `json:"input"`
+		Response struct {
+			Input json.RawMessage `json:"input"`
+		} `json:"response"`
 	}
-	if json.Unmarshal(b, &body) != nil || len(body.Input) == 0 {
+	if json.Unmarshal(b, &body) != nil {
+		return nil, errResponsesShape
+	}
+	if len(body.Input) == 0 {
+		body.Input = body.Response.Input
+	}
+	if len(body.Input) == 0 {
 		return nil, errResponsesShape
 	}
 	var text string
@@ -127,19 +136,27 @@ func (responsesFormat) texts(b []byte) []string {
 // responsesInterpreter consumes SSE on a copy after forwarding. A completed
 // item is the authoritative whole call; deltas never become partial inputs.
 type responsesInterpreter struct {
-	scanner   *sseScanner
-	observer  ToolUseObserver
-	onText    func(string)
-	seen      map[string]bool
-	completed bool
+	scanner    *sseScanner
+	observer   ToolUseObserver
+	onText     func(string)
+	seen       map[string]bool
+	partial    map[string]responseItem
+	partialIDs []string
+	completed  bool
 }
 
 func newResponsesInterpreter(observer ToolUseObserver) *responsesInterpreter {
-	r := &responsesInterpreter{observer: observer, seen: map[string]bool{}}
+	r := &responsesInterpreter{observer: observer, seen: map[string]bool{}, partial: map[string]responseItem{}}
 	r.scanner = newSSEScanner(r.event)
 	return r
 }
 func (r *responsesInterpreter) Write(p []byte) (int, error) { r.scanner.write(p); return len(p), nil }
+func (r *responsesInterpreter) Finish() {
+	if !r.completed {
+		r.finishPartial()
+		r.completed = true
+	}
+}
 func (r *responsesInterpreter) event(event, data string) {
 	if r.completed {
 		return
@@ -162,8 +179,12 @@ func (r *responsesInterpreter) event(event, data string) {
 		event = e.Type
 	}
 	switch event {
+	case "response.output_item.added":
+		r.addPartial(e.Item)
 	case "response.output_item.done":
-		r.call(e.Item)
+		if r.call(e.Item, false) {
+			delete(r.partial, e.Item.CallID)
+		}
 	case "response.completed":
 		if e.Response.Status != "completed" {
 			return
@@ -172,7 +193,9 @@ func (r *responsesInterpreter) event(event, data string) {
 		var parts []string
 		size := 0
 		for _, item := range e.Response.Output {
-			r.call(item)
+			if r.call(item, false) {
+				delete(r.partial, item.CallID)
+			}
 			if item.Role == "assistant" {
 				text := responseText(item.Content)
 				size += len(text)
@@ -187,36 +210,64 @@ func (r *responsesInterpreter) event(event, data string) {
 		if r.onText != nil && len(parts) > 0 {
 			r.onText(strings.Join(parts, "\n\n"))
 		}
+		r.finishPartial()
 	case "response.failed", "response.incomplete":
+		r.finishPartial()
 		r.completed = true
 	}
 }
-func (r *responsesInterpreter) call(item responseItem) {
-	if (item.Type != "function_call" && item.Type != "custom_tool_call") || item.CallID == "" || item.Name == "" || r.seen[item.CallID] {
+func (r *responsesInterpreter) addPartial(item responseItem) {
+	if item.CallID == "" || item.Name == "" || (item.Type != "function_call" && item.Type != "custom_tool_call") || r.seen[item.CallID] {
 		return
+	}
+	if _, exists := r.partial[item.CallID]; !exists {
+		if len(r.partial) >= 4096 {
+			return
+		}
+		r.partialIDs = append(r.partialIDs, item.CallID)
+	}
+	r.partial[item.CallID] = item
+}
+
+func (r *responsesInterpreter) finishPartial() {
+	for _, id := range r.partialIDs {
+		if item, ok := r.partial[id]; ok {
+			r.call(item, true)
+			delete(r.partial, id)
+		}
+	}
+	r.partialIDs = nil
+}
+
+func (r *responsesInterpreter) call(item responseItem, observationIncomplete bool) bool {
+	if (item.Type != "function_call" && item.Type != "custom_tool_call") || item.CallID == "" || item.Name == "" || r.seen[item.CallID] {
+		return r.seen[item.CallID]
 	}
 	// Bound deduplication state as well as the scanner's frame buffers.
 	if len(r.seen) >= 4096 {
-		return
+		return false
 	}
 	var input json.RawMessage
-	truncated := false
-	if item.Type == "custom_tool_call" {
+	truncated := observationIncomplete
+	switch {
+	case observationIncomplete:
+		input = nil
+	case item.Type == "custom_tool_call":
 		if len(item.Input) > maxToolUseInputBytes {
 			truncated = true
 		} else {
 			var err error
 			input, err = json.Marshal(map[string]string{"input": item.Input})
 			if err != nil {
-				return
+				return false
 			}
 		}
-	} else {
+	default:
 		switch {
 		case len(item.Arguments) > maxToolUseInputBytes:
 			truncated = true
 		case !json.Valid([]byte(item.Arguments)):
-			return
+			return false
 		default:
 			input = json.RawMessage(item.Arguments)
 		}
@@ -227,8 +278,9 @@ func (r *responsesInterpreter) call(item responseItem) {
 		if item.Type == "function_call" && item.Namespace != "" {
 			name = item.Namespace + "." + name
 		}
-		r.observer.OnToolUse(ToolUse{WireType: item.Type, ID: item.CallID, Name: name, Namespace: item.Namespace, Input: input, Truncated: truncated})
+		r.observer.OnToolUse(ToolUse{WireType: item.Type, ID: item.CallID, Name: name, Namespace: item.Namespace, Input: input, Truncated: truncated, ObservationIncomplete: observationIncomplete})
 	}
+	return true
 }
 
 // The Codex backend can omit Content-Type on Responses SSE; a relay may

@@ -90,6 +90,7 @@
       "input": "{\"command\":\"gh issue view 309 | head -60; git log --oneline -1; grep -rn \\\"Repos\\\" internal/api\"}",
       "output": "title:\tRM-189 The API health response stops naming repositories\nstate:\tOPEN",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -119,6 +120,7 @@
       "input": "{\"command\":\"grep -n \\\"health\\\" internal/api/server.go | head -40\"}",
       "output": "53:// Health is what an operator reads to see that \"read-only\" is a measured fact\n55:type Health struct {",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -148,6 +150,7 @@
       "input": "{\"command\":\"sed -n 45,120p internal/api/server.go\"}",
       "output": "\t// writes them; a read path able to delete would be one misconfiguration\n\t// away from pruning on somebody else's schedule.",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -177,6 +180,7 @@
       "input": "{\"command\":\"grep -rn \\\"health\\\" web/src\"}",
       "output": "",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -206,6 +210,7 @@
       "input": "{\"command\":\"grep -rn -e \\\"v1/health\\\" .\"}",
       "output": "cmd/innsegl/apiintegration_test.go:339:\t\t{\"GET /api/v1/health\", base + \"/api/v1/health\", http.StatusOK},",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -235,6 +240,7 @@
       "input": "{\"command\":\"grep -n \\\"Repos\\\" test/deploy/readerrole_test.go\"}",
       "output": "466:\tRepos []string `json:\"repos\"`",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -264,6 +270,7 @@
       "input": "{\"command\":\"grep -n \\\"health\\\" internal/api/http_test.go | head\"}",
       "output": "207:\tt.Run(\"health reports the read-only evidence\", func(t *testing.T) {",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -293,6 +300,7 @@
       "input": "{\"command\":\"sed -n 1,90p internal/api/http_test.go\"}",
       "output": "// SPDX-License-Identifier: Apache-2.0\n\npackage api",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -322,6 +330,7 @@
       "input": "{\"command\":\"grep -rn \\\"fixtureRepo\\\" internal/api\"}",
       "output": "internal/api/prooffixtures_test.go:60:\tfixtureRepo        = \"github.com/innsegl/proof\"",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -351,6 +360,7 @@
       "input": "{\"file_path\":\"internal/api/health_test.go\",\"content\":\"// SPDX-License-Identifier: Apache-2.0\\n\\npackage api\\n\"}",
       "output": "File created successfully at: internal/api/health_test.go",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -380,6 +390,7 @@
       "input": "{\"command\":\"go test -race -p 1 -run TestRM189 ./internal/api/ 2>&1 | tail -15\"}",
       "output": "--- FAIL: TestRM189HealthResponseNamesNoRepository (0.20s)\n    health_test.go:23: the health response names the served repository \"github.com/innsegl/proof\"",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -409,6 +420,7 @@
       "input": "{\"command\":\"python3 - <<'EOF'\\np='internal/api/server.go'\\nEOF\"}",
       "output": " internal/api/server.go | 6 ++++--\n 1 file changed, 4 insertions(+), 2 deletions(-)\nok  \tinnsegl.dev/innsegl/internal/api\t10.797s",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -438,6 +450,7 @@
       "input": "{\"file_path\":\"<scratchpad>/msg309\",\"content\":\"fix(api): the health response stops naming repositories (#309)\"}",
       "output": "File created successfully at: <scratchpad>/msg309",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -467,6 +480,7 @@
       "input": "{\"command\":\"go vet ./cmd/innsegl/ ./test/deploy/\"}",
       "output": "",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",
@@ -496,6 +510,7 @@
       "input": "{\"message\":\"…\"}",
       "output": "Report delivered to your caller.",
       "truncated": false,
+      "observation_incomplete": false,
       "clipped": false,
       "outcome": {
         "kind": "ok",

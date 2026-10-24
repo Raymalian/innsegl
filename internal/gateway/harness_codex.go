@@ -83,7 +83,7 @@ func validCodexAgentName(name string) bool {
 // recogniseCodex163 recognizes only the measured CLI version and its root
 // or child metadata. The identity guard independently verifies child lineage.
 func recogniseCodex163(r *http.Request) (Identification, bool, string) {
-	if r.Method != http.MethodPost || !isResponsesPath(r.URL.Path) {
+	if !isResponsesPath(r.URL.Path) || (r.Method != http.MethodPost && !isWebSocketUpgrade(r)) {
 		return Identification{}, false, reasonUnknownPath
 	}
 	ua, _, _ := strings.Cut(r.UserAgent(), " ")

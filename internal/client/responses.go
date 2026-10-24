@@ -80,14 +80,22 @@ func (s *Server) responsesAvailable(r *http.Request) bool {
 	target.RawQuery = ""
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target.String(), nil)
 	if err != nil {
-		return false
+		return s.responsesSupported
 	}
 	client := &http.Client{Transport: s.transport, Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		// A previously advertised format remains a valid route during a
+		// transient capability-check outage. The actual model request still
+		// goes through the normal core path, whose outage handling journals
+		// and forwards it; an installation with no prior positive answer
+		// stays fail-closed.
+		return s.responsesSupported
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return s.responsesSupported
+	}
 	var capabilities struct {
 		Formats     []string `json:"formats"`
 		Signing     bool     `json:"signing"`

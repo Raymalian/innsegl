@@ -350,6 +350,24 @@ describe("a plain root run (record.json) renders through the session layout", ()
 });
 
 describe("witness disagreement and dark mode survive the redesign (states-record.json)", () => {
+  it("shows when the gateway only observed an incomplete Responses call", async () => {
+    const incomplete = structuredClone(record());
+    const firstStep = incomplete.steps[0];
+    if (firstStep === undefined) throw new Error("fixture has no first step");
+    firstStep.observation_incomplete = true;
+    firstStep.outcome = { kind: "unknown", exit_code: null };
+    const readRecord: FetchRunRecord = async () => incomplete;
+    const readDiff: FetchStepDiff = async () => stepOneDiff();
+    const readProof: FetchProof = async () => verifiedProof();
+    window.history.pushState(null, "", "/runs/" + RUN_ID);
+    render(<RunPage route={ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={NOW} />);
+
+    await screen.findByText(/What it ran/);
+    const step = document.querySelector(`[data-step="${firstStep.n}"]`) as HTMLElement;
+    expect(within(step).getByText("outcome unknown")).toBeInTheDocument();
+    expect(await within(step).findByRole("alert")).toHaveTextContent("The response stream ended before this tool call was complete.");
+  });
+
   it("raises the page-level banner and opens step 7 with the witness grid inside it", async () => {
     const readRecord: FetchRunRecord = async () => statesRecord();
     const readDiff: FetchStepDiff = async () => statesDiff();
@@ -365,6 +383,21 @@ describe("witness disagreement and dark mode survive the redesign (states-record
     const grid = step7.querySelector("[data-witness-grid]");
     expect(grid).not.toBeNull();
     expect(within(grid as HTMLElement).getByText(/Harness telemetry/)).toBeInTheDocument();
+  });
+
+  it("shows a failed workspace snapshot attempt as an error witness", async () => {
+    const failedSnapshot = statesRecord();
+    const firstStep = failedSnapshot.steps.find((step) => step.n === 1);
+    if (firstStep === undefined) throw new Error("states fixture has no first step");
+    firstStep.witnesses.snapshot = "error";
+    const readRecord: FetchRunRecord = async () => failedSnapshot;
+    const readDiff: FetchStepDiff = async () => statesDiff();
+    const readProof: FetchProof = async () => verifiedProof();
+    window.history.pushState(null, "", "/runs/" + STATES_RUN_ID);
+    render(<RunPage route={STATES_ROUTE} fetchRunRecord={readRecord} fetchStepDiff={readDiff} fetchProof={readProof} now={STATES_NOW} />);
+
+    const grid = await screen.findByText("snapshot attempt failed");
+    expect(grid.closest("[data-witness-grid]")).toBeInTheDocument();
   });
 
   it("a failed step opens by default with no red anywhere in its outcome", async () => {

@@ -24,6 +24,13 @@ func responseRequest(body []byte) *http.Request {
 	return httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/backend-api/codex/responses", bytes.NewReader(body))
 }
 
+type responsesFactsGuard struct{}
+
+func (responsesFactsGuard) Check(r *http.Request) (*http.Request, *Refusal) {
+	ExtractRequestFacts(r)
+	return r, nil
+}
+
 type responsesOrderWriter struct {
 	http.ResponseWriter
 	seen *bool
@@ -134,8 +141,63 @@ func TestOAI003ResponsesStreamObservesCallsAndCompletedText(t *testing.T) {
 		t.Fatalf("calls: %+v", calls)
 	}
 	discardWriteError(observer.Write([]byte("data: " + events[0] + "\n\n")))
+	discardWriteError(observer.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call_fn1\",\"name\":\"read\",\"arguments\":\"{}\"}]}}\n\n")))
 	if len(calls) != 2 {
-		t.Fatal("duplicate call observed")
+		t.Fatal("duplicate call or completion observed")
+	}
+}
+
+// OAI-017: if the stream ends after a call is introduced but before its
+// complete item arrives, persist that known call as an incomplete input-only
+// record. It must never become signable from a partial argument prefix.
+func TestOAI017InterruptedResponsesStreamPersistsIncompleteCall(t *testing.T) {
+	added := `data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_interrupted1234","name":"exec_command","namespace":"functions","arguments":""}}` + "\n\n"
+	for _, tc := range []struct {
+		name   string
+		suffix string
+	}{
+		{name: "clean EOF without completion"},
+		{name: "response incomplete", suffix: "data: {\"type\":\"response.incomplete\"}\n\n"},
+		{name: "response failed", suffix: "data: {\"type\":\"response.failed\"}\n\n"},
+		{name: "malformed trailing event", suffix: "data: {not-json}\n\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := &fakeRecordCalls{}
+			recorded := make(chan struct{}, 8)
+			recorder := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn, onRecorded: func() { recorded <- struct{}{} }})
+			p := &Proxy{ToolUse: recorder}
+			r := responseRequest(nil).WithContext(WithRunID(context.Background(), "run-oai-017"))
+			resp := &http.Response{
+				Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:   io.NopCloser(strings.NewReader(added + tc.suffix)),
+			}
+			p.stream(httptest.NewRecorder(), r, resp)
+			waitForCalls(t, calls, 1)
+			waitForRecorded(t, recorded, 1, time.Second)
+			got := calls.snapshot()
+			if len(got) != 1 {
+				t.Fatalf("recorded %d calls, want one explicit incomplete call", len(got))
+			}
+			var body map[string]any
+			if err := json.Unmarshal(got[0].Body, &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["tool_use_id"] != "call_interrupted1234" || body["input_truncated"] != true || body["observation_incomplete"] != true || body["result_observed"] != false {
+				t.Fatalf("incomplete call body = %s", got[0].Body)
+			}
+			if input, ok := body["input"]; ok && input != nil {
+				t.Fatalf("partial command input was retained: %s", got[0].Body)
+			}
+			note, ok := body["note"].(string)
+			if !ok || !strings.Contains(note, "stream ended before") {
+				t.Fatalf("gap note = %v, want the interrupted-stream reason", body["note"])
+			}
+			recorder.HandleResults(context.Background(), "run-oai-017", RequestFacts{}, []observedToolResult{{ToolUseID: "call_interrupted1234", Content: json.RawMessage(`"late result"`)}})
+			waitForNoFurtherRecording(t, recorded, 200*time.Millisecond)
+			if got := len(calls.snapshot()); got != 1 {
+				t.Fatalf("a later result created a duplicate or signable record: %d calls", got)
+			}
+		})
 	}
 }
 
@@ -177,6 +239,17 @@ func TestOAI002UnreadableRequestIsAnExplicitCaptureGap(t *testing.T) {
 	}
 }
 
+func TestOAI002ResponsesReplayCarriesUnreadableRequestGap(t *testing.T) {
+	r := responseRequest([]byte("malformed compressed request"))
+	r.Header.Set("Content-Encoding", "zstd")
+	r = r.WithContext(WithRunID(r.Context(), "run-test"))
+	proxy := &Proxy{Guards: []Guard{responsesFactsGuard{}}}
+	out := proxy.Replay(r, "text/event-stream", nil)
+	if out.RunID != "run-test" || out.ObservationProblem != "compressed request could not be observed within limits" {
+		t.Fatalf("replay gap=%+v", out)
+	}
+}
+
 // OAI-005: the CLI's standalone environment context is not the task brief.
 func TestOAI005CodexEnvironmentContextIsNotTheBrief(t *testing.T) {
 	r := responseRequest([]byte(`{"input":[{"role":"user","content":[{"type":"input_text","text":"<environment_context>\n<cwd>/workspace</cwd>\n</environment_context>"}]},{"role":"user","content":[{"type":"input_text","text":"inspect files"}]}]}`))
@@ -210,6 +283,42 @@ func TestOAI004ResponsesReplayPairsCallWithNextRequest(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("result not paired")
+	}
+}
+
+func TestOAI017ResponsesReplayFinalizesAnIncompleteStream(t *testing.T) {
+	recorded := make(chan mcp.GatewayToolCallInput, 1)
+	recorder := NewToolCallRecorder(ToolCallRecorderConfig{record: func(_ context.Context, in mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error) {
+		recorded <- in
+		return mcp.GatewayToolCallOutput{}, nil
+	}})
+	proxy := &Proxy{ToolUse: recorder, Guards: []Guard{NewToolCallRecordGuard(recorder)}}
+	r := responseRequest([]byte(`{"input":"qa"}`))
+	r = r.WithContext(WithRunID(r.Context(), "run-test"))
+	partial := []byte("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_replaypartial123\",\"name\":\"exec_command\"}}\n\n")
+	proxy.Replay(r, "text/event-stream", partial)
+	select {
+	case in := <-recorded:
+		if !bytes.Contains(in.Body, []byte(`"observation_incomplete":true`)) || bytes.Contains(in.Body, []byte(`"input"`)) {
+			t.Fatalf("replay did not preserve an input-free incomplete observation: %s", in.Body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replay failed to finalize a partial Responses observation")
+	}
+}
+
+func TestOAI017ResponsesInvalidCompletedArgumentsRemainIncomplete(t *testing.T) {
+	var calls []ToolUse
+	interp := newResponsesInterpreter(ToolUseObserverFunc(func(call ToolUse) { calls = append(calls, call) }))
+	if _, err := interp.Write([]byte("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_badjson12345678\",\"name\":\"exec_command\"}}\n\n")); err != nil {
+		t.Fatalf("write partial call event: %v", err)
+	}
+	if _, err := interp.Write([]byte("data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_badjson12345678\",\"name\":\"exec_command\",\"arguments\":\"{\"}}\n\n")); err != nil {
+		t.Fatalf("write invalid completed event: %v", err)
+	}
+	interp.Finish()
+	if len(calls) != 1 || !calls[0].ObservationIncomplete || calls[0].Input != nil {
+		t.Fatalf("invalid completed arguments lost the known incomplete call: %+v", calls)
 	}
 }
 

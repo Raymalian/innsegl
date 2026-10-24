@@ -600,6 +600,7 @@ func resolveGatewayIdentitySecret(secret, secretFile string) (resolved, problem 
 			" and $" + envIdentitySecretFile + ") are both set: two sources for one secret " +
 			"is a configuration that can disagree with itself. Supply exactly one"
 	}
+	// #nosec G703 -- secretFile is explicitly configured by the operator, who chooses the mounted secret path.
 	body, err := os.ReadFile(filepath.Clean(secretFile))
 	if err != nil {
 		return "", "-identity-secret-file (or $" + envIdentitySecretFile + "): " + err.Error() +

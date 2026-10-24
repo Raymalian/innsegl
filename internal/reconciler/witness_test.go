@@ -174,6 +174,24 @@ func TestOTW003MatchingToolCallsRaiseNoAlert(t *testing.T) {
 	_ = toolCall
 }
 
+// OAI-012: Codex call_id values use the same join key as the gateway record
+// and are matched by the existing telemetry witness pass.
+func TestOAI012CodexCallIDMatchesRecordedToolCall(t *testing.T) {
+	const runID = "run-oai-012-codex"
+	const callID = "call_1234567890abcdef"
+	c := &clock{at: time.Now().UTC()}
+	m := newMemLedger(c.now)
+	seedRun(t, m, runID)
+	logDir := t.TempDir()
+	witnessPlantToolCall(t, m, logDir, runID, callID)
+	witnessPlantTelemetry(t, logDir, callID, true, c.at)
+
+	report := runWitnessPass(t, m, logDir, c, witnessTestWindow)
+	if report.Checked != 1 || report.Matched != 1 || report.Missing != 0 || report.Orphaned != 0 {
+		t.Fatalf("Codex call_id witness = %+v, want one match and no findings", report)
+	}
+}
+
 // TestOTW003TelemetryArrivingLateInsideTheWindowRaisesNoAlert: the tool_call
 // is relayed; telemetry for it has not arrived yet when the first cycle
 // runs (well inside the window) -- no alert, and no ledger write. It then

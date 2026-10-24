@@ -40,6 +40,10 @@ func CodexLaunchArgs(base, binary string, api bool) ([]string, error) {
 		`model_providers.innsegl.supports_websockets=false`,
 		`agents.enabled=false`,
 		`features.hooks=true`,
+		`otel.exporter={"otlp-http"={endpoint=` + strconv.Quote(base+"/v1/logs") + `,protocol="json"}}`,
+		`otel.log_user_prompt=false`,
+		`otel.trace_exporter="none"`,
+		`otel.metrics_exporter="none"`,
 	}
 	hook := "env INNSEGL_CORE_URL=" + shellQuote(base) + " " + shellQuote(binary) + " hook session --capture-only"
 	for _, event := range []string{"SessionStart", "UserPromptSubmit", "SessionEnd"} {

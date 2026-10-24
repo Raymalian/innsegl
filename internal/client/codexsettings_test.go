@@ -33,6 +33,29 @@ func TestOAI025CodexLaunchRoutesAndHooks(t *testing.T) {
 	}
 }
 
+// OAI-012: Codex tool-result and tool-decision logs go only to this
+// installation's local OTLP/JSON receiver, without enabling prompt, trace,
+// or metric export.
+func TestOAI012CodexLaunchEnablesLocalLogsOnly(t *testing.T) {
+	args, err := CodexLaunchArgs("http://127.0.0.1:28195", "/opt/innsegl/bin/innsegl", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := strings.Join(args, "\n")
+	for _, want := range []string{
+		`otel.exporter`,
+		`http://127.0.0.1:28195/v1/logs`,
+		`protocol="json"`,
+		`otel.log_user_prompt=false`,
+		`otel.trace_exporter="none"`,
+		`otel.metrics_exporter="none"`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Errorf("missing %q in launch configuration", want)
+		}
+	}
+}
+
 // OAI-014/025: signing is explicit and exposes shell calls as structured
 // wire evidence, without changing ordinary capture launches.
 func TestOAI014SigningLaunchConfiguration(t *testing.T) {

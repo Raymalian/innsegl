@@ -7,9 +7,25 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
+
+type responsesProviderRouteTransport struct {
+	target *url.URL
+	base   http.RoundTripper
+}
+
+func (rt responsesProviderRouteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	copyReq := req.Clone(req.Context())
+	copyURL := *req.URL
+	copyURL.Scheme, copyURL.Host, copyURL.User = rt.target.Scheme, rt.target.Host, nil
+	copyReq.URL = &copyURL
+	copyReq.Host = rt.target.Host
+	return rt.base.RoundTrip(copyReq)
+}
 
 // OAI-023: a new client must not silently send new-format traffic to an
 // old core as though it had been recorded.
@@ -47,6 +63,49 @@ func TestOAI009ResponsesCarriesStatementAndPreservesCoreRefusal(t *testing.T) {
 	}
 	if got := decodeStatementHeader(t, statement); got["session_id"] != scSession {
 		t.Fatalf("statement %v", got)
+	}
+}
+
+func TestOAI009PreviouslySupportedResponsesFallsBackDuringCapabilityOutage(t *testing.T) {
+	core, paths := enrolled(t)
+	outage := false
+	core.Mux.HandleFunc("/_gateway/capabilities", func(w http.ResponseWriter, _ *http.Request) {
+		if outage {
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if _, err := w.Write([]byte(`{"formats":["responses-http"]}`)); err != nil {
+			t.Errorf("write capabilities response: %v", err)
+		}
+	})
+	core.Mux.HandleFunc(SessionStatementPath, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	core.Mux.HandleFunc("/v1/responses", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+	})
+	provider := newProvider(t)
+	srv, front, logs := startJournalClient(t, paths, provider, ServerOptions{})
+	providerTarget, err := url.Parse(provider.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.providerClient = &http.Client{Transport: responsesProviderRouteTransport{target: providerTarget, base: provider.srv.Client().Transport}}
+	now := time.Now()
+	srv.Now = func() time.Time { return now }
+	capabilityProbe := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/responses", nil)
+	if !srv.responsesAvailable(capabilityProbe) {
+		t.Fatal("initial positive Responses capability was not accepted")
+	}
+	now = now.Add(2 * time.Minute)
+	outage = true
+	if status := scPost(t, front.URL+SessionStatementPath, `{"session_id":"`+scSession+`","cwd":"/w/app","repo":"github.com/acme/app","branch":"main","task":"t1"}`, nil); status != http.StatusNoContent {
+		t.Fatalf("workspace statement status=%d", status)
+	}
+	status, _, body := postJSON(t, front.URL+"/v1/responses", `{"input":"hello"}`, map[string]string{"Session-Id": scSession, "Authorization": "Bearer provider-canary"})
+	if status != http.StatusOK {
+		t.Fatalf("status=%d, body=%q, logs=%q, want fallback provider response 200", status, body, logs.String())
+	}
+	if got := provider.hits.Load(); got != 1 {
+		t.Fatalf("provider fallback hits=%d, want 1", got)
 	}
 }
 

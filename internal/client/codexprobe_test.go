@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,8 +30,13 @@ func TestOAI020InstalledCodexHTTPProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seen := make(chan string, 4)
+	seen := make(chan string, 16)
 	provider := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Method + " " + r.URL.Path + " upgrade=" + r.Header.Get("Upgrade")
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
 			http.NotFound(w, r)
 			return
@@ -42,7 +48,6 @@ func TestOAI020InstalledCodexHTTPProbe(t *testing.T) {
 		if r.Header.Get("Session-Id") == "" || r.Header.Get("Thread-Id") != r.Header.Get("Session-Id") {
 			t.Error("unrecognised root metadata")
 		}
-		seen <- r.UserAgent()
 		w.Header().Set("Content-Type", "text/event-stream")
 		response := map[string]any{"id": "resp_probe", "object": "response", "status": "completed", "output": []any{map[string]any{"id": "msg_probe", "type": "message", "role": "assistant", "status": "completed", "content": []any{map[string]any{"type": "output_text", "text": "gateway-probe", "annotations": []any{}}}}}, "usage": map[string]int{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
 		for _, event := range []any{map[string]any{"type": "response.created", "response": map[string]any{"id": "resp_probe", "status": "in_progress", "output": []any{}}}, map[string]any{"type": "response.completed", "response": response}} {
@@ -77,9 +82,10 @@ func TestOAI020InstalledCodexHTTPProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args = append(args, "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-m", "gpt-6.1-sol", "Reply exactly gateway-probe; do not use tools.")
+	args = append(args, "exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "Reply exactly gateway-probe; do not use tools.")
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
+	started := time.Now()
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = home
 	for _, value := range os.Environ() {
@@ -98,11 +104,21 @@ func TestOAI020InstalledCodexHTTPProbe(t *testing.T) {
 	if !strings.Contains(string(output), "gateway-probe") {
 		t.Fatal("probe did not complete")
 	}
-	select {
-	case ua := <-seen:
-		t.Logf("HTTP root request: %s", strings.Fields(ua)[0])
-	default:
+	var requests []string
+	for len(seen) > 0 {
+		requests = append(requests, <-seen)
+	}
+	if len(requests) == 0 {
 		t.Fatal("no model request reached configured route")
 	}
+	for _, request := range requests {
+		if strings.Contains(request, "GET /v1/responses upgrade=websocket") {
+			t.Fatalf("supports_websockets=false still attempted WebSockets: %v", requests)
+		}
+	}
+	if !slices.Contains(requests, "POST /v1/responses upgrade=") {
+		t.Fatalf("HTTP Responses route was not used: %v", requests)
+	}
+	t.Logf("installed CLI HTTP-only turn completed in %s; requests: %v", time.Since(started), requests)
 	// Hook execution/trust and real provider parity are separate gates.
 }
