@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -35,9 +36,14 @@ const (
 // spent or expired. The core does not say which.
 var ErrUnauthorized = errors.New("the core refused the enrolment token (unknown, already used, or expired)")
 
-// ErrRevoked is the core's 401 to a renewal: the installation was revoked
-// or suspended.
-var ErrRevoked = errors.New("the core refused renewal: this installation was revoked or suspended")
+// ErrCredentialRefused means the core did not accept the current client
+// certificate. The shared 401 deliberately does not distinguish expiry,
+// certificate problems, and an inactive installation.
+var ErrCredentialRefused = errors.New("the core refused this client certificate; it may be expired, invalid, or inactive")
+
+// ErrRevoked is retained for callers that used the earlier name. A 401 does
+// not prove revocation; new code should use ErrCredentialRefused.
+var ErrRevoked = ErrCredentialRefused
 
 // ErrCoreUnavailable is the core's 503: it could not mint the certificate
 // right now, and nothing was spent. Trying again later is safe.
@@ -151,6 +157,55 @@ func Enrol(ctx context.Context, opts EnrolOptions) (*Enrolment, error) {
 		CoreURL: coreURL, InstallationID: got.InstallationID,
 		Key: key, CA: opts.CA, PublicServer: public, issued: got,
 	}, nil
+}
+
+// VerifyEnrolment proves the candidate key and certificate are accepted by
+// the named core before the caller replaces a working local identity. The
+// authenticated status route is guarded by the same installation check as
+// model traffic.
+func VerifyEnrolment(ctx context.Context, e *Enrolment) error {
+	if e == nil || e.Key == nil || e.CA == nil || len(e.Chain) == 0 || e.CoreURL == "" {
+		return errors.New("the candidate enrolment is incomplete")
+	}
+	keyDER, err := x509.MarshalECPrivateKey(e.Key)
+	if err != nil {
+		return err
+	}
+	cert, err := tls.X509KeyPair(e.ChainPEM, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	if err != nil {
+		return fmt.Errorf("the candidate certificate and key do not match: %w", err)
+	}
+	pool := CoreRoots(e.CA, e.PublicServer)
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs: pool, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12,
+	}}
+	defer transport.CloseIdleConnections()
+	c := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimSuffix(e.CoreURL, "/")+CoreStatusPath, http.NoBody)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return fmt.Errorf("checking the candidate certificate with the core: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("reading the core's candidate status: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("%w: %s", ErrCredentialRefused, strings.TrimSpace(string(body)))
+		}
+		return fmt.Errorf("the core's authenticated status answered %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var status map[string]json.RawMessage
+	if err := json.Unmarshal(body, &status); err != nil || status == nil {
+		return errors.New("the core's authenticated status was not a JSON object")
+	}
+	return nil
 }
 
 // trustDomain asks the core, without a client certificate, which trust

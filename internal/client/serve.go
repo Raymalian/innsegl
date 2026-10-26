@@ -206,9 +206,14 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 	s.migrateOldLayout(paths.Dir)
 	s.loadWatchedSessions()
 	s.initUnrouted(opts.TranscriptDirs)
-	if _, err := os.Stat(paths.Revoked); err == nil {
+	if _, err := os.Stat(paths.Refused); err == nil {
 		s.revoked.Store(true)
-		s.log.Printf("%v; refusing every request. Run `innsegl connect --disconnect`, then enrol again.", ErrRevoked)
+		s.log.Printf("%v; refusing routed requests. Reconnect with `innsegl connect --replace` and a fresh token.", ErrCredentialRefused)
+	} else if _, err := os.Stat(paths.Revoked); err == nil {
+		// Read old installations' marker as an unknown certificate refusal;
+		// never infer that the installation was revoked from the old filename.
+		s.revoked.Store(true)
+		s.log.Printf("%v; refusing routed requests. Reconnect with `innsegl connect --replace` and a fresh token.", ErrCredentialRefused)
 	}
 
 	// The core's own CA; and the system's roots too only for a core whose
@@ -412,8 +417,8 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		if s.revoked.Load() {
-			http.Error(w, "innsegl client: this installation was revoked; the core refused its renewal. "+
-				"Run `innsegl connect --disconnect`, then enrol again with a new token.", http.StatusForbidden)
+			http.Error(w, "innsegl client: the core refused this certificate; it may be expired, invalid, or inactive. "+
+				"Run `innsegl connect --replace` with a fresh token.", http.StatusForbidden)
 			return
 		}
 		if r.URL.Path == "/_client/capabilities" {
@@ -497,7 +502,8 @@ type Status struct {
 	CertificateExpiresAt time.Time    `json:"certificate_expires_at"`
 	RenewAt              time.Time    `json:"renew_at"`
 	CoreReachable        bool         `json:"core_reachable"`
-	Revoked              bool         `json:"revoked"`
+	Revoked              bool         `json:"revoked,omitempty"`
+	CredentialRefused    bool         `json:"credential_refused"`
 	Outbox               OutboxStatus `json:"outbox"`
 	// Recorded counts, since the service started, the core's answers to
 	// model requests by whether it recorded them: "true", "false" (the
@@ -541,7 +547,7 @@ func (s *Server) recordedCounts() map[string]int64 {
 func (s *Server) Status(ctx context.Context) Status {
 	st := Status{
 		InstallationID: s.core.InstallationID, CoreURL: s.core.CoreURL,
-		CertificateExpiresAt: s.Leaf().NotAfter, RenewAt: s.RenewAt(), Revoked: s.revoked.Load(),
+		CertificateExpiresAt: s.Leaf().NotAfter, RenewAt: s.RenewAt(), CredentialRefused: s.revoked.Load(),
 		Outbox: s.outbox.status(), Version: version.String(),
 	}
 	st.Recorded = s.recordedCounts()
@@ -577,14 +583,15 @@ func (s *Server) reachable(ctx context.Context) bool {
 }
 
 // MaybeRenew renews the certificate when its half-life has passed, with a
-// fresh request from the same key. A 401 means the installation was revoked
-// or suspended: the service then refuses every request, says so in its log,
-// and never asks again.
+// fresh request from the same key. A 401 means the core refused this
+// certificate, without saying whether it expired or the installation is
+// inactive. The service stops routing through it until an operator replaces
+// the enrollment; transient errors remain retryable.
 func (s *Server) MaybeRenew(ctx context.Context) (bool, error) {
 	s.renewMu.Lock()
 	defer s.renewMu.Unlock()
 	if s.revoked.Load() {
-		return false, ErrRevoked
+		return false, ErrCredentialRefused
 	}
 	if s.Now().Before(s.RenewAt()) {
 		return false, nil
@@ -600,11 +607,11 @@ func (s *Server) MaybeRenew(ctx context.Context) (bool, error) {
 	if errors.Is(err, errStatus401) {
 		s.revoked.Store(true)
 		// #nosec G306 -- a marker; its presence is the whole content.
-		if werr := os.WriteFile(s.paths.Revoked, []byte(s.Now().UTC().Format(time.RFC3339)+"\n"), 0o600); werr != nil {
-			s.log.Printf("recording the revocation: %v", werr)
+		if werr := os.WriteFile(s.paths.Refused, []byte(s.Now().UTC().Format(time.RFC3339)+"\n"), 0o600); werr != nil {
+			s.log.Printf("recording the certificate refusal: %v", werr)
 		}
-		s.log.Printf("%v. Refusing every request from now on. Run `innsegl connect --disconnect`, then enrol again with a new token.", ErrRevoked)
-		return false, ErrRevoked
+		s.log.Printf("%v. Refusing routed requests until a fresh token is used with `innsegl connect --replace`.", ErrCredentialRefused)
+		return false, ErrCredentialRefused
 	}
 	if err != nil {
 		s.log.Printf("renewing the client certificate: %v", err)
@@ -639,7 +646,7 @@ func (s *Server) RunRenewal(ctx context.Context) {
 		case <-time.After(wait):
 		}
 		_, err := s.MaybeRenew(ctx)
-		if errors.Is(err, ErrRevoked) {
+		if errors.Is(err, ErrCredentialRefused) {
 			return
 		}
 		if err != nil {

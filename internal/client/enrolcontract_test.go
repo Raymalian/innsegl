@@ -47,6 +47,29 @@ func TestCLI015EnrolAsksTheTrustDomainFirstAndNamesItsIDInTheCSR(t *testing.T) {
 	}
 }
 
+func TestCLI015CandidateEnrolmentMustPassAuthenticatedCoreStatus(t *testing.T) {
+	core := newCore(t)
+	core.InstallRecoveryRoutes()
+	e, err := Enrol(context.Background(), EnrolOptions{CoreURL: core.URL(), Token: clienttest.Token, Name: "n", CA: core.CA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifyErr := VerifyEnrolment(context.Background(), e); verifyErr != nil {
+		t.Fatalf("authenticated candidate status: %v", verifyErr)
+	}
+
+	refusing := newCore(t)
+	refusing.InstallRecoveryRoutes()
+	bad, err := Enrol(context.Background(), EnrolOptions{CoreURL: refusing.URL(), Token: clienttest.Token, Name: "n", CA: refusing.CA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusing.SetStatusRefused(true)
+	if verifyErr := VerifyEnrolment(context.Background(), bad); verifyErr == nil {
+		t.Fatal("a candidate whose certificate the core refused was accepted")
+	}
+}
+
 func TestCLI015EnrolRetriesOnceWithANewIDWhenTheIDIsTaken(t *testing.T) {
 	core := newCore(t)
 	core.SetIDTaken(1)

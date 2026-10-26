@@ -173,7 +173,17 @@ func UninstallSettings(path string, cfg SettingsConfig, now func() time.Time, ou
 // *NotWritableError (with the file staged) when it would, and nil when the
 // file is already up to date or can be written.
 func CheckSettingsWritable(path string, cfg SettingsConfig) error {
-	newText, changed, err := planSettings(path, cfg, io.Discard, true)
+	return checkSettingsWritable(path, cfg, true)
+}
+
+// CheckUninstallSettingsWritable reports before disconnect changes anything
+// whether removing innsegl's managed keys needs administrator access.
+func CheckUninstallSettingsWritable(path string, cfg SettingsConfig) error {
+	return checkSettingsWritable(path, cfg, false)
+}
+
+func checkSettingsWritable(path string, cfg SettingsConfig, install bool) error {
+	newText, changed, err := planSettings(path, cfg, io.Discard, install)
 	if err != nil || !changed || writable(path) {
 		return err
 	}

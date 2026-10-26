@@ -223,14 +223,7 @@ func TestOPS192TheIncidentIsDetectedAndDoctorRepairsItWithNoRestart(t *testing.T
 	mon := signprobe.NewMonitor(gatewayProbe{url: gw.URL, key: "innsegl-ca"}, incidentInterval, nil)
 	go mon.Run(ctx)
 
-	f := newConnectFixture(t)
-	f.connectServed(t, nil)
-	// The core's real limit on custody calls (six per machine per ten
-	// minutes): the two repairs below come back to back, as an operator's
-	// would, and must both fit under it.
-	h := caCustodyHandler(routes.URL, operatorMachine(), newBackupLimiter(nil), newServeLog(io.Discard))
-	f.core.Mux.Handle(coreCACustodyPath, withInstallation("inst-1", h))
-	f.core.Mux.Handle(coreCACustodyPath+"/", withInstallation("inst-1", h))
+	f := newConnectFixtureWithoutRecoveryRoutes(t)
 	f.core.Mux.HandleFunc(coreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
 		st := mon.State()
 		writeCoreJSON(w, http.StatusOK, coreStatus{Version: "test-core", Components: []coreComponent{
@@ -238,6 +231,13 @@ func TestOPS192TheIncidentIsDetectedAndDoctorRepairsItWithNoRestart(t *testing.T
 			{Name: signprobe.ReportName, Up: st.OK, Detail: st.Detail()}},
 			Installation: coreInstallation{ID: "inst-1", Repos: []string{"*"}}})
 	})
+	f.connectServed(t, nil)
+	// The core's real limit on custody calls (six per machine per ten
+	// minutes): the two repairs below come back to back, as an operator's
+	// would, and must both fit under it.
+	h := caCustodyHandler(routes.URL, operatorMachine(), newBackupLimiter(nil), newServeLog(io.Discard))
+	f.core.Mux.Handle(coreCACustodyPath, withInstallation("inst-1", h))
+	f.core.Mux.Handle(coreCACustodyPath+"/", withInstallation("inst-1", h))
 	var calls [][]string
 	runDoctorOnce := func() (int, string) {
 		var out bytes.Buffer

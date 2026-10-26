@@ -84,10 +84,10 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		line("client service", false, "not answering at "+local+"; start it: "+client.RestartCommand(runtime.GOOS))
 	} else {
 		detail := "certificate until " + svc.CertificateExpiresAt
-		if svc.Revoked {
-			detail = "the core refused this machine's renewal; enrol again"
+		if svc.CredentialRefused || svc.Revoked {
+			detail = "the core refused this certificate; replace it with `innsegl connect --replace` and a fresh token"
 		}
-		line("client service", !svc.Revoked, detail)
+		line("client service", !svc.CredentialRefused && !svc.Revoked, detail)
 		unrouted = svc.Unrouted
 	}
 
@@ -149,6 +149,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 
 type localStatus struct {
 	Revoked              bool                     `json:"revoked"`
+	CredentialRefused    bool                     `json:"credential_refused"`
 	CertificateExpiresAt string                   `json:"certificate_expires_at"`
 	Unrouted             []client.UnroutedSession `json:"unrouted_sessions"`
 	Version              string                   `json:"version"`

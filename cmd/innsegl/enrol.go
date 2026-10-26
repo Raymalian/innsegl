@@ -244,8 +244,9 @@ func enrolHandler(store enrolStore, authority clientAuthority, log *serveLog) ht
 	}
 }
 
-// renewHandler serves /_core/renew, behind the client guard: the request
-// carries the verified installation, and the CSR must name the same one.
+// renewHandler serves /_core/renew behind the renewal-only client guard: an
+// expired leaf is accepted there only if the chain was valid when it expired
+// and the named installation remains active. The CSR must name that same id.
 func renewHandler(store enrolStore, authority clientAuthority, log *serveLog) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
