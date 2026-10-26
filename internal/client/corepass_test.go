@@ -207,16 +207,16 @@ func TestCLI018TheServiceRefusesWhatIsNotOnTheList(t *testing.T) {
 	}
 }
 
-// CLI-018 (PROPOSED) — a revoked installation's service refuses the CLI as
-// it refuses everything else, and says so in the CLI's own shape.
-func TestCLI018ARevokedServiceRefusesTheCLIToo(t *testing.T) {
+// CLI-018 (PROPOSED) — a credential-refused service refuses the CLI as it
+// refuses everything else, without claiming the installation was revoked.
+func TestCLI018ACredentialRefusedServiceRefusesTheCLIToo(t *testing.T) {
 	_, paths, log := passCore(t)
 	srv, _, _ := startClient(t, paths)
 	srv.revoked.Store(true)
 	serveSocket(t, srv, SocketPath(paths), os.Getuid())
 	_, err := FetchCoreStatus(t.Context(), paths, "")
-	if err == nil || !strings.Contains(err.Error(), "revoked") {
-		t.Fatalf("FetchCoreStatus through a revoked service: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("FetchCoreStatus through a refused service: %v", err)
 	}
 	if seen := log.all(); len(seen) != 0 {
 		t.Fatalf("a revoked service passed requests to the core: %v", seen)

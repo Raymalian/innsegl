@@ -27,7 +27,9 @@ import (
 // A refusal is one identical 401 whatever the cause -- no certificate, the
 // wrong authority, an agent's identity, a revoked, suspended or unknown
 // installation -- with nothing recorded and no idempotency claim: the guard
-// wraps the whole route table, so nothing behind it runs. An outage of the
+// wraps protected routes, so nothing behind a refusal runs. Renewal and
+// self-disconnect have a narrow wrapper that may accept an expired leaf but
+// still checks its chain and active installation. An outage of the
 // bundle or the installation table is not a certificate problem and is
 // answered 503 with Retry-After instead.
 //
@@ -152,8 +154,26 @@ const (
 // Wrap puts the guard in front of next. A request next sees carries its
 // installation id (InstallationFromContext).
 func (g *ClientGuard) Wrap(next http.Handler) http.Handler {
+	return g.wrap(next, false)
+}
+
+// WrapRenewal admits a certificate whose leaf has expired, only so that an
+// active installation can renew it. Issuing authorities must still be valid
+// now; inactive installations and malformed chains are refused as usual.
+func (g *ClientGuard) WrapRenewal(next http.Handler) http.Handler {
+	return g.wrap(next, true)
+}
+
+// WrapDisconnect accepts an expired client leaf only for the self-revocation
+// route. An expired installation can therefore be removed before replacing
+// its local key; every other route continues to require a current leaf.
+func (g *ClientGuard) WrapDisconnect(next http.Handler) http.Handler {
+	return g.wrap(next, true)
+}
+
+func (g *ClientGuard) wrap(next http.Handler, renewal bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, outcome := g.authenticate(r)
+		id, outcome := g.authenticate(r, renewal)
 		switch outcome {
 		case clientRefused:
 			WriteClientRefusal(w)
@@ -173,7 +193,7 @@ func (g *ClientGuard) Wrap(next http.Handler) http.Handler {
 }
 
 // authenticate verifies the presented chain and the installation's status.
-func (g *ClientGuard) authenticate(r *http.Request) (string, clientOutcome) {
+func (g *ClientGuard) authenticate(r *http.Request, renewal bool) (string, clientOutcome) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return "", clientRefused
 	}
@@ -181,7 +201,11 @@ func (g *ClientGuard) authenticate(r *http.Request) (string, clientOutcome) {
 	if err != nil {
 		return "", clientUnavailable
 	}
-	id, err := spire.VerifyClientCertificate(r.TLS.PeerCertificates, roots, g.trustDomain, g.now())
+	verify := spire.VerifyClientCertificate
+	if renewal {
+		verify = spire.VerifyClientCertificateForRenewal
+	}
+	id, err := verify(r.TLS.PeerCertificates, roots, g.trustDomain, g.now())
 	if err != nil {
 		return "", clientRefused
 	}

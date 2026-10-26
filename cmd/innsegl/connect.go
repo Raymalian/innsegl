@@ -86,6 +86,10 @@ type connectDeps struct {
 	// writable says why the user could change the file at a path, or ""
 	// when they cannot; nil is realWritable.
 	writable func(path string) string
+	// settingsWritable preflights the managed settings change. install=false
+	// means disconnect is planned without touching the file.
+	settingsWritable func(path string, cfg client.SettingsConfig, install bool) error
+	writeEnrolment   func(paths client.Paths, enrolment *client.Enrolment, listen string) error
 }
 
 // realWritable is userWritable on the path with its symlinks resolved; a
@@ -105,6 +109,23 @@ func (d connectDeps) changeable(p string) string {
 		return d.realWritable()(p)
 	}
 	return d.writable(p)
+}
+
+func (d connectDeps) checkSettingsWritable(path string, cfg client.SettingsConfig, install bool) error {
+	if d.settingsWritable != nil {
+		return d.settingsWritable(path, cfg, install)
+	}
+	if install {
+		return client.CheckSettingsWritable(path, cfg)
+	}
+	return client.CheckUninstallSettingsWritable(path, cfg)
+}
+
+func (d connectDeps) saveEnrolment(paths client.Paths, enrolment *client.Enrolment, listen string) error {
+	if d.writeEnrolment != nil {
+		return d.writeEnrolment(paths, enrolment, listen)
+	}
+	return client.WriteEnrolment(paths, enrolment, listen)
 }
 
 func (d connectDeps) releasePath() string {
@@ -239,6 +260,7 @@ func defaultManagedSettingsPath(goos string) string {
 type connectFlags struct {
 	token, ca, fingerprint, name, listen, settings     string
 	noService, pause, resume, disconnect, update, hard bool
+	replace                                            bool
 	// service: with --update, also rewrite and reload the client service.
 	service bool
 	// egress is --egress-control's allowlist file (with --hardened).
@@ -260,13 +282,14 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	fs.BoolVar(&f.pause, "pause", false, "set the managed settings aside, unchanged")
 	fs.BoolVar(&f.resume, "resume", false, "put paused managed settings back")
 	fs.BoolVar(&f.disconnect, "disconnect", false, "remove what connect wrote: the managed settings keys, the service, ~/.innsegl/client (asks you to confirm on the terminal)")
+	fs.BoolVar(&f.replace, "replace", false, "replace an existing enrollment after core verification; archives the old installation's outbox")
 	fs.BoolVar(&f.update, "update", false, "rewrite this enrolled machine's managed settings to the chosen mode; no token")
 	fs.StringVar(&f.egress, "egress-control", "", "with --hardened, lock the sandbox's network to the hosts in this file, one per line")
 	fs.BoolVar(&f.hard, "hardened", false, "also lock the harness down: managed hooks only, bypass mode disabled, the sandbox; the user's statusLine is copied in")
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl connect - enrol this machine with an innsegl core (#461)\n\n")
 		fprintf(stderr, "Usage:\n"+
-			"  innsegl connect <core-url> --token <ie_…> (--ca <file> | --ca-fingerprint sha256:<hex>)\n"+
+			"  innsegl connect <core-url> --token <ie_…> (--ca <file> | --ca-fingerprint sha256:<hex>) [--replace]\n"+
 			"                  [--hardened] [--name <n>] [--listen 127.0.0.1:28195] [--managed-settings <path>] [--no-service] [DIR…]\n"+
 			"  innsegl connect --update [--hardened] [--managed-settings <path>]\n"+
 			"  innsegl connect --pause | --resume | --disconnect [--managed-settings <path>]\n\n")
@@ -296,6 +319,9 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 		return exitUsage
 	case modes == 1 && len(positional) > 0:
 		fprintf(stderr, "innsegl connect: --pause, --resume, --disconnect and --update take no other arguments\n")
+		return exitUsage
+	case f.replace && modes > 0:
+		fprintf(stderr, "innsegl connect: --replace is for enrolment; it cannot be combined with --pause, --resume, --disconnect or --update\n")
 		return exitUsage
 	case f.service && !f.update:
 		fprintf(stderr, "innsegl connect: --service rewrites an enrolled machine's service; give it with --update\n")
@@ -640,6 +666,14 @@ func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Wr
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
 	}
+	err = deps.checkSettingsWritable(f.settings, settings, false)
+	if code, done := reportNotWritable(err, stderr, ", then run `innsegl connect --disconnect` again"); done {
+		return code
+	}
+	if err != nil {
+		fprintf(stderr, "innsegl connect: checking managed settings: %v\n", err)
+		return exitConnectFailed
+	}
 	err = client.UninstallSettings(f.settings, settings, deps.now, stdout)
 	if code, done := reportNotWritable(err, stderr, ", then run `innsegl connect --disconnect` again"); done {
 		return code
@@ -705,9 +739,22 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 		return exitConnectFailed
 	}
 	paths := client.ClientPaths(deps.home)
-	if _, err := os.Stat(paths.Core); err == nil {
-		fprintf(stderr, "innsegl connect: this machine is already connected (%s). "+
-			"Run `innsegl connect --disconnect` first to enrol again.\n", paths.Core)
+	replacing := false
+	oldInstallationID := ""
+	if old, err := client.ReadCoreConfig(paths); err == nil {
+		if !f.replace {
+			fprintf(stderr, "innsegl connect: this machine is already connected (%s). "+
+				"Use `--replace` with a fresh token to verify a new certificate; pending old-installation records are archived.\n", paths.Core)
+			return exitConnectFailed
+		}
+		if strings.TrimSuffix(old.CoreURL, "/") != coreURL {
+			fprintf(stderr, "innsegl connect: --replace must use the currently configured core %s; disconnect before changing cores\n", old.CoreURL)
+			return exitConnectFailed
+		}
+		replacing = true
+		oldInstallationID = old.InstallationID
+	} else if !errors.Is(err, client.ErrNotEnrolled) {
+		fprintf(stderr, "innsegl connect: reading the current enrollment: %v\n", err)
 		return exitConnectFailed
 	}
 	settings, err := deps.settingsConfig(f.listen, f.hard, deps.unattended(f, !f.noService))
@@ -719,7 +766,7 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 		fprintf(stderr, "innsegl connect: --egress-control: %v\n", err)
 		return exitConnectFailed
 	}
-	err = client.CheckSettingsWritable(f.settings, settings)
+	err = deps.checkSettingsWritable(f.settings, settings, true)
 	if code, done := reportNotWritable(err, stderr, ", then run the same `innsegl connect` again (the token is not spent yet)"); done {
 		return code
 	}
@@ -748,12 +795,58 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 		fprintf(stderr, "innsegl connect: enrolling: %v\nNothing was written.\n", err)
 		return exitConnectFailed
 	}
-	if err = client.WriteEnrolment(paths, enrolment, f.listen); err != nil {
-		fprintf(stderr, "innsegl connect: writing %s: %v\n", paths.Dir, err)
+	if err = client.VerifyEnrolment(ctx, enrolment); err != nil {
+		fprintf(stderr, "innsegl connect: the core issued installation %s but did not accept its certificate: %v\n"+
+			"The existing local enrollment and outbox were left in place. Ask for a fresh token before retrying.\n",
+			enrolment.InstallationID, err)
 		return exitConnectFailed
+	}
+	archivedOutbox := ""
+	var revoker *client.InstallationRevoker
+	if replacing {
+		revoker, err = client.PrepareInstallationRevoker(paths)
+		if err != nil {
+			fprintf(stderr, "innsegl connect: preparing prior-installation cleanup: %v\nNothing was replaced.\n", err)
+			return exitConnectFailed
+		}
+		defer revoker.Close()
+		archivedOutbox, err = client.ArchiveOutboxForReplacement(paths, oldInstallationID)
+		if err != nil {
+			fprintf(stderr, "innsegl connect: the new certificate is verified, but the old outbox could not be safely separated: %v\n"+
+				"Nothing was replaced. Resolve the outbox issue and retry with a fresh token.\n", err)
+			return exitConnectFailed
+		}
+	}
+	var credentialCleanupErr error
+	if err = deps.saveEnrolment(paths, enrolment, f.listen); err != nil {
+		if errors.Is(err, client.ErrEnrolmentCommitted) {
+			credentialCleanupErr = err
+			fprintf(stderr, "innsegl connect: the new credentials were installed, but cleanup needs attention: %v\n", err)
+		} else {
+			fprintf(stderr, "innsegl connect: writing %s: %v\n", paths.Dir, err)
+			if restoreErr := client.RestoreOutboxAfterFailedReplacement(paths, archivedOutbox); restoreErr != nil {
+				fprintf(stderr, "innsegl connect: restoring the old outbox failed: %v\n", restoreErr)
+			}
+			return exitConnectFailed
+		}
+	}
+	var priorRevokeErr error
+	if revoker != nil {
+		if revokeErr := revoker.Revoke(ctx); revokeErr != nil {
+			if errors.Is(revokeErr, client.ErrCredentialRefused) {
+				fprintf(stderr, "innsegl connect: the prior certificate is refused; the prior installation may need cleanup in the core's Machines page\n")
+			} else {
+				priorRevokeErr = revokeErr
+				fprintf(stderr, "innsegl connect: the new enrollment is installed, but the prior installation could not be revoked: %v\n"+
+					"Revoke the prior installation from the core's Machines page.\n", revokeErr)
+			}
+		}
 	}
 	fprintf(stdout, "innsegl connect: enrolled as installation %s; the certificate expires %s\n",
 		enrolment.InstallationID, enrolment.ExpiresAt.UTC().Format(time.RFC3339))
+	if archivedOutbox != "" {
+		fprintf(stdout, "innsegl connect: prior installation outbox preserved at %s; it will not be replayed under the replacement identity\n", archivedOutbox)
+	}
 
 	// RM-329: the settings name the proxy CA; it exists before they do.
 	if err = client.EnsureProxyCA(paths, deps.uid, false); err != nil {
@@ -772,7 +865,7 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 		return code
 	}
 
-	failed := false
+	failed := priorRevokeErr != nil || credentialCleanupErr != nil
 	pins, _ := deps.pinPlugins(stdout, stderr)
 	if f.noService {
 		fprintf(stdout, "innsegl connect: --no-service: run `%s client serve` yourself; the managed settings point at http://%s\n",

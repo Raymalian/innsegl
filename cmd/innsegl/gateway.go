@@ -1108,8 +1108,6 @@ func openHostedCore(ctx context.Context, o gatewayOptions, running *runningGatew
 // behind it, and has the TLS layer request (not require) a client
 // certificate, naming the deployment's authorities as acceptable.
 func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (http.Handler, *tls.Config) {
-	mux.Handle(coreRenewPath, renewHandler(h.writer, h.authority, log))
-	mux.Handle(coreDisconnectPath, disconnectHandler(h.writer, log))
 	mux.Handle(coreStatusPath, statusHandler(h.writer, h.serverCert, log))
 	// ADR-0074: the encrypted trust-key backup, for the operator's machine.
 	backup := trustBackupHandler(os.Getenv(envTrustBackupDir), h.writer, newBackupLimiter(nil), log)
@@ -1128,6 +1126,8 @@ func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (
 
 	outer := http.NewServeMux()
 	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))
+	outer.Handle(coreRenewPath, h.guard.WrapRenewal(renewHandler(h.writer, h.authority, log)))
+	outer.Handle(coreDisconnectPath, h.guard.WrapDisconnect(disconnectHandler(h.writer, log)))
 	outer.Handle("/", h.guard.Wrap(mux))
 
 	base.ClientAuth = tls.RequestClientCert

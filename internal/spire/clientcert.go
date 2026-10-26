@@ -5,6 +5,7 @@ package spire
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -34,6 +35,11 @@ import (
 // ClientCertTTL is the longest a client certificate may live. The policy
 // enforces the same bound on its side.
 const ClientCertTTL = 24 * time.Hour
+
+// ClientCertRenewalGrace permits an active identity to renew for one
+// certificate lifetime after expiry. Older credentials require a fresh
+// enrolment.
+const ClientCertRenewalGrace = ClientCertTTL
 
 // clientPathPrefix is the subtree client identities live in.
 const clientPathPrefix = "/client/"
@@ -196,6 +202,18 @@ func (c *Client) x509Bundle(ctx context.Context, op string) ([]*x509.Certificate
 // therefore refused even though the same authority issued it. A refusal is
 // ATTESTATION_FAILED: the presenter is not what it claims.
 func VerifyClientCertificate(chain, roots []*x509.Certificate, trustDomain string, now time.Time) (string, error) {
+	return verifyClientCertificate(chain, roots, trustDomain, now, false)
+}
+
+// VerifyClientCertificateForRenewal accepts an expired leaf only for the
+// certificate renewal route. The presented chain must have been valid when
+// the leaf expired, and every issuing CA must still be valid now. All other
+// certificate checks are identical to VerifyClientCertificate.
+func VerifyClientCertificateForRenewal(chain, roots []*x509.Certificate, trustDomain string, now time.Time) (string, error) {
+	return verifyClientCertificate(chain, roots, trustDomain, now, true)
+}
+
+func verifyClientCertificate(chain, roots []*x509.Certificate, trustDomain string, now time.Time, allowExpiredLeaf bool) (string, error) {
 	const op = "verify_client_certificate"
 	fail := func(why string, cause error) (string, error) {
 		return "", newError(ClassAttestationFailed, op, "", why, false, cause)
@@ -234,12 +252,35 @@ func VerifyClientCertificate(chain, roots []*x509.Certificate, trustDomain strin
 	for _, c := range chain[1:] {
 		inter.AddCert(c)
 	}
-	if _, err := leaf.Verify(x509.VerifyOptions{
+	verifyAt := now
+	_, err = leaf.Verify(x509.VerifyOptions{
 		Roots:         rootPool,
 		Intermediates: inter,
-		CurrentTime:   now,
+		CurrentTime:   verifyAt,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	}); err != nil {
+	})
+	if err != nil && allowExpiredLeaf {
+		var invalid x509.CertificateInvalidError
+		if errors.As(err, &invalid) && invalid.Cert == leaf && invalid.Reason == x509.Expired &&
+			!now.Before(leaf.NotBefore) && now.Sub(leaf.NotAfter) <= ClientCertRenewalGrace {
+			verifyAt = leaf.NotAfter.Add(-time.Nanosecond)
+			verified, verifyErr := leaf.Verify(x509.VerifyOptions{
+				Roots: rootPool, Intermediates: inter, CurrentTime: verifyAt,
+				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			})
+			if err = verifyErr; err == nil {
+				for _, path := range verified {
+					for _, ca := range path[1:] {
+						if now.Before(ca.NotBefore) || !now.Before(ca.NotAfter) {
+							err = fmt.Errorf("issuing CA %q is not valid now", ca.Subject.String())
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	if err != nil {
 		return fail(fmt.Sprintf("certificate does not verify as a client certificate: %v", err), err)
 	}
 	return id, nil

@@ -357,7 +357,8 @@ func TestCLI038DoctorExecsNothingOffItsList(t *testing.T) {
 	core := &doctorCore{custody: cacustody.Status{Initialized: true, Sealed: true,
 		Reason: "the store is sealed; the operator's machine unlocks it"}, material: []byte("sealed"),
 		probeAt: time.Now().Add(-time.Minute), probeWhy: "Fulcio answered HTTP 500", spireUp: true}
-	f := newConnectFixture(t)
+	f := newConnectFixtureWithoutRecoveryRoutes(t)
+	core.mount(t, f)
 	svc := httptest.NewUnstartedServer(nil)
 	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
 		"--managed-settings", f.settings, "--no-service", "--listen", svc.Listener.Addr().String()); code != exitOK {
@@ -369,7 +370,6 @@ func TestCLI038DoctorExecsNothingOffItsList(t *testing.T) {
 	}
 	svc.Config.Handler = s.Handler()
 	t.Cleanup(svc.Close)
-	core.mount(t, f)
 	d := &doctorRun{f: f, git: gitBin, self: self, settings: settings, identity: identity}
 	d.onRun = func(argv []string) {
 		if argv[0] == "launchctl" {

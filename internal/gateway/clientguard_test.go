@@ -40,7 +40,7 @@ type cgCA struct {
 	key  crypto.Signer
 }
 
-func newCGCA(t *testing.T) *cgCA {
+func newCGCA(t testing.TB) *cgCA {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -66,7 +66,7 @@ func newCGCA(t *testing.T) *cgCA {
 	return &cgCA{cert: cert, key: key}
 }
 
-func (ca *cgCA) issue(t *testing.T, spiffeID string) []*x509.Certificate {
+func (ca *cgCA) issue(t testing.TB, spiffeID string) []*x509.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -132,7 +132,7 @@ type cgFixture struct {
 	guard  *ClientGuard
 }
 
-func newCGFixture(t *testing.T, burst int) *cgFixture {
+func newCGFixture(t testing.TB, burst int) *cgFixture {
 	t.Helper()
 	ca := newCGCA(t)
 	f := &cgFixture{
@@ -155,6 +155,44 @@ func newCGFixture(t *testing.T, burst int) *cgFixture {
 	}
 	f.guard = g
 	return f
+}
+
+type cgDiscardWriter struct{ header http.Header }
+
+func (w *cgDiscardWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+func (*cgDiscardWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (*cgDiscardWriter) WriteHeader(int)             {}
+
+// BenchmarkClientGuardAuthentication measures the complete per-request guard
+// path, including certificate verification and the active-installation check.
+func BenchmarkClientGuardAuthentication(b *testing.B) {
+	f := newCGFixture(b, 100_000_000)
+	chain := f.ca.issue(b, clientID(cgInstA))
+	request := cgRequest(chain)
+	discard := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	b.Run("ordinary", func(b *testing.B) {
+		h := f.guard.Wrap(discard)
+		w := &cgDiscardWriter{}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			h.ServeHTTP(w, request)
+		}
+	})
+	b.Run("renewal-route", func(b *testing.B) {
+		h := f.guard.WrapRenewal(discard)
+		w := &cgDiscardWriter{}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			h.ServeHTTP(w, request)
+		}
+	})
 }
 
 func cgRequest(chain []*x509.Certificate) *http.Request {
@@ -226,6 +264,56 @@ func TestGW018ClientGuardAdmitsOnlyAValidCertificateOfAnActiveInstallation(t *te
 	}
 	if want := `{"error":"` + ClientRefusalMessage + `"}`; first != want {
 		t.Errorf("refusal body = %q, want %q", first, want)
+	}
+}
+
+func TestClientGuardAllowsExpiredCertificateOnlyForRenewal(t *testing.T) {
+	f := newCGFixture(t, 100)
+	chain := f.ca.issue(t, clientID(cgInstA))
+	now := time.Now()
+	f.guard.now = func() time.Time { return now.Add(2 * time.Hour) }
+	request := cgRequest(chain)
+	request.URL.Path = "/renew"
+	request.Method = http.MethodPost
+
+	protected := f.guard.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("expired certificate reached an ordinary protected route")
+	}))
+	ordinary := httptest.NewRecorder()
+	protected.ServeHTTP(ordinary, request)
+	if ordinary.Code != http.StatusUnauthorized {
+		t.Fatalf("ordinary expired certificate status = %d, want 401", ordinary.Code)
+	}
+
+	renewal := f.guard.WrapRenewal(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := InstallationFromContext(r.Context())
+		if !ok || id != cgInstA {
+			t.Errorf("renewal installation = %q, %v", id, ok)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	accepted := httptest.NewRecorder()
+	renewal.ServeHTTP(accepted, request)
+	if accepted.Code != http.StatusNoContent {
+		t.Fatalf("active expired certificate renewal status = %d, want 204", accepted.Code)
+	}
+	disconnect := f.guard.WrapDisconnect(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if id, ok := InstallationFromContext(r.Context()); !ok || id != cgInstA {
+			t.Errorf("disconnect installation = %q, %v", id, ok)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	disconnected := httptest.NewRecorder()
+	disconnect.ServeHTTP(disconnected, request)
+	if disconnected.Code != http.StatusNoContent {
+		t.Fatalf("active expired certificate self-disconnect status = %d, want 204", disconnected.Code)
+	}
+
+	f.inst.active[cgInstA] = false
+	refused := httptest.NewRecorder()
+	renewal.ServeHTTP(refused, request)
+	if refused.Code != http.StatusUnauthorized {
+		t.Fatalf("inactive installation renewal status = %d, want 401", refused.Code)
 	}
 }
 

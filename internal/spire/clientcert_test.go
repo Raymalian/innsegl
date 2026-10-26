@@ -249,6 +249,22 @@ func TestVerifyClientCertificate(t *testing.T) {
 	t.Run("expired", func(t *testing.T) {
 		refuse(t, good.chain, ca.roots(), now.Add(ClientCertTTL+time.Minute))
 	})
+	t.Run("expired client cert can only authenticate renewal", func(t *testing.T) {
+		at := now.Add(ClientCertTTL + time.Minute)
+		if _, err := VerifyClientCertificate(good.chain, ca.roots(), testTrustDomain, at); err == nil {
+			t.Fatal("an expired certificate authenticated a protected request")
+		}
+		id, err := VerifyClientCertificateForRenewal(good.chain, ca.roots(), testTrustDomain, at)
+		if err != nil || id != testClientHex {
+			t.Fatalf("renewal identity = %q, %v; want %q", id, err, testClientHex)
+		}
+	})
+	t.Run("renewal grace is bounded", func(t *testing.T) {
+		at := now.Add(ClientCertTTL + ClientCertRenewalGrace + time.Minute)
+		if _, err := VerifyClientCertificateForRenewal(good.chain, ca.roots(), testTrustDomain, at); err == nil {
+			t.Fatal("a certificate expired beyond the renewal grace authenticated")
+		}
+	})
 	t.Run("not yet valid", func(t *testing.T) {
 		refuse(t, good.chain, ca.roots(), now.Add(-time.Hour))
 	})
