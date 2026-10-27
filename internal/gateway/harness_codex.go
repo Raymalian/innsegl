@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -80,14 +81,18 @@ func validCodexAgentName(name string) bool {
 	return true
 }
 
-// recogniseCodex163 recognizes only the measured CLI version and its root
-// or child metadata. The identity guard independently verifies child lineage.
-func recogniseCodex163(r *http.Request) (Identification, bool, string) {
+var codexUserAgent = regexp.MustCompile(`^(codex_exec|codex_cli_rs|codex-tui)/([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?)$`)
+
+// recogniseCodex recognizes Codex CLI Responses requests across semantic
+// versions. The adapter is selected by the route and validated request shape;
+// the reported version is retained for recording and diagnosis.
+func recogniseCodex(r *http.Request) (Identification, bool, string) {
 	if !isResponsesPath(r.URL.Path) || (r.Method != http.MethodPost && !isWebSocketUpgrade(r)) {
 		return Identification{}, false, reasonUnknownPath
 	}
 	ua, _, _ := strings.Cut(r.UserAgent(), " ")
-	if ua != "codex_exec/0.163.0" && ua != "codex_cli_rs/0.163.0" && ua != "codex-tui/0.163.0" {
+	match := codexUserAgent.FindStringSubmatch(ua)
+	if match == nil {
 		return Identification{}, false, "unsupported Codex client version"
 	}
 	t, ok := codexThread(r)
@@ -98,5 +103,5 @@ func recogniseCodex163(r *http.Request) (Identification, bool, string) {
 	if t.ThreadID != t.SessionID {
 		agent = t.ThreadID
 	}
-	return Identification{Harness: "codex", Version: "0.163.0", SessionID: t.SessionID, AgentID: agent}, true, ""
+	return Identification{Harness: "codex", Version: match[2], SessionID: t.SessionID, AgentID: agent}, true, ""
 }

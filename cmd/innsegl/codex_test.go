@@ -42,6 +42,23 @@ func TestOAI025CodexLauncherUsesPerInvocationConfiguration(t *testing.T) {
 	}
 }
 
+func TestOAI025CodexLauncherAcceptsCompatibleNewerCLIVersion(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "codex")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'codex-cli 0.164.0'; exit 0; fi\nprintf '%s\\n' \"$@\"\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	code := runCodexProcess(binary, "http://127.0.0.1:28195", "/opt/innsegl/bin/innsegl", false, []string{"resume", "--last"}, strings.NewReader(""), &out, &errs)
+	if code != exitOK {
+		t.Fatalf("compatible newer CLI rejected: exit=%d stderr=%s", code, errs.String())
+	}
+	if !strings.Contains(out.String(), "resume\n--last") {
+		t.Fatalf("resume arguments not passed to Codex: %s", out.String())
+	}
+}
+
 // OAI-025: capture lifecycle statements must not install persistent signing hooks.
 func TestOAI025CaptureSessionLeavesGitHooksUntouched(t *testing.T) {
 	dir := t.TempDir()

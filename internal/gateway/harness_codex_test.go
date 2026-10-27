@@ -54,18 +54,38 @@ func TestOAI005CodexRootRecognition(t *testing.T) {
 	}
 }
 
-// OAI-005: measured interactive 0.163.0 uses a distinct originator token.
+// OAI-005: recognized Codex client identifiers retain their reported version.
 func TestOAI005CodexInteractiveRecognition(t *testing.T) {
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/backend-api/codex/responses", nil)
-	r.Header.Set("Session-Id", "11111111-1111-4111-8111-111111111111")
-	r.Header.Set("Thread-Id", "11111111-1111-4111-8111-111111111111")
-	r.Header.Set("User-Agent", "codex-tui/0.163.0 (Generic OS; generic)")
-	if _, f := NewHarnessGuard().Check(r); f != nil {
-		t.Fatalf("measured interactive shape refused: %+v", f)
+	for _, tc := range []struct{ userAgent, version string }{
+		{"codex_exec/0.163.0 (Generic OS; generic)", "0.163.0"},
+		{"codex_cli_rs/0.164.0 (Generic OS; generic)", "0.164.0"},
+		{"codex-tui/1.2.3-beta.1+build.7 (Generic OS; generic)", "1.2.3-beta.1+build.7"},
+	} {
+		t.Run(tc.userAgent, func(t *testing.T) {
+			r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/backend-api/codex/responses", nil)
+			r.Header.Set("Session-Id", "11111111-1111-4111-8111-111111111111")
+			r.Header.Set("Thread-Id", "11111111-1111-4111-8111-111111111111")
+			r.Header.Set("User-Agent", tc.userAgent)
+			next, f := NewHarnessGuard().Check(r)
+			if f != nil {
+				t.Fatalf("Codex version refused: %+v", f)
+			}
+			id, ok := IdentificationFromContext(next.Context())
+			if !ok || id.Version != tc.version {
+				t.Fatalf("reported Codex version not retained: %+v", id)
+			}
+		})
 	}
-	r.Header.Set("User-Agent", "codex-tui/0.164.0")
-	if _, f := NewHarnessGuard().Check(r); f == nil {
-		t.Fatal("unverified version accepted")
+	for _, userAgent := range []string{"unknown/0.164.0", "codex-tui/0.164", "codex_exec/not-a-version"} {
+		t.Run("reject "+userAgent, func(t *testing.T) {
+			r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/backend-api/codex/responses", nil)
+			r.Header.Set("Session-Id", "11111111-1111-4111-8111-111111111111")
+			r.Header.Set("Thread-Id", "11111111-1111-4111-8111-111111111111")
+			r.Header.Set("User-Agent", userAgent)
+			if _, f := NewHarnessGuard().Check(r); f == nil {
+				t.Fatal("accepted unknown product or malformed version")
+			}
+		})
 	}
 }
 

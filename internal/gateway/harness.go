@@ -75,7 +75,7 @@ type harnessRecogniser func(r *http.Request) (id Identification, ok bool, reason
 // registeredRecognisers is every recogniser this build supports, tried in
 // order by HarnessGuard (guard.go) until one matches. Adding a harness
 // version is appending its recogniser here.
-var registeredRecognisers = []harnessRecogniser{recogniseClaudeCode21, recogniseCodex163}
+var registeredRecognisers = []harnessRecogniser{recogniseClaudeCode21, recogniseCodex}
 
 const (
 	reasonUnknownPath        = "the request path does not match a recognised model-traffic path"
