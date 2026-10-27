@@ -59,6 +59,26 @@ type doctorCore struct {
 
 func (c *doctorCore) mount(t *testing.T, f *connectFixture) {
 	t.Helper()
+	c.mountCustody(t, f)
+	f.core.Mux.HandleFunc(coreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		st := signprobe.State{OK: c.probeOK, CheckedAt: c.probeAt, Since: c.probeAt, Reason: c.probeWhy}
+		writeCoreJSON(w, http.StatusOK, coreStatus{Version: "test-core",
+			Components: []coreComponent{
+				{Name: "spire", Up: c.spireUp}, {Name: "ledger", Up: true}, {Name: "sigstore", Up: true},
+				{Name: canaryComponent, Up: true, Detail: "passed"},
+				{Name: signprobe.ReportName, Up: c.probeOK, Detail: st.Detail()},
+			},
+			Installation:      coreInstallation{ID: "inst-1", Repos: []string{"*"}},
+			TrustExpiries:     c.trust,
+			ServerCertificate: c.server,
+			LedgerBackup:      c.backup})
+	})
+}
+
+func (c *doctorCore) mountCustody(t *testing.T, f *connectFixture) {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc(cacustody.PathStatus, func(w http.ResponseWriter, _ *http.Request) {
 		c.mu.Lock()
@@ -94,21 +114,6 @@ func (c *doctorCore) mount(t *testing.T, f *connectFixture) {
 	h := caCustodyHandler(custodian.URL, operatorMachine(), newBackupLimiter(nil), newServeLog(io.Discard))
 	f.core.Mux.Handle(coreCACustodyPath, withInstallation("inst-1", h))
 	f.core.Mux.Handle(coreCACustodyPath+"/", withInstallation("inst-1", h))
-	f.core.Mux.HandleFunc(coreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		st := signprobe.State{OK: c.probeOK, CheckedAt: c.probeAt, Since: c.probeAt, Reason: c.probeWhy}
-		writeCoreJSON(w, http.StatusOK, coreStatus{Version: "test-core",
-			Components: []coreComponent{
-				{Name: "spire", Up: c.spireUp}, {Name: "ledger", Up: true}, {Name: "sigstore", Up: true},
-				{Name: canaryComponent, Up: true, Detail: "passed"},
-				{Name: signprobe.ReportName, Up: c.probeOK, Detail: st.Detail()},
-			},
-			Installation:      coreInstallation{ID: "inst-1", Repos: []string{"*"}},
-			TrustExpiries:     c.trust,
-			ServerCertificate: c.server,
-			LedgerBackup:      c.backup})
-	})
 }
 
 func (c *doctorCore) unlockedBody() []byte {
@@ -143,9 +148,9 @@ type doctorRun struct {
 
 func newDoctorRun(t *testing.T, core *doctorCore) *doctorRun {
 	t.Helper()
-	f := newConnectFixture(t)
-	f.connectServed(t, nil)
+	f := newConnectFixtureWithoutRecoveryRoutes(t)
 	core.mount(t, f)
+	f.connectServed(t, nil)
 	return &doctorRun{f: f}
 }
 
@@ -328,7 +333,8 @@ func TestCLI023AWorkingChainIsOneLinePerCheckAndRunsNothing(t *testing.T) {
 // the allow-list, and the chain is checked again.
 func TestCLI023AClientServiceThatIsDownIsRestarted(t *testing.T) {
 	core := healthyDoctorCore()
-	f := newConnectFixture(t)
+	f := newConnectFixtureWithoutRecoveryRoutes(t)
+	core.mount(t, f)
 	svc := httptest.NewUnstartedServer(nil)
 	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
 		"--managed-settings", f.settings, "--no-service", "--listen", svc.Listener.Addr().String()); code != exitOK {
@@ -340,7 +346,6 @@ func TestCLI023AClientServiceThatIsDownIsRestarted(t *testing.T) {
 	}
 	svc.Config.Handler = s.Handler()
 	t.Cleanup(svc.Close)
-	core.mount(t, f)
 	d := &doctorRun{f: f}
 	d.onRun = func(argv []string) {
 		if !doctorReadOnly(argv) {

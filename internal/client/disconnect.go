@@ -4,11 +4,13 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -48,6 +50,69 @@ func RevokeInstallation(ctx context.Context, paths Paths, socket string) error {
 	return nil
 }
 
+// RevokeInstallationDirect uses the saved identity itself, bypassing the
+// client service's local refusal latch. It is used during a verified staged
+// replacement, before the saved key is overwritten.
+func RevokeInstallationDirect(ctx context.Context, paths Paths) error {
+	revoker, err := PrepareInstallationRevoker(paths)
+	if err != nil {
+		return err
+	}
+	defer revoker.Close()
+	return revoker.Revoke(ctx)
+}
+
+// InstallationRevoker keeps the old identity loaded while a replacement is
+// committed. It can revoke that identity after the new files are installed.
+type InstallationRevoker struct {
+	transport *http.Transport
+	coreURL   string
+}
+
+// PrepareInstallationRevoker loads the currently enrolled certificate for a
+// later self-revocation without opening the outbox or changing client state.
+func PrepareInstallationRevoker(paths Paths) (*InstallationRevoker, error) {
+	core, err := ReadCoreConfig(paths)
+	if err != nil {
+		return nil, err
+	}
+	u, err := url.Parse(core.CoreURL)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return nil, fmt.Errorf("%s: core_url %q is not an https URL", paths.Core, core.CoreURL)
+	}
+	cert, err := tls.LoadX509KeyPair(paths.Cert, paths.Key)
+	if err != nil {
+		return nil, fmt.Errorf("loading the current client identity: %w", err)
+	}
+	cas, err := loadCerts(paths.CA)
+	if err != nil {
+		return nil, fmt.Errorf("reading the core's CA: %w", err)
+	}
+	roots := CoreRoots(nil, core.PublicServer())
+	for _, ca := range cas {
+		roots.AddCert(ca)
+	}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{
+		RootCAs: roots, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12,
+	}}
+	return &InstallationRevoker{transport: transport, coreURL: core.CoreURL}, nil
+}
+
+// Revoke revokes the saved installation on its configured core.
+func (r *InstallationRevoker) Revoke(ctx context.Context) error {
+	if r == nil || r.transport == nil || r.coreURL == "" {
+		return errors.New("the installation revoker is not prepared")
+	}
+	return revokeInstallation(ctx, r.transport, r.coreURL)
+}
+
+// Close releases the transport after its last revoke attempt.
+func (r *InstallationRevoker) Close() {
+	if r != nil && r.transport != nil {
+		r.transport.CloseIdleConnections()
+	}
+}
+
 func revokeInstallation(ctx context.Context, rt http.RoundTripper, base string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -66,6 +131,9 @@ func revokeInstallation(ctx context.Context, rt http.RoundTripper, base string) 
 		return err
 	}
 	if resp.StatusCode/100 != 2 {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("%w: %s", ErrCredentialRefused, strings.TrimSpace(string(body)))
+		}
 		return coreAnswerError(resp.StatusCode, body)
 	}
 	return nil

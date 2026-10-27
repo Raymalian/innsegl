@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -144,10 +145,21 @@ type connectFixture struct {
 }
 
 func newConnectFixture(t *testing.T) *connectFixture {
+	return newConnectFixtureWithRecoveryRoutes(t, true)
+}
+
+func newConnectFixtureWithoutRecoveryRoutes(t *testing.T) *connectFixture {
+	return newConnectFixtureWithRecoveryRoutes(t, false)
+}
+
+func newConnectFixtureWithRecoveryRoutes(t *testing.T, recoveryRoutes bool) *connectFixture {
 	t.Helper()
 	core, err := clienttest.New()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if recoveryRoutes {
+		core.InstallRecoveryRoutes()
 	}
 	t.Cleanup(core.Close)
 	// A short home, so the client socket under it can be bound (#600).
@@ -218,6 +230,143 @@ func (f *connectFixture) connect(args ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	code := runConnect(context.Background(), args, &stdout, &stderr, f.deps)
 	return code, stdout.String(), stderr.String()
+}
+
+func TestCLI015ReplaceStagesAndVerifiesBeforeSwitchingAndArchivesOldOutbox(t *testing.T) {
+	f := newConnectFixture(t)
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--no-service"); code != exitOK {
+		t.Fatalf("initial connect: %s", stderr)
+	}
+	paths := client.ClientPaths(f.home)
+	oldCore := readFile(t, paths.Core)
+	oldCert := readFile(t, paths.Cert)
+	if err := os.MkdirAll(paths.Outbox, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outboxItem := filepath.Join(paths.Outbox, "pending.json")
+	if err := os.WriteFile(outboxItem, []byte("pending"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Revoked, []byte("legacy refusal marker\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f.core.SetStatusRefused(true)
+	f.core.ResetEnrolmentToken()
+	code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--no-service", "--replace")
+	if code == exitOK || !strings.Contains(stderr, "certificate") {
+		t.Fatalf("replacement with refused candidate = %d: %s", code, stderr)
+	}
+	if got := readFile(t, paths.Core); !bytes.Equal(got, oldCore) {
+		t.Fatal("a refused candidate replaced core.json")
+	}
+	if got := readFile(t, paths.Cert); !bytes.Equal(got, oldCert) {
+		t.Fatal("a refused candidate replaced cert.pem")
+	}
+	if got := readFile(t, outboxItem); string(got) != "pending" {
+		t.Fatalf("outbox item = %q, want preserved", got)
+	}
+
+	f.core.SetStatusRefused(false)
+	f.core.ResetEnrolmentToken()
+	code, stdout, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--no-service", "--replace")
+	if code != exitOK {
+		t.Fatalf("replacement = %d\n%s\n%s", code, stdout, stderr)
+	}
+	newCore := readFile(t, paths.Core)
+	if bytes.Equal(newCore, oldCore) {
+		t.Fatal("successful replacement kept the old core.json")
+	}
+	archives, err := filepath.Glob(filepath.Join(paths.Dir, "outbox-recovery-*"))
+	if err != nil || len(archives) != 1 {
+		t.Fatalf("outbox recovery archives = %v, %v; want exactly one", archives, err)
+	}
+	if got := readFile(t, filepath.Join(archives[0], filepath.Base(outboxItem))); string(got) != "pending" {
+		t.Fatalf("archived outbox item = %q, want preserved", got)
+	}
+	if _, err := os.Stat(paths.Outbox); !os.IsNotExist(err) {
+		t.Fatalf("old outbox remained active under replacement identity: %v", err)
+	}
+	if !strings.Contains(stdout, "will not be replayed under the replacement identity") {
+		t.Fatalf("replacement did not explain archived outbox handling: %s", stdout)
+	}
+	if _, err := os.Stat(paths.Revoked); !os.IsNotExist(err) {
+		t.Fatalf("legacy refusal marker still exists: %v", err)
+	}
+}
+
+func TestCLI015ReplaceWriteFailureKeepsOldEnrollmentOutboxAndDoesNotRevokeIt(t *testing.T) {
+	f := newConnectFixture(t)
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--no-service"); code != exitOK {
+		t.Fatalf("initial connect: %s", stderr)
+	}
+	paths := client.ClientPaths(f.home)
+	oldCore := readFile(t, paths.Core)
+	oldCert := readFile(t, paths.Cert)
+	if err := os.MkdirAll(paths.Outbox, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	item := filepath.Join(paths.Outbox, "00000000000000000001.exchange")
+	if err := os.WriteFile(item, []byte("old signed entry"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.core.ResetEnrolmentToken()
+	f.deps.writeEnrolment = func(client.Paths, *client.Enrolment, string) error {
+		return errors.New("simulated disk failure")
+	}
+	code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--no-service", "--replace")
+	if code == exitOK || !strings.Contains(stderr, "simulated disk failure") {
+		t.Fatalf("replacement = %d: %s", code, stderr)
+	}
+	if got := readFile(t, paths.Core); !bytes.Equal(got, oldCore) {
+		t.Fatal("write failure changed core.json")
+	}
+	if got := readFile(t, paths.Cert); !bytes.Equal(got, oldCert) {
+		t.Fatal("write failure changed cert.pem")
+	}
+	if got := readFile(t, item); string(got) != "old signed entry" {
+		t.Fatalf("write failure changed pending outbox record: %q", got)
+	}
+	for _, call := range f.core.Calls() {
+		if strings.Contains(call, client.DisconnectPath) {
+			t.Fatalf("prior installation was revoked before credential commit: %v", f.core.Calls())
+		}
+	}
+}
+
+func TestCLI045DisconnectPreflightsManagedSettingsBeforeChangingAnything(t *testing.T) {
+	f := newConnectFixture(t)
+	if code, _, stderr := f.connect(f.core.URL(), "--token", clienttest.Token, "--ca", f.caFile,
+		"--managed-settings", f.settings, "--no-service"); code != exitOK {
+		t.Fatalf("initial connect: %s", stderr)
+	}
+	paths := client.ClientPaths(f.home)
+	settingsBefore := readFile(t, f.settings)
+	coreCallsBefore := len(f.core.Calls())
+	f.deps.settingsWritable = func(_ string, _ client.SettingsConfig, install bool) error {
+		if install {
+			t.Fatal("disconnect requested an install preflight")
+		}
+		return &client.NotWritableError{Path: f.settings, Staged: "/tmp/staged-settings", Command: "sudo install staged-settings"}
+	}
+	code, _, stderr := f.connect("--disconnect", "--managed-settings", f.settings, "--no-service")
+	if code == exitOK || !strings.Contains(stderr, "sudo install staged-settings") {
+		t.Fatalf("disconnect = %d: %s", code, stderr)
+	}
+	if got := readFile(t, f.settings); !bytes.Equal(got, settingsBefore) {
+		t.Fatal("disconnect changed managed settings before the administrator installed the staged file")
+	}
+	if _, err := os.Stat(paths.Core); err != nil {
+		t.Fatalf("disconnect removed core.json after the settings preflight failed: %v", err)
+	}
+	if got := len(f.core.Calls()); got != coreCallsBefore {
+		t.Fatalf("disconnect contacted the core before settings were writable: calls %d -> %d", coreCallsBefore, got)
+	}
 }
 
 // assertNothingWritten checks that a refused connect left no client state,
@@ -466,7 +615,10 @@ func readFile(t *testing.T, path string) []byte {
 // #490: --disconnect revokes the installation on the core, over the
 // machine's own certificate, before it deletes the key.
 func TestConnectDisconnectRevokesTheInstallationOnTheCore(t *testing.T) {
-	f := newConnectFixture(t)
+	f := newConnectFixtureWithoutRecoveryRoutes(t)
+	f.core.Mux.HandleFunc(coreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
+		writeCoreJSON(w, http.StatusOK, coreStatus{Version: "clienttest"})
+	})
 	revoked := make(chan string, 1)
 	f.core.Mux.HandleFunc(coreDisconnectPath, func(w http.ResponseWriter, r *http.Request) {
 		name := ""
@@ -501,7 +653,8 @@ func TestConnectDisconnectRevokesTheInstallationOnTheCore(t *testing.T) {
 // revocation arrives at the core over the service's connection, under the
 // pass-through route.
 func TestCLI020DisconnectRevokesThroughTheClientService(t *testing.T) {
-	f := newConnectFixture(t)
+	f := newConnectFixtureWithoutRecoveryRoutes(t)
+	f.core.InstallStatusRoute()
 	revoked := make(chan struct{}, 1)
 	f.core.Mux.HandleFunc(coreDisconnectPath, func(w http.ResponseWriter, _ *http.Request) {
 		revoked <- struct{}{}

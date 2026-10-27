@@ -2,7 +2,11 @@
 
 ## Purpose
 
-`innsegl codex` launches experimental HTTP Responses capture for Codex CLI 0.163.0.
+`innsegl codex` launches experimental HTTP Responses capture for Codex CLI versions
+that support the launch configuration and Responses request shape used here. The
+launcher does not pin an exact CLI version; the gateway records the version from
+the request User-Agent while recognizing the Codex Responses route and identity
+metadata.
 The gateway records function and custom tool calls and pairs results by call ID.
 Custom tool scripts are stored as text; they are never evaluated by the recorder.
 Tool outcomes are `unknown`: this wire format carries no authoritative error flag.
@@ -52,7 +56,9 @@ mode: they do not install signing hooks or push branches at session end.
 
 Use `innsegl codex --sign-commits` to select the existing commit path for direct
 shell calls. Both client and core must advertise structured signing support;
-a capture-only core is refused during setup. The supported CLI remains 0.163.0.
+a capture-only core is refused during setup. The signing mode uses the same
+version-independent CLI launch path and requires the gateway's structured-signing
+capability.
 
 This invocation sets `features.code_mode.enabled=true` and
 `features.code_mode.direct_only_tool_namespaces=["functions"]`. That Codex

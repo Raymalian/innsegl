@@ -9,8 +9,11 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 // DefaultListen is the client service's loopback address.
@@ -28,6 +31,9 @@ type Paths struct {
 	Core   string // core.json
 	// Revoked exists once the core has refused a renewal.
 	Revoked string
+	// Refused records that the core did not accept this certificate. Unlike
+	// the legacy Revoked marker, it does not claim the installation is revoked.
+	Refused string
 	// Outbox holds what the core did not take (ADR-0068): journal entries,
 	// telemetry exports and session ends, 0700.
 	Outbox string
@@ -61,6 +67,7 @@ func ClientPaths(home string) Paths {
 		CA:         filepath.Join(dir, "gateway-ca.pem"),
 		Core:       filepath.Join(dir, "core.json"),
 		Revoked:    filepath.Join(dir, "revoked"),
+		Refused:    filepath.Join(dir, "credential-refused"),
 		Outbox:     filepath.Join(dir, "outbox"),
 		ProxyCA:    filepath.Join(dir, "proxy-ca.pem"),
 		ProxyCAKey: filepath.Join(dir, "proxy-ca-key.pem"),
@@ -87,8 +94,27 @@ type CoreConfig struct {
 	ServerCertificate string `json:"server_certificate,omitempty"`
 }
 
+type fileChange struct {
+	path   string
+	data   []byte
+	mode   os.FileMode
+	remove bool
+}
+
+type stagedFileChange struct {
+	fileChange
+	staged    string
+	backup    string
+	backed    bool
+	installed bool
+}
+
 // ErrNotEnrolled means there is no core.json: this machine never connected.
 var ErrNotEnrolled = errors.New("this machine is not connected to a core; run `innsegl connect` first")
+
+// ErrEnrolmentCommitted marks a cleanup error after all new credential files
+// were installed. Callers must not roll back dependent state on this error.
+var ErrEnrolmentCommitted = errors.New("the new enrolment was committed but cleanup failed")
 
 // ReadCoreConfig reads core.json.
 func ReadCoreConfig(p Paths) (CoreConfig, error) {
@@ -134,21 +160,311 @@ func WriteEnrolment(p Paths, e *Enrolment, listen string) error {
 	if err != nil {
 		return err
 	}
-	files := []struct {
-		path string
-		data []byte
-		mode os.FileMode
-	}{
-		{p.Key, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600},
-		{p.Cert, e.ChainPEM, 0o600},
-		{p.Bundle, e.BundlePEM, 0o600},
-		{p.CA, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.CA.Raw}), 0o600},
-		{p.Core, append(cfg, '\n'), 0o600},
+	files := []fileChange{
+		{path: p.Key, data: pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), mode: 0o600},
+		{path: p.Cert, data: e.ChainPEM, mode: 0o600},
+		{path: p.Bundle, data: e.BundlePEM, mode: 0o600},
+		{path: p.CA, data: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.CA.Raw}), mode: 0o600},
+		{path: p.Core, data: append(cfg, '\n'), mode: 0o600},
+		{path: p.Refused, remove: true},
+		{path: p.Revoked, remove: true},
 	}
-	for _, f := range files {
-		if err := writeFileAtomic(f.path, f.data, f.mode); err != nil {
-			return err
+	return writeFilesTransaction(files, os.Rename)
+}
+
+// writeFilesTransaction stages every new file first, then replaces the set
+// with rollback if any rename fails. Refusal markers are part of the same
+// transaction, so a failed replacement cannot clear them while retaining an
+// old or mixed credential set.
+func writeFilesTransaction(files []fileChange, rename func(string, string) error) error {
+	changes := make([]stagedFileChange, len(files))
+	cleanup := func() {
+		for _, c := range changes {
+			if c.staged != "" {
+				_ = os.Remove(c.staged)
+			}
+			if c.backup != "" && !c.backed {
+				_ = os.Remove(c.backup)
+			}
 		}
+	}
+	for i, f := range files {
+		changes[i].fileChange = f
+		if f.path == "" {
+			continue
+		}
+		if f.remove {
+			continue
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(f.path), "."+filepath.Base(f.path)+".stage-*")
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("staging %s: %w", f.path, err)
+		}
+		changes[i].staged = tmp.Name()
+		if err := tmp.Chmod(f.mode); err != nil {
+			_ = tmp.Close()
+			cleanup()
+			return fmt.Errorf("staging %s: %w", f.path, err)
+		}
+		if _, err := tmp.Write(f.data); err != nil {
+			_ = tmp.Close()
+			cleanup()
+			return fmt.Errorf("staging %s: %w", f.path, err)
+		}
+		if err := tmp.Sync(); err != nil {
+			_ = tmp.Close()
+			cleanup()
+			return fmt.Errorf("staging %s: %w", f.path, err)
+		}
+		if err := tmp.Close(); err != nil {
+			cleanup()
+			return fmt.Errorf("staging %s: %w", f.path, err)
+		}
+	}
+	rollback := func(cause error, committed int) error {
+		var rollbackErr error
+		for i := committed - 1; i >= 0; i-- {
+			c := &changes[i]
+			if c.installed {
+				if err := os.Remove(c.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					rollbackErr = errors.Join(rollbackErr, fmt.Errorf("remove replacement %s: %w", c.path, err))
+				}
+			}
+			if c.backed {
+				if err := rename(c.backup, c.path); err != nil {
+					rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore %s from %s: %w", c.path, c.backup, err))
+				} else {
+					c.backup = ""
+				}
+			}
+		}
+		cleanup()
+		return errors.Join(cause, rollbackErr)
+	}
+	for i := range changes {
+		c := &changes[i]
+		if c.path == "" {
+			continue
+		}
+		info, statErr := os.Lstat(c.path)
+		if statErr == nil {
+			if !info.Mode().IsRegular() {
+				return rollback(fmt.Errorf("refusing to replace non-regular state file %s", c.path), i)
+			}
+			backup, err := os.CreateTemp(filepath.Dir(c.path), "."+filepath.Base(c.path)+".backup-*")
+			if err != nil {
+				return rollback(fmt.Errorf("preparing backup for %s: %w", c.path, err), i)
+			}
+			c.backup = backup.Name()
+			if err := backup.Close(); err != nil {
+				return rollback(fmt.Errorf("preparing backup for %s: %w", c.path, err), i)
+			}
+			if err := os.Remove(c.backup); err != nil {
+				return rollback(fmt.Errorf("preparing backup for %s: %w", c.path, err), i)
+			}
+			if err := rename(c.path, c.backup); err != nil {
+				return rollback(fmt.Errorf("backing up %s: %w", c.path, err), i)
+			}
+			c.backed = true
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return rollback(fmt.Errorf("checking %s: %w", c.path, statErr), i)
+		}
+		if !c.remove {
+			if err := rename(c.staged, c.path); err != nil {
+				return rollback(fmt.Errorf("installing %s: %w", c.path, err), i+1)
+			}
+			c.staged = ""
+			c.installed = true
+		}
+	}
+	var cleanupErr error
+	for _, c := range changes {
+		if c.backup != "" {
+			if err := os.Remove(c.backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+				cleanupErr = errors.Join(cleanupErr, fmt.Errorf("removing credential backup %s: %w", c.backup, err))
+			} else {
+				c.backup = ""
+			}
+		}
+	}
+	cleanup()
+	if cleanupErr != nil {
+		return fmt.Errorf("%w: %w", ErrEnrolmentCommitted, cleanupErr)
+	}
+	return nil
+}
+
+// ArchiveOutboxForReplacement moves the old installation's pending records
+// out of the active outbox before its credentials are replaced. Journal
+// entries are signed by the old installation key and cannot be replayed as
+// records from the new installation.
+func ArchiveOutboxForReplacement(p Paths, installationID string) (string, error) {
+	if p.Outbox == "" {
+		return "", errors.New("the outbox path is empty")
+	}
+	if _, err := os.Lstat(p.Outbox); errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", fmt.Errorf("checking the current outbox: %w", err)
+	}
+	if !idShape.MatchString(installationID) {
+		return "", fmt.Errorf("invalid installation id %q", installationID)
+	}
+	archive := filepath.Join(p.Dir, "outbox-recovery-"+installationID)
+	if _, err := os.Lstat(archive); err == nil {
+		return "", fmt.Errorf("recovery archive already exists at %s", archive)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("checking recovery archive %s: %w", archive, err)
+	}
+	if err := os.Rename(p.Outbox, archive); err != nil {
+		return "", fmt.Errorf("preserving the old installation outbox at %s: %w", archive, err)
+	}
+	return archive, nil
+}
+
+// ArchivedOutbox describes pending records from an installation replaced on
+// this machine. Archives are retained for explicit export; they are never
+// sent under a different installation certificate.
+type ArchivedOutbox struct {
+	InstallationID string
+	Path           string
+	Items          int
+	Bytes          int64
+}
+
+// ListArchivedOutboxes finds recovery archives left by --replace.
+func ListArchivedOutboxes(p Paths) ([]ArchivedOutbox, error) {
+	entries, err := os.ReadDir(p.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	const prefix = "outbox-recovery-"
+	var out []ArchivedOutbox
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		id := strings.TrimPrefix(name, prefix)
+		if !idShape.MatchString(id) || !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(p.Dir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("checking outbox archive %s: %w", path, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("outbox archive %s is not a directory", path)
+		}
+		items, err := os.ReadDir(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading outbox archive %s: %w", path, err)
+		}
+		summary := ArchivedOutbox{InstallationID: id, Path: path}
+		for _, item := range items {
+			if item.Name() == outboxHeadFile {
+				continue
+			}
+			if _, _, ok := parseItemName(item.Name()); !ok {
+				continue
+			}
+			itemInfo, err := os.Lstat(filepath.Join(path, item.Name()))
+			if err != nil {
+				return nil, fmt.Errorf("checking archived item %s: %w", item.Name(), err)
+			}
+			if !itemInfo.Mode().IsRegular() {
+				return nil, fmt.Errorf("archived outbox item %s is not a regular file", item.Name())
+			}
+			summary.Items++
+			summary.Bytes += itemInfo.Size()
+		}
+		out = append(out, summary)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InstallationID < out[j].InstallationID })
+	return out, nil
+}
+
+// ExportArchivedOutbox copies an archive to a new private directory. It
+// never modifies or deletes the preserved source records.
+func ExportArchivedOutbox(p Paths, installationID, destination string) error {
+	if !idShape.MatchString(installationID) {
+		return fmt.Errorf("invalid installation id %q", installationID)
+	}
+	source := filepath.Join(p.Dir, "outbox-recovery-"+installationID)
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("checking archived outbox %s: %w", source, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("archived outbox %s is not a directory", source)
+	}
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		return fmt.Errorf("creating export directory %s: %w", destination, err)
+	}
+	failed := true
+	defer func() {
+		if failed {
+			_ = os.RemoveAll(destination)
+		}
+	}()
+	for _, entry := range entries {
+		from := filepath.Join(source, entry.Name())
+		itemInfo, err := os.Lstat(from)
+		if err != nil {
+			return fmt.Errorf("checking archived file %s: %w", from, err)
+		}
+		if !itemInfo.Mode().IsRegular() {
+			return fmt.Errorf("archived file %s is not a regular file", from)
+		}
+		in, err := os.Open(from)
+		if err != nil {
+			return fmt.Errorf("opening archived file %s: %w", from, err)
+		}
+		to := filepath.Join(destination, entry.Name())
+		out, err := os.OpenFile(to, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			_ = in.Close()
+			return fmt.Errorf("creating export file %s: %w", to, err)
+		}
+		_, copyErr := io.Copy(out, in)
+		inErr := in.Close()
+		if copyErr == nil {
+			copyErr = out.Sync()
+		}
+		outErr := out.Close()
+		if copyErr != nil || inErr != nil || outErr != nil {
+			return errors.Join(fmt.Errorf("exporting archived file %s", from), copyErr, inErr, outErr)
+		}
+	}
+	failed = false
+	return nil
+}
+
+// RestoreOutboxAfterFailedReplacement returns an archived outbox to its
+// active location when replacement aborts before writing new credentials.
+func RestoreOutboxAfterFailedReplacement(p Paths, archive string) error {
+	if archive == "" {
+		return nil
+	}
+	if filepath.Dir(archive) != p.Dir || !strings.HasPrefix(filepath.Base(archive), "outbox-recovery-") {
+		return errors.New("the outbox recovery path is outside the client directory")
+	}
+	if _, err := os.Lstat(p.Outbox); err == nil {
+		return fmt.Errorf("cannot restore the old outbox because %s already exists", p.Outbox)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checking the active outbox: %w", err)
+	}
+	if err := os.Rename(archive, p.Outbox); err != nil {
+		return fmt.Errorf("restoring the old outbox from %s: %w", archive, err)
 	}
 	return nil
 }

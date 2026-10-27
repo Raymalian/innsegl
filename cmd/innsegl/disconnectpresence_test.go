@@ -21,8 +21,11 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestCLI045DisconnectAsksThePersonFirst(t *testing.T) {
-	f := newConnectFixture(t)
+	f := newConnectFixtureWithoutRecoveryRoutes(t)
 	revoked := 0
+	f.core.Mux.HandleFunc(coreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
+		writeCoreJSON(w, http.StatusOK, coreStatus{Version: "clienttest"})
+	})
 	f.core.Mux.HandleFunc(coreDisconnectPath, func(w http.ResponseWriter, _ *http.Request) {
 		revoked++
 		w.WriteHeader(http.StatusNoContent)

@@ -76,22 +76,23 @@ type Core struct {
 	caKey       *ecdsa.PrivateKey
 	clientCAKey *ecdsa.PrivateKey
 
-	mu           sync.Mutex
-	lifetime     time.Duration
-	revoked      bool
-	unavailable  bool
-	idTaken      int
-	echoWrongID  bool
-	tokenUsed    bool
-	serial       int64
-	enrolCalls   int
-	renewCalls   int
-	calls        []string
-	names        []string
-	requestedIDs []string
-	enrolledID   string
-	lastCSR      *x509.CertificateRequest
-	seen         []*big.Int
+	mu            sync.Mutex
+	lifetime      time.Duration
+	revoked       bool
+	statusRefused bool
+	unavailable   bool
+	idTaken       int
+	echoWrongID   bool
+	tokenUsed     bool
+	serial        int64
+	enrolCalls    int
+	renewCalls    int
+	calls         []string
+	names         []string
+	requestedIDs  []string
+	enrolledID    string
+	lastCSR       *x509.CertificateRequest
+	seen          []*big.Int
 }
 
 // New starts a fake core on 127.0.0.1.
@@ -162,6 +163,49 @@ func (c *Core) Fingerprint() string {
 
 // SetRevoked marks the installation revoked: renew answers 401.
 func (c *Core) SetRevoked(v bool) { c.locked(func() { c.revoked = v }) }
+
+// SetStatusRefused controls whether the authenticated status probe accepts
+// an otherwise-issued client certificate.
+func (c *Core) SetStatusRefused(v bool) { c.locked(func() { c.statusRefused = v }) }
+
+// ResetEnrolmentToken makes the fixture's one test token available for a
+// second staged enrolment.
+func (c *Core) ResetEnrolmentToken() { c.locked(func() { c.tokenUsed = false }) }
+
+// InstallRecoveryRoutes adds the default authenticated status and
+// self-disconnect routes used by connect-command tests. Other client tests
+// leave these routes to Mux so they can inspect the raw core contract.
+func (c *Core) InstallRecoveryRoutes() {
+	c.InstallStatusRoute()
+	c.InstallDisconnectRoute()
+}
+
+// InstallStatusRoute adds the default authenticated status route.
+func (c *Core) InstallStatusRoute() {
+	c.Mux.HandleFunc("/_core/status", func(w http.ResponseWriter, _ *http.Request) {
+		c.mu.Lock()
+		refused := c.statusRefused
+		c.mu.Unlock()
+		if refused {
+			refuse(w)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"version":"clienttest"}`)
+	})
+}
+
+// InstallDisconnectRoute adds a default authenticated self-disconnect route.
+func (c *Core) InstallDisconnectRoute() {
+	c.Mux.HandleFunc("/_core/disconnect", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		c.locked(func() { c.revoked = true })
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
 
 // SetUnavailable makes enrolment answer 503, spending nothing.
 func (c *Core) SetUnavailable(v bool) { c.locked(func() { c.unavailable = v }) }

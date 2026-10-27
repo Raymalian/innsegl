@@ -32,7 +32,7 @@ func statusFixture(t *testing.T, components string, serviceUp bool, extra ...str
 func statusFixtureLocal(t *testing.T, components string, serviceUp bool, localBody string, extra ...string) statusDeps {
 	t.Helper()
 	more := strings.Join(extra, "")
-	f := newConnectFixture(t)
+	f := newConnectFixtureWithoutRecoveryRoutes(t)
 	f.core.Mux.HandleFunc(coreStatusPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if _, err := io.WriteString(w, `{"version":"v0.4.0","components":`+components+`,`+

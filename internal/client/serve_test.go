@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -213,7 +214,7 @@ func TestCLI016RenewsAtHalfLife(t *testing.T) {
 	}
 }
 
-func TestCLI016StopsForwardingAfterARenew401(t *testing.T) {
+func TestCLI016StopsForwardingAfterARenewRefusalWithoutCallingItRevoked(t *testing.T) {
 	core, paths := enrolled(t)
 	core.Mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
 	srv, front, logs := startClient(t, paths)
@@ -222,11 +223,20 @@ func TestCLI016StopsForwardingAfterARenew401(t *testing.T) {
 
 	srv.Now = func() time.Time { return leaf.NotBefore.Add(13 * time.Hour) }
 	_, err := srv.MaybeRenew(context.Background())
-	if !errors.Is(err, ErrRevoked) {
-		t.Fatalf("err = %v, want ErrRevoked", err)
+	if !errors.Is(err, ErrCredentialRefused) {
+		t.Fatalf("err = %v, want ErrCredentialRefused", err)
 	}
-	if !strings.Contains(logs.String(), "revoked") {
-		t.Errorf("the log does not say the installation was revoked: %q", logs.String())
+	if st := srv.Status(context.Background()); st.Revoked || !st.CredentialRefused {
+		t.Fatalf("status = %+v; a shared 401 is a credential refusal, not proof of revocation", st)
+	}
+	if _, statErr := os.Stat(paths.Refused); statErr != nil {
+		t.Fatalf("credential refusal marker: %v", statErr)
+	}
+	if _, statErr := os.Stat(paths.Revoked); !os.IsNotExist(statErr) {
+		t.Fatalf("new refusal wrote the legacy revoked marker: %v", statErr)
+	}
+	if strings.Contains(logs.String(), "revoked") {
+		t.Errorf("the log claims the installation was revoked: %q", logs.String())
 	}
 	before := len(core.SeenSerials())
 	resp, err := http.Post(front.URL+"/v1/messages", "application/json", strings.NewReader("{}")) //nolint:noctx // a one-shot test request
@@ -235,14 +245,14 @@ func TestCLI016StopsForwardingAfterARenew401(t *testing.T) {
 	}
 	body := readAll(t, resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "revoked") {
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "certificate") {
 		t.Fatalf("after revocation: %d %q", resp.StatusCode, body)
 	}
 	if len(core.SeenSerials()) != before {
 		t.Fatal("a request reached the core after the renew 401")
 	}
 	// It keeps refusing, and does not ask again.
-	if _, err = srv.MaybeRenew(context.Background()); !errors.Is(err, ErrRevoked) {
+	if _, err = srv.MaybeRenew(context.Background()); !errors.Is(err, ErrCredentialRefused) {
 		t.Fatalf("second MaybeRenew: %v", err)
 	}
 	if _, n := core.Counts(); n != 1 {

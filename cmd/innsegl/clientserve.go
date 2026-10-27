@@ -46,7 +46,8 @@ func clientCommand(args []string, stdout, stderr io.Writer) int {
 
 func clientUsage(w io.Writer) {
 	fprintf(w, "innsegl client - the enrolled machine's local endpoint (#461)\n\n"+
-		"Usage:\n  innsegl client serve [--listen 127.0.0.1:28195]\n\n"+
+		"Usage:\n  innsegl client serve [--listen 127.0.0.1:28195]\n"+
+		"  innsegl client outbox list\n  innsegl client outbox export <installation-id> <directory>\n\n"+
 		"Forwards the harness's, the hooks' and git's requests to the core over this\n"+
 		"machine's client certificate, renewing it at half-life. GET /_client/status\n"+
 		"reports the installation, the certificate's expiry and whether the core answers.\n")
@@ -63,9 +64,60 @@ func runClientCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		return exitOK
 	case "serve":
 		return runClientServe(ctx, args[1:], stdout, stderr, home)
+	case "outbox":
+		return runClientOutbox(args[1:], stdout, stderr, home)
 	}
 	fprintf(stderr, "innsegl client: unknown step %q\n\n", args[0])
 	clientUsage(stderr)
+	return exitUsage
+}
+
+func runClientOutbox(args []string, stdout, stderr io.Writer, home string) int {
+	if len(args) == 1 {
+		for _, arg := range args {
+			if arg != "list" {
+				continue
+			}
+			archives, err := client.ListArchivedOutboxes(client.ClientPaths(home))
+			if err != nil {
+				fprintf(stderr, "innsegl client outbox: %v\n", err)
+				return exitClientFailed
+			}
+			if len(archives) == 0 {
+				fprintf(stdout, "No archived outboxes.\n")
+				return exitOK
+			}
+			for _, archive := range archives {
+				fprintf(stdout, "installation %s: %d items, %d bytes\n  %s\n",
+					archive.InstallationID, archive.Items, archive.Bytes, archive.Path)
+			}
+			return exitOK
+		}
+	}
+	if len(args) == 3 {
+		var action, installationID, directory string
+		for i, arg := range args {
+			switch i {
+			case 0:
+				action = arg
+			case 1:
+				installationID = arg
+			case 2:
+				directory = arg
+			}
+		}
+		if action != "export" {
+			fprintf(stderr, "Usage: innsegl client outbox list | innsegl client outbox export <installation-id> <directory>\n")
+			return exitUsage
+		}
+		if err := client.ExportArchivedOutbox(client.ClientPaths(home), installationID, directory); err != nil {
+			fprintf(stderr, "innsegl client outbox: %v\n", err)
+			return exitClientFailed
+		}
+		fprintf(stdout, "Exported the archived outbox for installation %s to %s. The archive remains preserved locally.\n", installationID, directory)
+		return exitOK
+	}
+	fprintf(stderr, "Usage: innsegl client outbox list | innsegl client outbox export <installation-id> <directory>\n")
 	return exitUsage
 }
 
