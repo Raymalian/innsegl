@@ -28,7 +28,7 @@ func codexCommandWithHook(args []string, stdout, stderr io.Writer, selectHook fu
 	signing := fs.Bool("sign-commits", false, "attribute direct shell commits through the existing signing path")
 	api := fs.Bool("api", false, "use the API-key route instead of the ChatGPT-login route")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: innsegl codex [--api] [--sign-commits] -- [codex arguments]\n\nStart a Codex 0.163.0 session through the enrolled gateway.\nUses per-invocation routing and lifecycle hooks; does not edit user configuration.\nDefault is capture only. --sign-commits enables experimental direct-shell attribution.")
+		fmt.Fprintln(stderr, "usage: innsegl codex [--api] [--sign-commits] -- [codex arguments]\n\nStart a Codex session through the enrolled gateway.\nUses per-invocation routing and lifecycle hooks; does not edit user configuration.\nDefault is capture only. --sign-commits enables experimental direct-shell attribution.")
 	}
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return exitOK
@@ -121,11 +121,6 @@ func runCodexProcessSettings(program, base, hookBinary string, api bool, args []
 			fmt.Fprintln(stderr, "innsegl codex: configuration/profile/remote overrides are not supported by this capture launcher")
 			return exitUsage
 		}
-	}
-	version, err := exec.CommandContext(context.Background(), program, "--version").Output()
-	if err != nil || strings.TrimSpace(string(version)) != "codex-cli 0.163.0" {
-		fmt.Fprintln(stderr, "innsegl codex: this build supports Codex CLI 0.163.0 only")
-		return exitUsage
 	}
 	fixed, err := client.CodexLaunchArgs(base, hookBinary, api)
 	if agents {

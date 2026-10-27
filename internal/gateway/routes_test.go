@@ -149,13 +149,18 @@ func TestOAI022ResponsesWebSocketRouteRelaysAndObservesUpstreamEvents(t *testing
 func TestOAI006ResponsesCapabilitiesAdvertiseLinkedThreads(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ResponsesCapabilities(recorder, httptest.NewRequestWithContext(context.Background(), "GET", "/_gateway/capabilities", nil))
-	var capabilities struct {
-		Agents string `json:"agents"`
-	}
+	var capabilities map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &capabilities); err != nil {
 		t.Fatal(err)
 	}
-	if capabilities.Agents != "linked-threads" {
-		t.Fatalf("agents capability=%q, want linked-threads", capabilities.Agents)
+	var agents string
+	if err := json.Unmarshal(capabilities["agents"], &agents); err != nil {
+		t.Fatal(err)
+	}
+	if agents != "linked-threads" {
+		t.Fatalf("agents capability=%q, want linked-threads", agents)
+	}
+	if _, pinned := capabilities["codex_versions"]; pinned {
+		t.Fatal("capabilities response still pins Codex to an exact CLI version")
 	}
 }
