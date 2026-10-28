@@ -57,13 +57,18 @@ import (
 const exitConnectFailed = 24
 
 type connectDeps struct {
-	home     string
-	binPath  func() (string, error)
-	goos     string
-	uid      int
-	run      func(name string, args ...string) error
-	now      func() time.Time
-	hostname func() (string, error)
+	// codexSettings is the system managed layer, empty when Codex is absent.
+	codexSettings     string
+	codexUnavailable  bool
+	codexCapabilities func(context.Context, string) (codexCapabilities, error)
+	loadCodex         func(context.Context, client.CodexManagedConfig) error
+	home              string
+	binPath           func() (string, error)
+	goos              string
+	uid               int
+	run               func(name string, args ...string) error
+	now               func() time.Time
+	hostname          func() (string, error)
 	// underSudo: run as root through sudo; home and uid are the invoking
 	// user's (connectHome).
 	underSudo bool
@@ -221,12 +226,24 @@ func defaultConnectDeps() (connectDeps, error) {
 	if err != nil {
 		return connectDeps{}, err
 	}
+	codexSettings := ""
+	codexUnavailable := false
+	if path := client.CodexManagedPath(runtime.GOOS); path != "" {
+		if _, err := exec.LookPath("codex"); err == nil {
+			codexSettings = path
+		} else if _, err := os.Stat(path); err == nil {
+			codexSettings = path
+			codexUnavailable = true
+		}
+	}
 	return connectDeps{
-		home:      home,
-		underSudo: underSudo,
-		binPath:   innseglBinaryPath,
-		goos:      runtime.GOOS,
-		uid:       uid,
+		codexSettings:    codexSettings,
+		codexUnavailable: codexUnavailable,
+		home:             home,
+		underSudo:        underSudo,
+		binPath:          innseglBinaryPath,
+		goos:             runtime.GOOS,
+		uid:              uid,
 		run: func(name string, args ...string) error {
 			out, err := exec.CommandContext(context.Background(), name, args...).CombinedOutput()
 			if err != nil {
@@ -258,6 +275,7 @@ func defaultManagedSettingsPath(goos string) string {
 }
 
 type connectFlags struct {
+	codexAPI, codexSigning                             *bool
 	token, ca, fingerprint, name, listen, settings     string
 	noService, pause, resume, disconnect, update, hard bool
 	replace                                            bool
@@ -286,6 +304,8 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	fs.BoolVar(&f.update, "update", false, "rewrite this enrolled machine's managed settings to the chosen mode; no token")
 	fs.StringVar(&f.egress, "egress-control", "", "with --hardened, lock the sandbox's network to the hosts in this file, one per line")
 	fs.BoolVar(&f.hard, "hardened", false, "also lock the harness down: managed hooks only, bypass mode disabled, the sandbox; the user's statusLine is copied in")
+	codexAPI := fs.Bool("codex-api", false, "configure ordinary Codex launches for existing API-key authentication instead of ChatGPT login")
+	codexSigning := fs.Bool("codex-sign-commits", false, "enable experimental direct-shell commit signing for ordinary Codex launches (rewrites may approve the whole shell invocation)")
 	fs.Usage = func() {
 		fprintf(stderr, "innsegl connect - enrol this machine with an innsegl core (#461)\n\n")
 		fprintf(stderr, "Usage:\n"+
@@ -303,6 +323,14 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 		}
 		return exitUsage
 	}
+	fs.Visit(func(flag *flag.Flag) {
+		switch flag.Name {
+		case "codex-api":
+			f.codexAPI = codexAPI
+		case "codex-sign-commits":
+			f.codexSigning = codexSigning
+		}
+	})
 	if f.settings == "" {
 		f.settings = defaultManagedSettingsPath(deps.goos)
 	}
@@ -332,8 +360,14 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	case f.hard && (f.pause || f.resume || f.disconnect):
 		fprintf(stderr, "innsegl connect: --hardened chooses what connect or --update writes; --pause, --resume and --disconnect take no mode\n")
 		return exitUsage
+	case (f.codexAPI != nil || f.codexSigning != nil) && (f.pause || f.resume || f.disconnect):
+		fprintf(stderr, "innsegl connect: Codex mode flags apply to enrollment or --update\n")
+		return exitUsage
+	case (f.codexAPI != nil || f.codexSigning != nil) && (deps.codexSettings == "" || deps.codexUnavailable):
+		fprintf(stderr, "innsegl connect: install Codex before choosing its managed mode\n")
+		return exitUsage
 	case f.pause || f.resume:
-		return connectPauseResume(f, stdout, stderr)
+		return connectPauseResume(f, stdout, stderr, deps)
 	case f.disconnect:
 		return connectDisconnect(ctx, f, stdout, stderr, deps)
 	case f.update:
@@ -350,7 +384,12 @@ func runConnect(ctx context.Context, args []string, stdout, stderr io.Writer, de
 	return connectEnrol(ctx, f, positional, stdout, stderr, deps)
 }
 
-func connectPauseResume(f connectFlags, stdout, stderr io.Writer) int {
+func connectPauseResume(f connectFlags, stdout, stderr io.Writer, deps connectDeps) int {
+	if deps.codexSettings != "" {
+		if err := client.CheckCodexPauseWritable(deps.codexSettings, f.pause); err != nil {
+			return reportCodexSettingsError(err, stderr, "`innsegl connect --"+map[bool]string{true: "pause", false: "resume"}[f.pause]+"`")
+		}
+	}
 	var err error
 	verb := "paused"
 	if f.pause {
@@ -366,7 +405,16 @@ func connectPauseResume(f connectFlags, stdout, stderr io.Writer) int {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
 	}
-	fprintf(stdout, "innsegl connect: %s %s\ninnsegl connect: restart Claude Code for it to take effect\n", verb, f.settings)
+	if deps.codexSettings != "" {
+		if err := client.PauseCodexSettings(deps.codexSettings, f.pause, deps.now, stdout); err != nil {
+			return reportCodexSettingsError(err, stderr, "`innsegl connect --"+map[bool]string{true: "pause", false: "resume"}[f.pause]+"`")
+		}
+	}
+	harness := "Claude Code"
+	if deps.codexSettings != "" {
+		harness += " and Codex"
+	}
+	fprintf(stdout, "innsegl connect: %s %s\ninnsegl connect: restart %s for it to take effect\n", verb, f.settings, harness)
 	return exitOK
 }
 
@@ -408,7 +456,7 @@ const (
 // the binary it names with nobody choosing to: the system managed settings,
 // or a client service.
 func (d connectDeps) unattended(f connectFlags, service bool) hookBinaryUse {
-	if f.settings == defaultManagedSettingsPath(d.goos) || service {
+	if f.settings == defaultManagedSettingsPath(d.goos) || service || (d.codexSettings != "" && !d.codexUnavailable) {
 		return requireInstalled
 	}
 	return preferInstalled
@@ -601,6 +649,9 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 	if f.hard {
 		again = "`innsegl connect --update --hardened`"
 	}
+	if err = deps.checkCodexSettings(f, settings, true); err != nil {
+		return reportCodexSetupError(err, stderr)
+	}
 	// RM-329: the settings name the proxy CA; it exists before they do.
 	if err = client.EnsureProxyCA(paths, deps.uid, deps.underSudo); err != nil {
 		fprintf(stderr, "innsegl connect: the client's proxy CA: %v\n", err)
@@ -645,6 +696,9 @@ func connectUpdate(ctx context.Context, f connectFlags, stdout, stderr io.Writer
 		}
 		fprintf(stdout, "innsegl connect: rewrote and restarted the client service (%s)\n", deps.service().Path())
 	}
+	if err := deps.installCodexSettings(ctx, f, settings, stdout); err != nil {
+		return reportCodexSetupError(err, stderr)
+	}
 	return exitOK
 }
 
@@ -674,6 +728,9 @@ func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Wr
 		fprintf(stderr, "innsegl connect: checking managed settings: %v\n", err)
 		return exitConnectFailed
 	}
+	if err = deps.checkCodexSettings(f, settings, false); err != nil {
+		return reportCodexSettingsError(err, stderr, "`innsegl connect --disconnect`")
+	}
 	err = client.UninstallSettings(f.settings, settings, deps.now, stdout)
 	if code, done := reportNotWritable(err, stderr, ", then run `innsegl connect --disconnect` again"); done {
 		return code
@@ -681,6 +738,11 @@ func connectDisconnect(ctx context.Context, f connectFlags, stdout, stderr io.Wr
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
+	}
+	if deps.codexSettings != "" {
+		if err := client.UninstallCodexSettings(deps.codexSettings, deps.now, stdout); err != nil {
+			return reportCodexSettingsError(err, stderr, "`innsegl connect --disconnect`")
+		}
 	}
 	// Revoke the installation on the core while this machine still holds the
 	// key that proves it is this installation (#490). A core that cannot be
@@ -773,6 +835,10 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 	if err != nil {
 		fprintf(stderr, "innsegl connect: %v\n", err)
 		return exitConnectFailed
+	}
+
+	if err = deps.checkCodexSettings(f, settings, true); err != nil {
+		return reportCodexSettingsError(err, stderr, "the same enrollment command (the token has not been spent)")
 	}
 
 	ca, err := connectCA(ctx, f, coreURL)
@@ -885,6 +951,9 @@ func connectEnrol(ctx context.Context, f connectFlags, positional []string, stdo
 		}
 	}
 
+	if err := deps.installCodexSettings(ctx, f, settings, stdout); err != nil {
+		return reportCodexSetupError(err, stderr)
+	}
 	fprintf(stdout, "\nConnected to %s.\nManaged settings: %s\nLocal endpoint:   http://%s\n"+
 		"Restart Claude Code for the settings to take effect.\n", coreURL, f.settings, f.listen)
 	if failed {
