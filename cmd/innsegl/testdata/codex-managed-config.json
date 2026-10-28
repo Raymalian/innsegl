@@ -1,0 +1,149 @@
+{
+  "config": {
+    "model_provider": "innsegl",
+    "model_providers": {
+      "innsegl": {
+        "name": "Innsegl",
+        "base_url": "http://127.0.0.1:28495/v1",
+        "model_catalog_url": null,
+        "env_key": null,
+        "env_key_instructions": null,
+        "experimental_bearer_token": null,
+        "auth": null,
+        "gateway_oauth": null,
+        "aws": null,
+        "wire_api": "responses",
+        "capabilities": null,
+        "query_params": null,
+        "http_headers": null,
+        "env_http_headers": null,
+        "request_max_retries": null,
+        "stream_max_retries": null,
+        "stream_idle_timeout_ms": null,
+        "websocket_connect_timeout_ms": null,
+        "requires_openai_auth": true,
+        "supports_websockets": false,
+        "supports_standalone_web_search": false
+      }
+    },
+    "hooks": {
+      "PreModelRequest": [],
+      "PostModelRequest": [],
+      "PreToolUse": [],
+      "PermissionRequest": [],
+      "PostToolUse": [],
+      "PreCompact": [],
+      "PostCompact": [],
+      "SessionStart": [
+        {
+          "matcher": null,
+          "hooks": [
+            {
+              "type": "command",
+              "command": "env INNSEGL_CORE_URL=http://127.0.0.1:28495 /qa/innsegl hook session --capture-only",
+              "commandWindows": null,
+              "timeout": 5,
+              "async": false,
+              "statusMessage": null
+            }
+          ]
+        }
+      ],
+      "SessionEnd": [
+        {
+          "matcher": null,
+          "hooks": [
+            {
+              "type": "command",
+              "command": "env INNSEGL_CORE_URL=http://127.0.0.1:28495 /qa/innsegl hook session --capture-only",
+              "commandWindows": null,
+              "timeout": 3,
+              "async": false,
+              "statusMessage": null
+            }
+          ]
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "matcher": null,
+          "hooks": [
+            {
+              "type": "command",
+              "command": "env INNSEGL_CORE_URL=http://127.0.0.1:28495 /qa/innsegl hook session --capture-only",
+              "commandWindows": null,
+              "timeout": 5,
+              "async": false,
+              "statusMessage": null
+            }
+          ]
+        }
+      ],
+      "SubagentStart": [
+        {
+          "matcher": null,
+          "hooks": [
+            {
+              "type": "command",
+              "command": "env INNSEGL_CORE_URL=http://127.0.0.1:28495 /qa/innsegl hook session --capture-only",
+              "commandWindows": null,
+              "timeout": 5,
+              "async": false,
+              "statusMessage": null
+            }
+          ]
+        }
+      ],
+      "SubagentStop": [
+        {
+          "matcher": null,
+          "hooks": [
+            {
+              "type": "command",
+              "command": "env INNSEGL_CORE_URL=http://127.0.0.1:28495 /qa/innsegl hook session --capture-only",
+              "commandWindows": null,
+              "timeout": 5,
+              "async": false,
+              "statusMessage": null
+            }
+          ]
+        }
+      ],
+      "Stop": [],
+      "Interrupt": []
+    },
+    "features": {
+      "hooks": true
+    },
+    "agents": {
+      "enabled": true,
+      "max_concurrent_threads_per_session": null,
+      "max_depth": null,
+      "default_subagent_model": null,
+      "default_subagent_reasoning_effort": null,
+      "job_max_runtime_seconds": null,
+      "interrupt_message": null
+    },
+    "otel": {
+      "tool_result": {
+        "max_bytes": 2048
+      },
+      "log_user_prompt": false,
+      "log_agent_responses": null,
+      "log_guardian_assessments": null,
+      "environment": null,
+      "exporter": {
+        "otlp-http": {
+          "endpoint": "http://127.0.0.1:28495/v1/logs",
+          "headers": {},
+          "protocol": "json",
+          "tls": null
+        }
+      },
+      "trace_exporter": "none",
+      "metrics_exporter": "none",
+      "span_attributes": null,
+      "tracestate": null
+    }
+  }
+}

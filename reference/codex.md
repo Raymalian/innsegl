@@ -2,7 +2,26 @@
 
 ## Purpose
 
-`innsegl codex` launches experimental HTTP Responses capture for Codex CLI versions
+`innsegl connect` and `innsegl connect --update` configure ordinary Codex launches
+when Codex is installed on Linux or macOS. Restart Codex after setup, then use
+`codex` and `codex resume` normally. No capture launcher is required. If a shared
+Codex server is already running, exit active sessions and restart it with
+`codex app-server daemon restart` so it loads the new managed settings.
+
+Setup uses Codex's system managed defaults at `/etc/codex/managed_config.toml`.
+The managed layer sets the local Responses route, root and child lifecycle hooks,
+and local telemetry export. Codex treats these hooks as managed, trusted hooks.
+Setup checks the CLI's effective configuration through `config/read` before
+reporting success. A CLI that cannot load the required settings produces an
+explicit setup error; there is no exact CLI-version pin.
+
+Managed defaults override ordinary user, project, profile and startup settings;
+macOS device management can take higher precedence. This configures the supported
+Codex runtime and is not a boundary against arbitrary programs making direct
+network requests. See [Codex managed configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration).
+
+The optional `innsegl codex` launcher remains available on machines without managed
+setup. It launches experimental HTTP Responses capture for Codex CLI versions
 that support the launch configuration and Responses request shape used here. The
 launcher does not pin an exact CLI version; the gateway records the version from
 the request User-Agent while recognizing the Codex Responses route and identity
@@ -30,7 +49,7 @@ gateway records Codex tool-result and denied/aborted
 tool-decision OTel events when OTel is enabled. The run page labels incomplete
 Responses observations explicitly. Commit signing is an experimental opt-in
 described below. Synthetic transport probes do not establish every provider
-feature or auth-refresh behavior. Unsupported client versions are refused.
+feature or auth-refresh behavior. Clients missing the required configuration or wire capabilities are refused.
 
 ## Commands
 
@@ -38,12 +57,28 @@ With an upgraded, enrolled client and core:
 
 ```sh
 innsegl status
-innsegl codex
+innsegl connect --update
+codex
+codex resume
 # Existing API-key authentication instead of ChatGPT login:
-innsegl codex --api
-# Forward ordinary Codex arguments after --:
-innsegl codex -- exec --ephemeral 'Inspect this repository'
+innsegl connect --update --codex-api
+# Optional signing; a later update preserves this choice:
+innsegl connect --update --codex-sign-commits
+# Return to ChatGPT login and capture only:
+innsegl connect --update --codex-api=false --codex-sign-commits=false
 ```
+
+The first update may print a hash-checked administrator command to install the
+system managed file. Run that command, then repeat the update. Setup validates
+syntax before enrollment and completes the shared client service before
+negotiating Codex capabilities and activating these settings. With `--no-service`,
+start the enrolled client manually before completing Codex setup.
+Updates preserve unrelated system
+settings; ambiguous, invalid or overlapping administrator configuration is
+refused. Pause comments only Innsegl's managed block; resume restores its mode.
+Disconnect removes the block before removing the local client identity.
+
+With the optional launcher, on machines without managed setup:
 
 In the interactive session, review and trust the lifecycle commands in `/hooks`
 before the first task. The launcher installs SessionStart, UserPromptSubmit and
@@ -54,7 +89,8 @@ mode: they do not install signing hooks or push branches at session end.
 
 ## Commit signing
 
-Use `innsegl codex --sign-commits` to select the existing commit path for direct
+Use `innsegl connect --update --codex-sign-commits` for ordinary Codex launches,
+or `innsegl codex --sign-commits` without managed setup, to select the existing commit path for direct
 shell calls. Both client and core must advertise structured signing support;
 a capture-only core is refused during setup. The signing mode uses the same
 version-independent CLI launch path and requires the gateway's structured-signing
@@ -101,15 +137,17 @@ Messages upstream. Provider routing is fixed by exact request path.
 
 ## Files/volumes/containers
 
-User Codex configuration and authentication files are not edited. Existing client
+User Codex configuration and authentication files are not edited. The system
+managed defaults contain an identified Innsegl block and retain unrelated text.
+Existing client
 configuration, enrollment, statements and outbox are reused. Upgrade both binaries
 before trying this command; installing only the launcher is insufficient.
 
 ## Exit codes and error classes
 
 The child Codex exit status is preserved. An unavailable client, missing capability,
-revoked enrollment or missing installed hook binary prevents launch. An unsupported
-Codex version or routing override is a usage error.
+revoked enrollment or missing installed hook binary prevents launch. A routing override is a usage error. Missing required configuration or wire
+capabilities produces an explicit setup error.
 
 ## Tests
 
