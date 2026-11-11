@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -83,10 +82,9 @@ func TestRCV002ClientRecoversAfterLongOfflineAndRestartWithRefusalMarker(t *test
 
 // Exercise the same client/core/database path with certificates minted by the
 // real SPIRE authority. The shared harness also supplies real Fulcio and Rekor.
-func TestRCV002OfflineRecoveryWithRealSPIRE(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 12*time.Minute)
-	defer cancel()
-	stack := startSignE2EStack(ctx, t)
+func checkOfflineRecoveryWithRealSPIRE(t *testing.T, stack *signE2EStack) {
+	t.Helper()
+	ctx := t.Context()
 	source, closeSource, err := openInitCredentialSource(ctx, smokeTestRequest{SVIDFile: stack.svidPath, KeyFile: stack.keyPath, BundleFile: stack.bundlePath, TrustDomain: signE2ETrustDomain})
 	if err != nil {
 		t.Fatal(err)

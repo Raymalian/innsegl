@@ -62,6 +62,9 @@ func TestINIT008SigningPathAgainstRealSPIREFulcioRekor(t *testing.T) {
 	defer cancel()
 
 	stack := startSignE2EStack(ctx, t)
+	t.Run("RCV-002 recovery after long offline and restart", func(t *testing.T) {
+		checkOfflineRecoveryWithRealSPIRE(t, stack)
+	})
 
 	pseudonyms, err := identity.New(identity.ModeLiteral, "")
 	if err != nil {
