@@ -37,8 +37,8 @@ import (
 const ClientCertTTL = 24 * time.Hour
 
 // ClientCertRenewalGrace permits an active identity to renew for one
-// certificate lifetime after expiry. Older credentials require a fresh
-// enrolment.
+// certificate lifetime after expiry. Beyond that, renewal requires independent
+// enrolled device proof (ADR-0085), or fresh owner-authenticated enrollment.
 const ClientCertRenewalGrace = ClientCertTTL
 
 // clientPathPrefix is the subtree client identities live in.

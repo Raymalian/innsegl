@@ -39,6 +39,7 @@ type EnrolParams struct {
 	Token          string
 	InstallationID string
 	Name           string
+	RecoveryKey    []byte
 }
 
 // Enrol spends a token exactly once and creates the installation it
@@ -52,6 +53,9 @@ func (s *Store) Enrol(ctx context.Context, p EnrolParams, issue IssueFunc) (Inst
 	}
 	if !installationIDPattern.MatchString(p.InstallationID) {
 		return Installation{}, fmt.Errorf("%w: an installation id is 32 lowercase hex characters", ErrInvalid)
+	}
+	if len(p.RecoveryKey) != 0 && len(p.RecoveryKey) != 32 {
+		return Installation{}, ErrInvalid
 	}
 	if issue == nil {
 		return Installation{}, fmt.Errorf("%w: no certificate issuer", ErrInvalid)
@@ -77,6 +81,11 @@ func (s *Store) Enrol(ctx context.Context, p EnrolParams, issue IssueFunc) (Inst
 		inst, ierr := insertInstallationTx(ctx, tx, p.InstallationID, en.AccountID, en.CreatedBy, name, kind, repos, tokenID)
 		if ierr != nil {
 			return ierr
+		}
+		if len(p.RecoveryKey) > 0 {
+			if recoveryErr := registerRecoveryTx(ctx, tx, inst.ID, inst.AccountID, p.RecoveryKey); recoveryErr != nil {
+				return recoveryErr
+			}
 		}
 		if serr := issue(ctx, inst); serr != nil {
 			return serr

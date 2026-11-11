@@ -1126,6 +1126,10 @@ func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (
 
 	outer := http.NewServeMux()
 	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))
+	recovery := recoveryHandler(h.writer, h.authority, log)
+	outer.Handle(recoveryBase+"challenge", recovery)
+	outer.Handle(recoveryBase+"issue", recovery)
+	outer.Handle(recoveryBase+"enroll", h.guard.Wrap(recovery))
 	outer.Handle(coreRenewPath, h.guard.WrapRenewal(renewHandler(h.writer, h.authority, log)))
 	outer.Handle(coreDisconnectPath, h.guard.WrapDisconnect(disconnectHandler(h.writer, log)))
 	outer.Handle("/", h.guard.Wrap(mux))

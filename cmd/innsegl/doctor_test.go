@@ -24,7 +24,25 @@ import (
 	"innsegl.dev/innsegl/internal/client/clienttest"
 	"innsegl.dev/innsegl/internal/signprobe"
 	"innsegl.dev/innsegl/internal/trusthistory"
+	"innsegl.dev/innsegl/internal/version"
 )
+
+func TestRCV005DoctorReportsAutomaticRecoveryWithoutDemandingAToken(t *testing.T) {
+	body, err := json.Marshal(map[string]any{"version": version.String(), "credential_refused": true, "recovery": map[string]string{"state": "retrying"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := statusFixtureLocal(t, `[]`, true, string(body))
+	paths := client.ClientPaths(deps.home)
+	var out bytes.Buffer
+	d := doctor{deps: doctorDeps{home: deps.home}, out: &out, paths: paths, local: client.SocketPath(paths)}
+	if d.clientService(t.Context()) {
+		t.Fatal("refused certificate was reported ready")
+	}
+	if !strings.Contains(out.String(), "automatic device recovery") || strings.Contains(out.String(), "fresh-token") {
+		t.Fatalf("doctor demanded a token during automatic recovery: %s", out.String())
+	}
+}
 
 // ---------------------------------------------------------------------------
 // CLI-023 (PROPOSED for doc 07's TC-CLI) — `innsegl doctor` (#588) checks
