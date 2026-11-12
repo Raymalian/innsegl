@@ -107,9 +107,8 @@ func (s *Server) serveCorePass(w http.ResponseWriter, r *http.Request) {
 			"and the call is for %q", s.core.InstallationID, got))
 		return
 	}
-	if s.revoked.Load() {
-		s.corePassError(w, http.StatusForbidden, "innsegl client: the core refused this certificate; it may be expired, invalid, or inactive. "+
-			"Run `innsegl connect --replace` with a fresh token.")
+	if err := s.checkRequestCertificate(r.Context()); err != nil {
+		s.corePassError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, corePassMaxBody+1))

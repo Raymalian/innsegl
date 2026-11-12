@@ -418,9 +418,8 @@ func (s *Server) Handler() http.Handler {
 			s.serveCorePassGone(w)
 			return
 		}
-		if s.revoked.Load() {
-			http.Error(w, "innsegl client: the core refused this certificate; it may be expired, invalid, or inactive. "+
-				"Run `innsegl connect --replace` with a fresh token.", http.StatusForbidden)
+		if err := s.checkRequestCertificate(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		if r.URL.Path == "/_client/capabilities" {
@@ -594,6 +593,10 @@ func (s *Server) reachable(ctx context.Context) bool {
 func (s *Server) MaybeRenew(ctx context.Context) (bool, error) {
 	s.renewMu.Lock()
 	defer s.renewMu.Unlock()
+	return s.maybeRenewLocked(ctx)
+}
+
+func (s *Server) maybeRenewLocked(ctx context.Context) (bool, error) {
 	if !s.revoked.Load() && s.Now().Before(s.RenewAt()) {
 		return false, nil
 	}

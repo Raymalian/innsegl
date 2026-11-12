@@ -149,9 +149,8 @@ func (s *Server) openProvider(w http.ResponseWriter) {
 // serveProvider routes one request on an opened provider connection.
 func (s *Server) serveProvider(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && isModelPath(r.URL.Path) {
-		if s.revoked.Load() {
-			http.Error(w, "innsegl client: the core refused this certificate; it may be expired, invalid, or inactive. "+
-				"Run `innsegl connect --replace` with a fresh token.", http.StatusForbidden)
+		if err := s.checkRequestCertificate(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		s.serveModel(w, r)
