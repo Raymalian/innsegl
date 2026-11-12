@@ -46,12 +46,16 @@ func CodexLaunchArgs(base, binary string, api bool) ([]string, error) {
 		`otel.metrics_exporter="none"`,
 	}
 	hook := "env INNSEGL_CORE_URL=" + shellQuote(base) + " " + shellQuote(binary) + " hook session --capture-only"
-	for _, event := range []string{"SessionStart", "UserPromptSubmit", "SessionEnd"} {
+	for _, lifecycle := range []struct{ event, status string }{
+		{"SessionStart", "Innsegl: register session"},
+		{"UserPromptSubmit", "Innsegl: update session workspace"},
+		{"SessionEnd", "Innsegl: end session"},
+	} {
 		timeout := "5"
-		if event == "SessionEnd" {
+		if lifecycle.event == "SessionEnd" {
 			timeout = "3"
 		}
-		values = append(values, "hooks."+event+"=[{hooks=[{type=\"command\",command="+strconv.Quote(hook)+",timeout="+timeout+"}]}]")
+		values = append(values, "hooks."+lifecycle.event+"=[{hooks=[{type=\"command\",command="+strconv.Quote(hook)+",statusMessage="+strconv.Quote(lifecycle.status)+",timeout="+timeout+"}]}]")
 	}
 	args := []string{"--no-daemon"}
 	for _, v := range values {
@@ -73,11 +77,13 @@ func CodexSigningLaunchArgs(base, binary string, api bool) ([]string, error) {
 	values := []string{`features.code_mode.enabled=true`, `features.code_mode.direct_only_tool_namespaces=["functions"]`}
 	for _, event := range []string{"PreToolUse", "PostToolUse"} {
 		verb := "pre-tool-use --codex"
+		status := "Innsegl: attribute signed commits"
 		if event == "PostToolUse" {
 			verb = "post-tool-use"
+			status = "Innsegl: record tool completion"
 		}
 		hook := "env INNSEGL_CORE_URL=" + shellQuote(base) + " " + shellQuote(binary) + " hook " + verb
-		values = append(values, "hooks."+event+"=[{matcher=\"Bash\",hooks=[{type=\"command\",command="+strconv.Quote(hook)+",timeout=10}]}]")
+		values = append(values, "hooks."+event+"=[{matcher=\"Bash\",hooks=[{type=\"command\",command="+strconv.Quote(hook)+",statusMessage="+strconv.Quote(status)+",timeout=10}]}]")
 	}
 	for _, v := range values {
 		args = append(args, "-c", v)
@@ -103,8 +109,11 @@ func CodexThreadLaunchArgs(base, binary string, api, signing bool) ([]string, er
 	if !signing {
 		hook += " --capture-only"
 	}
-	for _, event := range []string{"SubagentStart", "SubagentStop"} {
-		args = append(args, "-c", "hooks."+event+"=[{hooks=[{type=\"command\",command="+strconv.Quote(hook)+",timeout=5}]}]")
+	for _, child := range []struct{ event, status string }{
+		{"SubagentStart", "Innsegl: register child session"},
+		{"SubagentStop", "Innsegl: end child session"},
+	} {
+		args = append(args, "-c", "hooks."+child.event+"=[{hooks=[{type=\"command\",command="+strconv.Quote(hook)+",statusMessage="+strconv.Quote(child.status)+",timeout=5}]}]")
 	}
 	return args, nil
 }
