@@ -5,7 +5,55 @@ package client
 import (
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
+
+// OAI-006/014/025: hook review can distinguish every installed handler.
+func TestOAI025CodexHooksHaveDistinctStatusLabels(t *testing.T) {
+	for _, signing := range []bool{false, true} {
+		settings, err := CodexManagedTOML(CodexManagedConfig{
+			LocalURL: "http://127.0.0.1:28195",
+			HookBin:  "/opt/innsegl/bin/innsegl",
+			Signing:  signing,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var config struct {
+			Hooks map[string][]struct {
+				Hooks []struct {
+					StatusMessage string `toml:"statusMessage"`
+				} `toml:"hooks"`
+			} `toml:"hooks"`
+		}
+		if err := toml.Unmarshal(settings, &config); err != nil {
+			t.Fatal(err)
+		}
+		wantCount := 5
+		if signing {
+			wantCount = 7
+		}
+		labels := map[string]string{}
+		for event, groups := range config.Hooks {
+			for _, group := range groups {
+				for _, hook := range group.Hooks {
+					label := hook.StatusMessage
+					if !strings.HasPrefix(label, "Innsegl: ") || len(strings.TrimSpace(strings.TrimPrefix(label, "Innsegl: "))) == 0 {
+						t.Errorf("signing=%t %s: missing readable Innsegl status label: %q", signing, event, label)
+					}
+					if previous, exists := labels[label]; exists {
+						t.Errorf("%s and %s have indistinguishable labels %q", previous, event, label)
+					}
+					labels[label] = event
+				}
+			}
+		}
+		if len(labels) != wantCount {
+			t.Errorf("signing=%t: got %d distinct labels, want %d", signing, len(labels), wantCount)
+		}
+	}
+}
 
 // OAI-020/025: launch configuration routes the selected auth mode and
 // disables unobserved transport without editing the user's configuration.
