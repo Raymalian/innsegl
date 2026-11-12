@@ -23,12 +23,13 @@ const DefaultListen = "127.0.0.1:28195"
 // The harness sandbox denies ~/.innsegl to an agent's shell (only
 // ~/.innsegl/ca is readable), so the key is not readable from it.
 type Paths struct {
-	Dir    string
-	Key    string // the machine's private key, 0600
-	Cert   string // the client certificate chain, leaf first
-	Bundle string // the deployment's trust bundle
-	CA     string // the core's own CA, the only root the client trusts for the core
-	Core   string // core.json
+	Dir         string
+	RecoveryKey string // separate Ed25519 device proof, 0600
+	Key         string // the machine's private key, 0600
+	Cert        string // the client certificate chain, leaf first
+	Bundle      string // the deployment's trust bundle
+	CA          string // the core's own CA, the only root the client trusts for the core
+	Core        string // core.json
 	// Revoked exists once the core has refused a renewal.
 	Revoked string
 	// Refused records that the core did not accept this certificate. Unlike
@@ -60,17 +61,18 @@ type Paths struct {
 func ClientPaths(home string) Paths {
 	dir := filepath.Join(home, ".innsegl", "client")
 	return Paths{
-		Dir:        dir,
-		Key:        filepath.Join(dir, "key.pem"),
-		Cert:       filepath.Join(dir, "cert.pem"),
-		Bundle:     filepath.Join(dir, "bundle.pem"),
-		CA:         filepath.Join(dir, "gateway-ca.pem"),
-		Core:       filepath.Join(dir, "core.json"),
-		Revoked:    filepath.Join(dir, "revoked"),
-		Refused:    filepath.Join(dir, "credential-refused"),
-		Outbox:     filepath.Join(dir, "outbox"),
-		ProxyCA:    filepath.Join(dir, "proxy-ca.pem"),
-		ProxyCAKey: filepath.Join(dir, "proxy-ca-key.pem"),
+		Dir:         dir,
+		Key:         filepath.Join(dir, "key.pem"),
+		RecoveryKey: filepath.Join(dir, "recovery-key"),
+		Cert:        filepath.Join(dir, "cert.pem"),
+		Bundle:      filepath.Join(dir, "bundle.pem"),
+		CA:          filepath.Join(dir, "gateway-ca.pem"),
+		Core:        filepath.Join(dir, "core.json"),
+		Revoked:     filepath.Join(dir, "revoked"),
+		Refused:     filepath.Join(dir, "credential-refused"),
+		Outbox:      filepath.Join(dir, "outbox"),
+		ProxyCA:     filepath.Join(dir, "proxy-ca.pem"),
+		ProxyCAKey:  filepath.Join(dir, "proxy-ca-key.pem"),
 		// ADR-0074.
 		TrustBackups: filepath.Join(home, ".innsegl", "trust-backups"),
 		// ADR-0074, ADR-0076.
@@ -168,6 +170,11 @@ func WriteEnrolment(p Paths, e *Enrolment, listen string) error {
 		{path: p.Core, data: append(cfg, '\n'), mode: 0o600},
 		{path: p.Refused, remove: true},
 		{path: p.Revoked, remove: true},
+	}
+	if len(e.RecoveryKey) > 0 {
+		files = append(files, fileChange{path: p.RecoveryKey, data: e.RecoveryKey, mode: 0o600})
+	} else if p.RecoveryKey != "" {
+		files = append(files, fileChange{path: p.RecoveryKey, remove: true})
 	}
 	return writeFilesTransaction(files, os.Rename)
 }

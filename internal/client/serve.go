@@ -60,16 +60,18 @@ type Server struct {
 	// Now is the clock renewal decisions read; tests replace it.
 	Now func() time.Time
 
-	paths     Paths
-	core      CoreConfig
-	target    *url.URL
-	key       *ecdsa.PrivateKey
-	cert      atomic.Pointer[tls.Certificate]
-	revoked   atomic.Bool
-	transport *http.Transport
-	proxy     *httputil.ReverseProxy
-	log       *log.Logger
-	renewMu   sync.Mutex
+	paths         Paths
+	core          CoreConfig
+	target        *url.URL
+	key           *ecdsa.PrivateKey
+	cert          atomic.Pointer[tls.Certificate]
+	revoked       atomic.Bool
+	transport     *http.Transport
+	proxy         *httputil.ReverseProxy
+	log           *log.Logger
+	renewMu       sync.Mutex
+	recovery      atomic.Pointer[RecoveryStatus]
+	renewFailures int
 	// statements is the newest statement per (session, agent) the hook sent
 	// through this service (RM-313).
 	statements *statementCache
@@ -208,12 +210,12 @@ func NewServerWith(paths Paths, logw io.Writer, opts ServerOptions) (*Server, er
 	s.initUnrouted(opts.TranscriptDirs)
 	if _, err := os.Stat(paths.Refused); err == nil {
 		s.revoked.Store(true)
-		s.log.Printf("%v; refusing routed requests. Reconnect with `innsegl connect --replace` and a fresh token.", ErrCredentialRefused)
+		s.log.Printf("%v; device recovery will be attempted; %s", ErrCredentialRefused, RecoveryInstruction(core.CoreURL, paths.CA))
 	} else if _, err := os.Stat(paths.Revoked); err == nil {
 		// Read old installations' marker as an unknown certificate refusal;
 		// never infer that the installation was revoked from the old filename.
 		s.revoked.Store(true)
-		s.log.Printf("%v; refusing routed requests. Reconnect with `innsegl connect --replace` and a fresh token.", ErrCredentialRefused)
+		s.log.Printf("%v; device recovery will be attempted; %s", ErrCredentialRefused, RecoveryInstruction(core.CoreURL, paths.CA))
 	}
 
 	// The core's own CA; and the system's roots too only for a core whose
@@ -416,9 +418,8 @@ func (s *Server) Handler() http.Handler {
 			s.serveCorePassGone(w)
 			return
 		}
-		if s.revoked.Load() {
-			http.Error(w, "innsegl client: the core refused this certificate; it may be expired, invalid, or inactive. "+
-				"Run `innsegl connect --replace` with a fresh token.", http.StatusForbidden)
+		if err := s.checkRequestCertificate(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
 		if r.URL.Path == "/_client/capabilities" {
@@ -497,14 +498,15 @@ func (s *Server) keepStatement(w http.ResponseWriter, r *http.Request, err error
 
 // Status is the body of GET /_client/status.
 type Status struct {
-	InstallationID       string       `json:"installation_id"`
-	CoreURL              string       `json:"core_url"`
-	CertificateExpiresAt time.Time    `json:"certificate_expires_at"`
-	RenewAt              time.Time    `json:"renew_at"`
-	CoreReachable        bool         `json:"core_reachable"`
-	Revoked              bool         `json:"revoked,omitempty"`
-	CredentialRefused    bool         `json:"credential_refused"`
-	Outbox               OutboxStatus `json:"outbox"`
+	InstallationID       string          `json:"installation_id"`
+	CoreURL              string          `json:"core_url"`
+	CertificateExpiresAt time.Time       `json:"certificate_expires_at"`
+	RenewAt              time.Time       `json:"renew_at"`
+	CoreReachable        bool            `json:"core_reachable"`
+	Revoked              bool            `json:"revoked,omitempty"`
+	CredentialRefused    bool            `json:"credential_refused"`
+	Outbox               OutboxStatus    `json:"outbox"`
+	Recovery             *RecoveryStatus `json:"recovery,omitempty"`
 	// Recorded counts, since the service started, the core's answers to
 	// model requests by whether it recorded them: "true", "false" (the
 	// client journaled it), "none" (no repository; nothing to record).
@@ -550,6 +552,7 @@ func (s *Server) Status(ctx context.Context) Status {
 		CertificateExpiresAt: s.Leaf().NotAfter, RenewAt: s.RenewAt(), CredentialRefused: s.revoked.Load(),
 		Outbox: s.outbox.status(), Version: version.String(),
 	}
+	st.Recovery = s.recovery.Load()
 	st.Recorded = s.recordedCounts()
 	st.Unrouted = s.unroutedFindings()
 	st.Signing = s.signing.last.Load()
@@ -585,76 +588,116 @@ func (s *Server) reachable(ctx context.Context) bool {
 // MaybeRenew renews the certificate when its half-life has passed, with a
 // fresh request from the same key. A 401 means the core refused this
 // certificate, without saying whether it expired or the installation is
-// inactive. The service stops routing through it until an operator replaces
-// the enrollment; transient errors remain retryable.
+// inactive. Independent device proof can restore an authorized installation;
+// failures remain retryable and publish their next attempt and recovery action.
 func (s *Server) MaybeRenew(ctx context.Context) (bool, error) {
 	s.renewMu.Lock()
 	defer s.renewMu.Unlock()
-	if s.revoked.Load() {
-		return false, ErrCredentialRefused
-	}
-	if s.Now().Before(s.RenewAt()) {
+	return s.maybeRenewLocked(ctx)
+}
+
+func (s *Server) maybeRenewLocked(ctx context.Context) (bool, error) {
+	if !s.revoked.Load() && s.Now().Before(s.RenewAt()) {
 		return false, nil
 	}
-	// The renewal names the same installation: the same single SAN.
-	uri := s.Leaf().URIs[0]
-	csr, err := newCSR(s.key, uri)
-	if err != nil {
-		return false, err
+	attempt := s.Now()
+	state := RecoveryStatus{State: "recovering", LastAttempt: attempt}
+	if old := s.recovery.Load(); old != nil {
+		state.LastSuccess = old.LastSuccess
 	}
-	c := &http.Client{Transport: s.transport, Timeout: 30 * time.Second}
-	got, err := requestCertificate(ctx, c, strings.TrimSuffix(s.core.CoreURL, "/")+RenewPath, map[string]string{"csr": csr}, s.key, uri)
-	if errors.Is(err, errStatus401) {
-		s.revoked.Store(true)
-		// #nosec G306 -- a marker; its presence is the whole content.
-		if werr := os.WriteFile(s.paths.Refused, []byte(s.Now().UTC().Format(time.RFC3339)+"\n"), 0o600); werr != nil {
-			s.log.Printf("recording the certificate refusal: %v", werr)
+	s.recovery.Store(&state)
+	var got issued
+	var err error
+	authRequired := false
+	_, keyErr := os.Stat(s.recoveryKeyPath())
+	if s.revoked.Load() || (!attempt.Before(s.Leaf().NotAfter) && keyErr == nil) {
+		got, err = s.recoverCertificate(ctx)
+		authRequired = keyErr != nil || errors.Is(err, ErrCredentialRefused)
+	} else {
+		uri := s.Leaf().URIs[0]
+		var csr string
+		csr, err = newCSR(s.key, uri)
+		if err == nil {
+			c := &http.Client{Transport: s.transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+			got, err = requestCertificate(ctx, c, strings.TrimSuffix(s.core.CoreURL, "/")+RenewPath, map[string]string{"csr": csr}, s.key, uri)
 		}
-		s.log.Printf("%v. Refusing routed requests until a fresh token is used with `innsegl connect --replace`.", ErrCredentialRefused)
-		return false, ErrCredentialRefused
+		if errors.Is(err, errStatus401) {
+			s.revoked.Store(true)
+			if werr := writeFileAtomic(s.paths.Refused, []byte(attempt.UTC().Format(time.RFC3339)+"\n"), 0600); werr != nil {
+				s.log.Printf("recording credential refusal: %v", werr)
+			}
+			got, err = s.recoverCertificate(ctx)
+			authRequired = keyErr != nil || errors.Is(err, ErrCredentialRefused)
+			if err != nil {
+				err = errors.Join(ErrCredentialRefused, err)
+			}
+		} else if err == nil {
+			err = s.validateRenewed(got)
+		}
+	}
+	if err == nil {
+		err = s.activateRenewed(got)
+	}
+	if err == nil {
+		// Retry migration after every successful renewal. An outage during
+		// startup must not leave a legacy client without enrolled device proof.
+		if _, migrationErr := s.ensureRecoveryKey(ctx); migrationErr != nil {
+			s.log.Printf("device recovery enrollment: %v; retry after next renewal", migrationErr)
+		}
 	}
 	if err != nil {
-		s.log.Printf("renewing the client certificate: %v", err)
+		s.renewFailures++
+		delay := renewRetry * time.Duration(1<<min(s.renewFailures-1, 2))
+		// Per-device deterministic jitter avoids synchronized reconnect storms.
+		delay += time.Duration(s.Leaf().SerialNumber.Uint64()%15000) * time.Millisecond
+		failed := state
+		failed.State = "retrying"
+		failed.Error = err.Error()
+		failed.NextRetry = attempt.Add(delay)
+		if authRequired {
+			failed.State = "authentication required"
+			failed.Action = RecoveryInstruction(s.core.CoreURL, s.paths.CA)
+		}
+		s.recovery.Store(&failed)
+		s.log.Printf("certificate recovery: %v; next retry %s; %s", err, failed.NextRetry.UTC().Format(time.RFC3339), failed.Action)
 		return false, err
 	}
-	if err := writeFileAtomic(s.paths.Cert, got.ChainPEM, 0o644); err != nil {
-		return false, fmt.Errorf("writing the renewed certificate: %w", err)
-	}
-	if err := writeFileAtomic(s.paths.Bundle, got.BundlePEM, 0o644); err != nil {
-		return false, fmt.Errorf("writing the renewed bundle: %w", err)
-	}
-	if err := s.setCert(got.Chain); err != nil {
-		return false, err
-	}
-	// Connections already open still carry the old certificate.
-	s.transport.CloseIdleConnections()
+	s.renewFailures = 0
+	ready := RecoveryStatus{State: "ready", LastAttempt: attempt, LastSuccess: s.Now()}
+	s.recovery.Store(&ready)
 	s.log.Printf("renewed the client certificate; it expires %s", got.Chain[0].NotAfter.UTC().Format(time.RFC3339))
 	return true, nil
 }
 
-// RunRenewal renews at each half-life until ctx ends or the core refuses.
-// A certificate already past half-life at start is renewed at once.
+// RunRenewal renews at each half-life and retries failed renewal or recovery
+// with bounded backoff until ctx ends. A past-due certificate is tried at once.
 func (s *Server) RunRenewal(ctx context.Context) {
+	// Legacy clients enroll independent proof while their traffic certificate
+	// still authenticates. Migration failure never suppresses ordinary renewal.
+	if _, err := s.ensureRecoveryKey(ctx); err != nil {
+		s.log.Printf("device recovery enrollment: %v", err)
+	}
 	for {
 		wait := s.RenewAt().Sub(s.Now())
+		if s.revoked.Load() {
+			wait = 0
+		}
+		if st := s.recovery.Load(); st != nil && !st.NextRetry.IsZero() {
+			wait = st.NextRetry.Sub(s.Now())
+		}
 		if wait < 0 {
 			wait = 0
 		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(wait):
+		case <-timer.C:
 		}
-		_, err := s.MaybeRenew(ctx)
-		if errors.Is(err, ErrCredentialRefused) {
-			return
-		}
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(renewRetry):
-			}
+		if _, err := s.MaybeRenew(ctx); err != nil {
+			// MaybeRenew publishes the failure and schedules the next retry.
+			continue
 		}
 	}
 }

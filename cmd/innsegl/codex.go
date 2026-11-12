@@ -4,25 +4,27 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
-	"time"
 
 	"innsegl.dev/innsegl/internal/client"
 )
 
 func codexCommand(args []string, stdout, stderr io.Writer) int {
-	return codexCommandWithHook(args, stdout, stderr, connectDeps{binPath: innseglBinaryPath, uid: os.Getuid()}.hookBinary)
+	return codexCommandWithManaged(args, stdout, stderr, connectDeps{binPath: innseglBinaryPath, uid: os.Getuid()}.hookBinary, client.CodexManagedPath(runtime.GOOS))
 }
 
 func codexCommandWithHook(args []string, stdout, stderr io.Writer, selectHook func() (string, error)) int {
+	return codexCommandWithManaged(args, stdout, stderr, selectHook, "")
+}
+
+func codexCommandWithManaged(args []string, stdout, stderr io.Writer, selectHook func() (string, error), managedPath string) int {
 	fs := flag.NewFlagSet("codex", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	signing := fs.Bool("sign-commits", false, "attribute direct shell commits through the existing signing path")
@@ -33,6 +35,13 @@ func codexCommandWithHook(args []string, stdout, stderr io.Writer, selectHook fu
 	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
 		return exitOK
 	} else if err != nil {
+		return exitUsage
+	}
+	if active, err := client.CodexManagedActive(managedPath); err != nil {
+		fmt.Fprintln(stderr, "innsegl codex: checking managed setup:", err)
+		return exitConnectFailed
+	} else if active {
+		fmt.Fprintln(stderr, "innsegl codex: managed setup is active; run `codex` or `codex resume` directly. Choose API-key or signing mode with `innsegl connect --update --codex-api --codex-sign-commits` (each flag accepts =false).")
 		return exitUsage
 	}
 	home, err := os.UserHomeDir()
@@ -55,32 +64,9 @@ func codexCommandWithHook(args []string, stdout, stderr io.Writer, selectHook fu
 		fmt.Fprintln(stderr, "innsegl codex:", err)
 		return exitUsage
 	}
-	httpClient := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, base+"/_client/capabilities", nil)
+	caps, err := readCodexCapabilities(context.Background(), base)
 	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitUsage
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		fmt.Fprintln(stderr, "innsegl codex: the local client is unavailable; check innsegl status")
-		return exitConnectFailed
-	}
-	defer resp.Body.Close()
-	var caps struct {
-		Formats     []string `json:"formats"`
-		Signing     bool     `json:"signing"`
-		SigningMode string   `json:"signing_mode"`
-		Agents      string   `json:"agents"`
-	}
-	supported := false
-	if resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&caps) == nil {
-		for _, f := range caps.Formats {
-			supported = supported || f == "responses-http"
-		}
-	}
-	if !supported {
-		fmt.Fprintln(stderr, "innsegl codex: upgrade the client and core for Responses capture and restore enrollment; check innsegl status")
+		fmt.Fprintln(stderr, "innsegl codex:", err)
 		return exitConnectFailed
 	}
 	if *signing && (!caps.Signing || caps.SigningMode != "structured") {

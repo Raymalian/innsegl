@@ -75,6 +75,22 @@ already in place. Writing the system path needs an administrator; when it
 is not writable, `connect` prints the one command to run, before it spends
 the token.
 
+Machine enrollment outlives the 24-hour traffic certificate (ADR-0085).
+Updated clients retain separate device proof in `recovery-key` (mode 0600)
+and recover automatically after extended offline periods when the installation
+is still authorized. Recovery preserves the installation identity and pending
+data. It cannot bypass suspension or revocation. `innsegl status` reports
+recovery attempts, failures and the next retry; `innsegl doctor` distinguishes
+automatic recovery from required owner authentication.
+
+Upgrade the core and apply its schema migrations before upgrading clients.
+Existing clients enroll device proof using their still-valid certificate;
+new enrollments register it with the enrollment token. An already expired
+legacy enrollment without device proof needs one authenticated replacement:
+obtain a fresh token from the account page and run
+`innsegl connect <core-url> --replace --token <fresh-token> --ca <trusted-ca-file>`.
+Use `innsegl connect --pause` and restart the harness to work without capture.
+
 ## How an agent is recorded
 
 Nothing in the agent is configured to talk to innsegl. The client service is

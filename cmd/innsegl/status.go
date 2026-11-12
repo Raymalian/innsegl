@@ -58,8 +58,9 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		return exitUsage
 	}
 	paths := client.ClientPaths(deps.home)
-	if _, err := client.ReadCoreConfig(paths); err != nil {
-		fprintf(stderr, "innsegl status: this machine is not connected to a core (%v)\n", err)
+	cfg, configErr := client.ReadCoreConfig(paths)
+	if configErr != nil {
+		fprintf(stderr, "innsegl status: this machine is not connected to a core (%v)\n", configErr)
 		return exitConnectFailed
 	}
 
@@ -82,12 +83,39 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 	var unrouted []client.UnroutedSession
 	if svc, err := localClientStatus(ctx, local); err != nil {
 		line("client service", false, "not answering at "+local+"; start it: "+client.RestartCommand(runtime.GOOS))
+		_, refusedErr := os.Stat(paths.Refused)
+		_, legacyErr := os.Stat(paths.Revoked)
+		if refusedErr == nil || legacyErr == nil {
+			line("certificate recovery", false, "saved credential refusal (cause unknown); renewal is not running; "+client.RecoveryInstruction(cfg.CoreURL, paths.CA))
+		}
 	} else {
 		detail := "certificate until " + svc.CertificateExpiresAt
 		if svc.CredentialRefused || svc.Revoked {
-			detail = "the core refused this certificate; replace it with `innsegl connect --replace` and a fresh token"
+			detail = "the core refused this certificate (cause unknown); " + client.RecoveryInstruction(cfg.CoreURL, paths.CA)
+			if svc.Recovery != nil && (svc.Recovery.State == "retrying" || svc.Recovery.State == "recovering") {
+				detail = "the core refused this traffic certificate (cause unknown); automatic device recovery is " + svc.Recovery.State + "; to work without capture, run innsegl connect --pause and restart the harness"
+			}
 		}
 		line("client service", !svc.CredentialRefused && !svc.Revoked, detail)
+		if r := svc.Recovery; r != nil && r.State != "ready" {
+			detail := r.State
+			if r.Error != "" {
+				detail += "; " + r.Error
+			}
+			if !r.LastAttempt.IsZero() {
+				detail += "; last attempt " + r.LastAttempt.UTC().Format(time.RFC3339)
+			}
+			if !r.LastSuccess.IsZero() {
+				detail += "; last renewal " + r.LastSuccess.UTC().Format(time.RFC3339)
+			}
+			if !r.NextRetry.IsZero() {
+				detail += "; next retry " + r.NextRetry.UTC().Format(time.RFC3339)
+			}
+			if r.Action != "" {
+				detail += "; " + r.Action
+			}
+			line("certificate recovery", false, detail)
+		}
 		unrouted = svc.Unrouted
 	}
 
@@ -148,6 +176,7 @@ func runStatus(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 }
 
 type localStatus struct {
+	Recovery             *client.RecoveryStatus   `json:"recovery,omitempty"`
 	Revoked              bool                     `json:"revoked"`
 	CredentialRefused    bool                     `json:"credential_refused"`
 	CertificateExpiresAt string                   `json:"certificate_expires_at"`

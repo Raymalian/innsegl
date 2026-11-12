@@ -293,8 +293,17 @@ func (d *doctor) clientService(ctx context.Context) bool {
 		}
 		d.line(check, "ok", "restarted; runs "+svc.Version)
 	}
-	if svc.Revoked {
-		d.line(check, "REVOKED", "the core refused this machine's renewal; enrol again with `innsegl connect`")
+	if svc.Revoked || svc.CredentialRefused {
+		if svc.Recovery != nil && (svc.Recovery.State == "retrying" || svc.Recovery.State == "recovering") {
+			d.line(check, "RECOVERING", "the traffic certificate was refused (cause unknown); automatic device recovery is "+svc.Recovery.State+"; innsegl status shows the failure and next retry; to work without capture, run innsegl connect --pause and restart the harness")
+			return false
+		}
+		cfg, cfgErr := client.ReadCoreConfig(client.ClientPaths(d.deps.home))
+		if cfgErr != nil {
+			d.line(check, "REFUSED", "credential not accepted; cannot read recovery configuration: "+cfgErr.Error()+"; run innsegl connect --pause and restart the harness")
+			return false
+		}
+		d.line(check, "REFUSED", "the core did not accept this credential (cause unknown); "+client.RecoveryInstruction(cfg.CoreURL, client.ClientPaths(d.deps.home).CA))
 		return false
 	}
 	exp, perr := time.Parse(time.RFC3339, svc.CertificateExpiresAt)
@@ -306,7 +315,7 @@ func (d *doctor) clientService(ctx context.Context) bool {
 		d.line("client certificate", "UNKNOWN", "the service did not say when it expires")
 	case !exp.After(d.now()):
 		d.line("client certificate", "EXPIRED", "at "+svc.CertificateExpiresAt+
-			"; the service renews it while the core answers, or enrol again with `innsegl connect`")
+			"; check certificate recovery in innsegl status; pause capture with innsegl connect --pause and restart the harness if needed")
 		return false
 	}
 	if problem == "" {

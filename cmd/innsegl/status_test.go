@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -254,5 +255,46 @@ func TestHAR022StatusWarnsOfAnUnroutedSession(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("stdout lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// RCV-005: a generic refusal cannot be called revocation, and the next
+// action must supply the enrollment trust and URL arguments or a pause path.
+func TestRCV005StatusExplainsRefusalAndCompleteRecoveryAction(t *testing.T) {
+	deps := statusFixtureLocal(t, `[]`, true, `{"credential_refused":true,"certificate_expires_at":"2026-10-04T00:00:00Z"}`)
+	var out, errOut bytes.Buffer
+	if code := runStatus(t.Context(), nil, &out, &errOut, deps); code == exitOK {
+		t.Fatal("refused credential reported healthy")
+	}
+	for _, want := range []string{"cause unknown", "--token <fresh-token>", "--ca", "https://", "connect --pause"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing actionable %q: %s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "REVOKED") {
+		t.Fatal("generic refusal asserted revocation")
+	}
+}
+
+func TestRCV005StoppedServiceStillExplainsSavedCredentialRefusal(t *testing.T) {
+	deps := statusFixture(t, `[]`, false)
+	if err := os.WriteFile(client.ClientPaths(deps.home).Refused, []byte("refused\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	runStatus(t.Context(), nil, &out, &errOut, deps)
+	for _, want := range []string{"cause unknown", "renewal is not running", "--token <fresh-token>", "connect --pause"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stopped service hides %q: %s", want, out.String())
+		}
+	}
+}
+
+func TestRCV005StatusDoesNotDemandATokenWhileDeviceRecoveryRetries(t *testing.T) {
+	deps := statusFixtureLocal(t, `[]`, true, `{"credential_refused":true,"recovery":{"state":"retrying","error":"network unavailable","next_retry":"2026-11-12T00:00:00Z"}}`)
+	var out, errOut bytes.Buffer
+	runStatus(t.Context(), nil, &out, &errOut, deps)
+	if !strings.Contains(out.String(), "automatic device recovery") || strings.Contains(out.String(), "fresh-token") {
+		t.Fatalf("retryable recovery demanded owner authentication: %s", out.String())
 	}
 }

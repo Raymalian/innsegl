@@ -192,9 +192,10 @@ func enrolHandler(store enrolStore, authority clientAuthority, log *serveLog) ht
 			return
 		}
 		var in struct {
-			Token string `json:"token"`
-			CSR   string `json:"csr"`
-			Name  string `json:"name"`
+			Token       string `json:"token"`
+			CSR         string `json:"csr"`
+			Name        string `json:"name"`
+			RecoveryKey string `json:"recovery_key"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, maxEnrolBody)).Decode(&in); err != nil {
 			writeCoreError(w, http.StatusBadRequest, "innsegl core: enrol: a JSON body with token, csr and name is required")
@@ -212,9 +213,18 @@ func enrolHandler(store enrolStore, authority clientAuthority, log *serveLog) ht
 			return
 		}
 
+		var recoveryKey []byte
+		if in.RecoveryKey != "" {
+			var err error
+			recoveryKey, err = base64.StdEncoding.DecodeString(in.RecoveryKey)
+			if err != nil || len(recoveryKey) != 32 {
+				writeCoreError(w, 400, "innsegl core: invalid recovery public key")
+				return
+			}
+		}
 		var out issuedCertificate
 		var mintErr error
-		_, err := store.Enrol(r.Context(), accounts.EnrolParams{Token: in.Token, InstallationID: id, Name: name},
+		_, err := store.Enrol(r.Context(), accounts.EnrolParams{Token: in.Token, InstallationID: id, Name: name, RecoveryKey: recoveryKey},
 			func(ctx context.Context, _ accounts.Installation) error {
 				out, mintErr = mint(ctx, authority, der, id)
 				return mintErr

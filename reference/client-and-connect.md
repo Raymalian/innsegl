@@ -18,6 +18,11 @@ innsegl client serve [--listen 127.0.0.1:28195]
 innsegl status
 ```
 
+On Linux and macOS, connect detects an installed Codex CLI and configures its
+system managed defaults, so normal `codex` and `codex resume` use the enrolled
+client. Existing machines gain this through `innsegl connect --update`; no new
+enrollment token is required. See [Codex capture](codex.md).
+
 `innsegl` by name is `~/.local/bin/innsegl`, the link `make build` makes to
 the checkout's `./innsegl`; with `~/.local/bin` not on PATH, run `./innsegl`
 in the checkout. That link is for the CLI only: the hooks, the client service
@@ -56,7 +61,9 @@ user can change, and names `make install-release`. That holds whenever it
 writes the system managed settings, which every session loads, or a client
 service. Settings of your own (`--managed-settings <path>`) with
 `--no-service` run nothing on their own and name this binary when no
-installed copy of it is there. `--disconnect` is never refused for it.
+installed copy of it is there. This exception applies only when no Codex system
+settings are being configured: those hooks always require the installed copy.
+`--disconnect` is never refused for it.
 `innsegl link` writes the same binary into a repository's git hooks, under
 the same rule. A repository linked earlier, whose hooks name another binary,
 is rewritten onto the installed copy the next time the session hook runs in
@@ -82,7 +89,9 @@ installed, with the one command that removes it, and removes nothing itself.
 | `-ca-fingerprint` | the core CA's `sha256:<hex>`; the CA is fetched once and checked against it |
 | `-name` | this installation's display name (default: the host name) |
 | `-listen` | loopback address of the client service (default `127.0.0.1:28195`) |
-| `-managed-settings` | write the harness's managed settings here instead of the system path |
+| `-managed-settings` | write Claude Code's managed settings here instead of its system path; Codex still uses its own system managed file |
+| `-codex-api` | select the existing API-key authentication route for ordinary Codex launches; `=false` selects ChatGPT login |
+| `-codex-sign-commits` | opt into direct-shell signing for ordinary Codex launches; `=false` restores capture only; updates preserve the prior choice |
 | `-hardened` | also lock the harness down: managed hooks only, bypass mode off, the sandbox |
 | `-egress-control` | with `--hardened`, limit the sandbox's network to the hosts in this file |
 | `-no-service` | do not install or remove the user service |
@@ -129,6 +138,23 @@ build the service runs: `innsegl doctor` restarts a service whose build is
 not its own ([doctor.md](doctor.md)).
 
 ## Settings
+
+Codex setup checks configuration syntax before enrollment, completes the shared
+client service setup, and negotiates required gateway capabilities before writing
+or staging active Codex settings. With `--no-service`, a manually running enrolled
+client must answer this check too. A missing client, an unsupported core, or a
+Codex configuration failure is reported as incomplete setup; the valid enrollment
+and shared service are retained. Resolve the reported error and use `connect
+--update`, rather than spending another enrollment token. A settings write that
+needs an administrator prints the normal hash-checked install command; run it
+and repeat `connect --update`.
+
+The shared service remains available to Claude when Codex setup fails. Removing
+Codex from PATH retains existing Codex configuration until it can be updated or
+explicitly removed by disconnect. User configuration and authentication files
+are not edited. Existing Codex runtimes must restart to load managed defaults;
+after exiting active sessions, `codex app-server daemon restart` refreshes an
+already running shared Codex server.
 
 The managed settings connect writes point the harness at the client service
 (`internal/client/settings.go`):

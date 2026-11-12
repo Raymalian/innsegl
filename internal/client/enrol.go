@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
@@ -71,6 +72,7 @@ type EnrolOptions struct {
 type Enrolment struct {
 	CoreURL        string
 	InstallationID string
+	RecoveryKey    ed25519.PrivateKey
 	Key            *ecdsa.PrivateKey
 	CA             *x509.Certificate
 	// PublicServer is true when the core's server certificate is publicly
@@ -104,6 +106,10 @@ func Enrol(ctx context.Context, opts EnrolOptions) (*Enrolment, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, recoveryKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
 	// A core with a publicly trusted server certificate (#473) is verified
 	// against the system's roots as well; every other core only against its
 	// own CA.
@@ -134,7 +140,7 @@ func Enrol(ctx context.Context, opts EnrolOptions) (*Enrolment, error) {
 		if cerr != nil {
 			return nil, cerr
 		}
-		body := map[string]string{"token": opts.Token, "csr": csr, "name": opts.Name}
+		body := map[string]string{"token": opts.Token, "csr": csr, "name": opts.Name, "recovery_key": base64.StdEncoding.EncodeToString(recoveryKey[ed25519.SeedSize:])}
 		got, err = requestCertificate(ctx, httpClient, coreURL+EnrolPath, body, key, uri)
 		if errors.Is(err, errStatus400) && attempt == 0 {
 			// The id may already be in use; the token was not spent.
@@ -155,7 +161,7 @@ func Enrol(ctx context.Context, opts EnrolOptions) (*Enrolment, error) {
 	}
 	return &Enrolment{
 		CoreURL: coreURL, InstallationID: got.InstallationID,
-		Key: key, CA: opts.CA, PublicServer: public, issued: got,
+		Key: key, RecoveryKey: recoveryKey, CA: opts.CA, PublicServer: public, issued: got,
 	}, nil
 }
 

@@ -208,6 +208,10 @@ const (
 	// same adoption-instead-of-resume ADR-0058 decision 7 already accepts.
 	defaultGatewayBackstopInterval = 15 * time.Minute
 
+	// End signals use a shorter clock than the silence backstop, so a
+	// finished session is retired promptly after its existing grace period.
+	gatewaySessionEndInterval = 30 * time.Second
+
 	// gatewaySweepTimeout bounds one backstop sweep (the enumeration query
 	// and every Retire it triggers), the same reasoning gatewayBootTimeout
 	// gives construction: a sweep that hangs is worse than one that fails
@@ -669,12 +673,10 @@ type runningGateway struct {
 	backstopCandidates *gateway.SilentRunCandidates
 	backstopInterval   time.Duration
 
-	// sessionEnder is set alongside backstop (o.dsn non-empty) and swept on
-	// the SAME ticker: ADR-0058 decision 7a's mark-then-sweep session-end
-	// signal (lifecycle.go's own doc comment on the redesign, #380 review)
-	// and decision 7c's silence backstop are independent clocks answering
-	// the same question -- has this run gone quiet -- so one ticker serving
-	// both is not two mechanisms sharing infrastructure by accident.
+	// sessionEnder is set alongside backstop (o.dsn non-empty), but swept
+	// independently: the session-end grace period is much shorter than
+	// the silence backstop's interval, and slow backstop work must not delay
+	// a session whose own end signal is already due.
 	sessionEnder *gateway.SessionEnder
 	// sessionEndRateLimit bounds sessionEndHandler's own request rate --
 	// see that handler's doc comment for the threat this, and the loopback
@@ -762,6 +764,14 @@ func (g *runningGateway) Serve(ctx context.Context) error {
 // already take toward their own periodic work, because a single failed
 // sweep is not a reason to stop relaying traffic.
 func (g *runningGateway) runBackstop(ctx context.Context) {
+	if g.sessionEnder != nil {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			g.runSessionEnds(ctx)
+		}()
+		defer func() { <-done }()
+	}
 	ticker := time.NewTicker(g.backstopInterval)
 	defer ticker.Stop()
 	for {
@@ -790,20 +800,31 @@ func (g *runningGateway) sweepOnce(ctx context.Context) {
 			g.log.info("the silence backstop retired silent runs", "count", len(retired))
 		}
 	}
+}
 
-	// The session-end signal (ADR-0058 decision 7a, lifecycle.go's own
-	// redesign): retires the main-agent run of every session whose signal
-	// has stood uncancelled past its grace period. Swept alongside the
-	// backstop rather than on its own goroutine -- both answer the same
-	// question, silence, on independent clocks (lifecycle.go's own doc
-	// comment).
-	if g.sessionEnder != nil {
-		retired, endErr := g.sessionEnder.Sweep(sweepCtx)
-		if endErr != nil {
-			g.log.warn("the session-end sweep did not finish cleanly", "err", endErr)
+// runSessionEnds checks persisted end signals immediately, then independently
+// of backstop enumeration and retirement. The existing grace and cancellation
+// rules remain owned by SessionEnder.
+func (g *runningGateway) runSessionEnds(ctx context.Context) {
+	ticker := time.NewTicker(gatewaySessionEndInterval)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		sweepCtx, cancel := context.WithTimeout(ctx, gatewaySweepTimeout)
+		retired, err := g.sessionEnder.Sweep(sweepCtx)
+		cancel()
+		if err != nil {
+			g.log.warn("the session-end sweep did not finish cleanly", "err", err)
 		}
 		if len(retired) > 0 {
 			g.log.info("a session-end signal retired runs after its grace period", "count", len(retired))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }
@@ -1126,6 +1147,10 @@ func (h *hostedCore) wrap(mux *http.ServeMux, base *tls.Config, log *serveLog) (
 
 	outer := http.NewServeMux()
 	outer.Handle(coreEnrolPath, enrolHandler(h.writer, h.authority, log))
+	recovery := recoveryHandler(h.writer, h.authority, log)
+	outer.Handle(recoveryBase+"challenge", recovery)
+	outer.Handle(recoveryBase+"issue", recovery)
+	outer.Handle(recoveryBase+"enroll", h.guard.Wrap(recovery))
 	outer.Handle(coreRenewPath, h.guard.WrapRenewal(renewHandler(h.writer, h.authority, log)))
 	outer.Handle(coreDisconnectPath, h.guard.WrapDisconnect(disconnectHandler(h.writer, log)))
 	outer.Handle("/", h.guard.Wrap(mux))
