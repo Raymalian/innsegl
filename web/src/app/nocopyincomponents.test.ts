@@ -6,7 +6,8 @@
 // possible." That is this issue's acceptance criterion, and it is the kind of
 // rule that is true on the day it is written and false three views later. So
 // it is not reviewed, it is parsed: every .tsx file in the shell is read
-// through the TypeScript compiler that already ships in this toolchain, and
+// through the pinned TypeScript compiler API (the TypeScript 7 CLI does not
+// export this API), and
 // two things are refused —
 //
 //   1. JSX text with any non-whitespace in it. `<p>Fulcio unreachable</p>` is
@@ -24,7 +25,7 @@
 // that covers one directory is a discipline a component author escapes by
 // putting the file somewhere else.
 
-import ts from "typescript";
+import ts from "typescript-compiler-api";
 import { describe, expect, it } from "vitest";
 
 const ATTRIBUTES_A_PERSON_CAN_PERCEIVE = new Set([

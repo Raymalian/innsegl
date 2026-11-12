@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -77,7 +78,7 @@ func TestRCV002RecoveryIssuesForTheSameInstallationWithoutATrafficCertificate(t 
 
 // RCV-002: reproduce the incident through the actual client, gateway and store.
 func TestRCV002ClientRecoversAfterLongOfflineAndRestartWithRefusalMarker(t *testing.T) {
-	checkOfflineRecovery(t, nil)
+	checkOfflineRecovery(t, nil, false)
 }
 
 // Exercise the same client/core/database path with certificates minted by the
@@ -99,10 +100,15 @@ func checkOfflineRecoveryWithRealSPIRE(t *testing.T, stack *signE2EStack) {
 			t.Error(err)
 		}
 	}()
-	checkOfflineRecovery(t, authority)
+	checkOfflineRecovery(t, authority, true)
 }
 
-func checkOfflineRecovery(t *testing.T, authority clientAuthority) {
+// RCV-002/005: an incoming harness request recovers before it is forwarded.
+func TestRCV002ClientRequestRecoversAfterLongOffline(t *testing.T) {
+	checkOfflineRecovery(t, nil, true)
+}
+
+func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecovery bool) {
 	t.Helper()
 	f := newEnFixture(t)
 	if authority != nil {
@@ -149,9 +155,17 @@ func checkOfflineRecovery(t *testing.T, authority clientAuthority) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ok, err := srv.MaybeRenew(t.Context())
-	if err != nil || !ok {
-		t.Fatalf("reconnect did not recover after restart: %v %v", ok, err)
+	if requestRecovery {
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/_client/capabilities", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("request did not recover after restart: %d %s", w.Code, w.Body)
+		}
+	} else {
+		ok, renewErr := srv.MaybeRenew(t.Context())
+		if renewErr != nil || !ok {
+			t.Fatalf("reconnect did not recover after restart: %v %v", ok, renewErr)
+		}
 	}
 	if !srv.Leaf().NotAfter.After(time.Now()) {
 		t.Fatal("no valid certificate")
