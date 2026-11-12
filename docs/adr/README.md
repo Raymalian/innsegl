@@ -106,6 +106,7 @@ maintainer ask "why is it like this?"
 | [0081](0081-the-core-can-serve-a-publicly-trusted-server-certificate-obtained-through-acme-dns-01.md) | The core can serve a publicly trusted server certificate, obtained through ACME DNS-01 | accepted | 2026-10-10 |
 | [0082](0082-a-second-unlock-device-a-hardware-security-key-through-the-dashboard.md) | A second unlock device: a hardware security key through the dashboard | accepted | 2026-10-11 |
 | [0083](0083-the-identity-lifecycle-is-served-on-no-listener-by-default.md) | The identity lifecycle is served on no listener by default | accepted | 2026-10-12 |
+| [0085](0085-machine-enrollment-outlives-its-session-certificate.md) | Machine enrollment outlives its session certificate | accepted | 2026-11-12 |
 
 ## Open items
 
