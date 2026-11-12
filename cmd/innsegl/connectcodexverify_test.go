@@ -44,7 +44,7 @@ func TestOAI025CodexEffectiveManagedSettings(t *testing.T) {
 	if err := checkCodexEffectiveConfig([]byte(`{"config":null}`), cfg); err == nil {
 		t.Fatal("accepted absent configuration")
 	}
-	for _, modifier := range []string{"matcher", "async"} {
+	for _, modifier := range []string{"matcher", "async", "statusMessage"} {
 		var value struct {
 			Config map[string]json.RawMessage `json:"config"`
 		}
@@ -59,10 +59,13 @@ func TestOAI025CodexEffectiveManagedSettings(t *testing.T) {
 			t.Fatal(err)
 		}
 		groups := hooks["SubagentStart"]
-		if modifier == "matcher" {
+		switch modifier {
+		case "matcher":
 			groups[0].Matcher = "one-agent-only"
-		} else {
+		case "async":
 			groups[0].Hooks[0]["async"] = true
+		case "statusMessage":
+			groups[0].Hooks[0]["statusMessage"] = ""
 		}
 		hooks["SubagentStart"] = groups
 		rawHooks, err := json.Marshal(hooks)

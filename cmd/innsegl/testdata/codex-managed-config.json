@@ -44,7 +44,7 @@
               "commandWindows": null,
               "timeout": 5,
               "async": false,
-              "statusMessage": null
+              "statusMessage": "Innsegl: register session"
             }
           ]
         }
@@ -59,7 +59,7 @@
               "commandWindows": null,
               "timeout": 3,
               "async": false,
-              "statusMessage": null
+              "statusMessage": "Innsegl: end session"
             }
           ]
         }
@@ -74,7 +74,7 @@
               "commandWindows": null,
               "timeout": 5,
               "async": false,
-              "statusMessage": null
+              "statusMessage": "Innsegl: update session workspace"
             }
           ]
         }
@@ -89,7 +89,7 @@
               "commandWindows": null,
               "timeout": 5,
               "async": false,
-              "statusMessage": null
+              "statusMessage": "Innsegl: register child session"
             }
           ]
         }
@@ -104,7 +104,7 @@
               "commandWindows": null,
               "timeout": 5,
               "async": false,
-              "statusMessage": null
+              "statusMessage": "Innsegl: end child session"
             }
           ]
         }
