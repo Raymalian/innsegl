@@ -167,9 +167,11 @@ type RecordStep struct {
 	Input     string `json:"input"`
 	Output    string `json:"output"`
 	Truncated bool   `json:"truncated"`
-	// ObservationIncomplete marks a Responses call whose stream ended before
-	// the gateway received a complete output item.
-	ObservationIncomplete bool `json:"observation_incomplete"`
+	// ObservationIncomplete marks incomplete current-call evidence.
+	// ObservationGap also carries warnings about missing historical context
+	// when the current call itself was fully observed.
+	ObservationIncomplete bool   `json:"observation_incomplete"`
+	ObservationGap        string `json:"observation_gap,omitempty"`
 	// Clipped is true when the record capped Input or Output to keep the
 	// page light; GET .../steps/{n} serves the step in full (#440).
 	Clipped bool          `json:"clipped"`

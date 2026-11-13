@@ -22,16 +22,24 @@ type ResponsesWebSocketMessageObserver interface {
 // response.create messages supply tool results. The frame relay remains
 // byte-for-byte and never depends on this parser.
 type responsesWebSocketObserver struct {
-	mu          sync.Mutex
-	observer    ToolUseObserver
-	frames      FrameObserver
-	onText      func(string)
-	messages    ResponsesWebSocketMessageObserver
-	ctx         context.Context
-	current     *responsesInterpreter
-	fragments   map[Direction]*responsesWSFragments
-	preObserved map[Direction]bool
-	finished    bool
+	mu                 sync.Mutex
+	observer           ToolUseObserver
+	frames             FrameObserver
+	onText             func(string)
+	messages           ResponsesWebSocketMessageObserver
+	ctx                context.Context
+	current            *responsesInterpreter
+	history            *responseContextHistory
+	scope              string
+	activeID           string
+	responses          map[string]*responseObservation
+	responseOrder      []string
+	requests           []responseRequestContext
+	requestContextLost bool
+	fallbackUnknown    bool
+	fragments          map[Direction]*responsesWSFragments
+	preObserved        map[Direction]bool
+	finished           bool
 }
 
 type responsesWSFragments struct {
@@ -45,12 +53,17 @@ func newResponsesWebSocketObserver(observer ToolUseObserver) *responsesWebSocket
 	o := &responsesWebSocketObserver{observer: observer, fragments: map[Direction]*responsesWSFragments{
 		ClientToUpstream: {}, UpstreamToClient: {},
 	}, preObserved: map[Direction]bool{}}
+	o.history = newResponseContextHistory()
+	o.responses = make(map[string]*responseObservation)
 	o.resetInterpreter()
 	return o
 }
 
 func (o *responsesWebSocketObserver) resetInterpreter() {
-	o.current = newResponsesInterpreter(o.observer)
+	if o.current != nil {
+		o.current.Finish()
+	}
+	o.current = newResponsesInterpreter(o.contextObserver(!o.fallbackUnknown, !o.fallbackUnknown))
 	o.current.onText = o.onText
 }
 
@@ -140,23 +153,96 @@ func (o *responsesWebSocketObserver) finishMessage(state *responsesWSFragments) 
 		state.opcode = 0
 	}()
 	if state.dropping || state.message.Len() == 0 {
+		if state.direction == ClientToUpstream {
+			o.noteUnknownRequest()
+		}
 		return
 	}
 	payload := state.message.Bytes()
 	if state.direction == ClientToUpstream {
+		o.noteRequest(payload)
 		if o.messages != nil {
 			o.messages.OnResponsesWebSocketMessage(o.ctx, payload)
 		}
 		return
 	}
-	var terminal struct {
-		Type string `json:"type"`
+	o.observeServerMessage(payload)
+}
+
+func (o *responsesWebSocketObserver) observeServerMessage(payload []byte) {
+	var envelope struct {
+		Type       string `json:"type"`
+		ResponseID string `json:"response_id"`
+		Response   struct {
+			ID       string `json:"id"`
+			Previous string `json:"previous_response_id"`
+			Status   string `json:"status"`
+		} `json:"response"`
 	}
-	if json.Unmarshal(payload, &terminal) != nil {
-		terminal.Type = ""
+	if json.Unmarshal(payload, &envelope) != nil {
+		return
 	}
-	discardWriteError(o.current.Write(append(append([]byte("data: "), payload...), '\n', '\n')))
-	if terminal.Type == "response.completed" || terminal.Type == "response.failed" || terminal.Type == "response.incomplete" {
+	id, _ := boundedResponseContextID(envelope.ResponseID)
+	terminal := envelope.Type == "response.completed" || envelope.Type == "response.failed" || envelope.Type == "response.incomplete"
+	if envelope.Type == "response.created" {
+		createdID, invalidID := boundedResponseContextID(envelope.Response.ID)
+		if createdID == "" {
+			return
+		}
+		parent, invalidParent := boundedResponseContextID(envelope.Response.Previous)
+		unknown := invalidID || invalidParent || o.requestContextLost
+		if len(o.requests) > 0 {
+			request := o.requests[0]
+			o.requests = o.requests[1:]
+			unknown = unknown || request.unknown || (parent != "" && request.parent != "" && parent != request.parent)
+			if parent == "" {
+				parent = request.parent
+			}
+		}
+		if !o.history.closed(o.scope, createdID) {
+			o.startResponse(createdID, parent, unknown)
+		}
+		o.activeID = createdID
+		return
+	}
+	if terminal && envelope.Response.ID != "" {
+		terminalID, _ := boundedResponseContextID(envelope.Response.ID)
+		if id != "" && id != terminalID {
+			return
+		}
+		id = terminalID
+	}
+	if id == "" && len(o.responses) > 1 {
+		// Multiple responses are in flight. An event without its response
+		// identifier cannot be assigned to the most recently created one.
+		if !o.fallbackUnknown {
+			o.fallbackUnknown = true
+			o.resetInterpreter()
+		}
+	} else if id == "" {
+		id = o.activeID
+	}
+	interp := o.current
+	if id != "" {
+		if o.history.closed(o.scope, id) {
+			return
+		}
+		observation := o.responses[id]
+		if observation == nil {
+			observation = o.startResponse(id, "", true)
+		}
+		interp = observation.interpreter
+	}
+	discardWriteError(interp.Write(append(append([]byte("data: "), payload...), '\n', '\n')))
+	if terminal {
+		interp.Finish()
+		if id != "" {
+			o.history.finish(o.scope, id, envelope.Type == "response.completed" && envelope.Response.Status == "completed")
+			o.forgetResponse(id)
+			if o.activeID == id {
+				o.activeID = ""
+			}
+		}
 		o.resetInterpreter()
 	}
 }
@@ -171,5 +257,11 @@ func (o *responsesWebSocketObserver) Finish() {
 		return
 	}
 	o.finished = true
+	for id, observation := range o.responses {
+		observation.interpreter.Finish()
+		o.history.finish(o.scope, id, false)
+	}
+	o.responses = nil
+	o.responseOrder = nil
 	o.current.Finish()
 }

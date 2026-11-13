@@ -104,7 +104,10 @@ type pendingCall struct {
 	input                 json.RawMessage
 	truncated             bool
 	observationIncomplete bool
+	contextIncomplete     bool
+	observationGap        string
 	recorded              bool
+	replayed              bool
 	observedAt            time.Time
 	// workingDirectory is the one the request carrying this call stated;
 	// the commit path reads the commit's objects there (LookupPending).
@@ -146,6 +149,10 @@ var _ snapshotWitness = (*Snapshotter)(nil)
 
 // ToolCallRecorderConfig configures a ToolCallRecorder.
 type ToolCallRecorderConfig struct {
+	CallStates *CallStateStore
+	// IncompleteCalls retains deny-only incomplete observations across cache
+	// eviction and restart. Production keeps it on the existing body volume.
+	IncompleteCalls *IncompleteCallStore
 	// Snapshots takes the per-request workspace witness (snapshot.go). Nil
 	// means this recorder never attaches workspace_tree_hash — every
 	// tool_call it records carries none, exactly as a snapshot failure
@@ -230,6 +237,8 @@ type ToolCallRecorder struct {
 	mirrorSnaps MirrorSnapshots
 	mirrorWait  time.Duration
 	trigger     *SnapshotTrigger
+	incomplete  *IncompleteCallStore
+	states      *CallStateStore
 
 	record      func(ctx context.Context, in mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error)
 	onFailure   func(error)
@@ -265,6 +274,8 @@ func NewToolCallRecorder(cfg ToolCallRecorderConfig) *ToolCallRecorder {
 		mirrorSnaps: cfg.MirrorSnapshots,
 		mirrorWait:  mirrorWait,
 		trigger:     cfg.Trigger,
+		incomplete:  cfg.IncompleteCalls,
+		states:      cfg.CallStates,
 		record:      record,
 		onFailure:   onFailure,
 		onRecorded:  cfg.onRecorded,
@@ -327,6 +338,28 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	if !ok || runID == "" {
 		return
 	}
+	if r.incomplete != nil {
+		seen, err := r.incomplete.Contains(runID, t.ID)
+		if err == nil && seen {
+			if r.states == nil {
+				return
+			}
+			t.Input = nil
+			t.ObservationIncomplete = true
+		}
+		if err == nil && t.ObservationIncomplete {
+			err = r.incomplete.Remember(runID, t.ID)
+		}
+		if err != nil {
+			// An unreadable history cannot establish a fresh executable
+			// observation. Retain an input-free gap and report the failure.
+			r.failed.Add(1)
+			r.onFailure(fmt.Errorf("incomplete observation history: %w", err))
+			t.Input = nil
+			t.ObservationIncomplete = true
+			t.ObservationGap = "the prior observation history could not be checked; recorded with input unknown"
+		}
+	}
 	var workingDirectory, repo string
 	if facts, ok := RequestFactsFromContext(ctx); ok {
 		workingDirectory = facts.WorkingDirectory
@@ -342,15 +375,12 @@ func (r *ToolCallRecorder) OnToolUseContext(ctx context.Context, t ToolUse) {
 	journalEntry, _ := JournalEntryFromContext(ctx)
 	id, _ := IdentificationFromContext(ctx)
 	thread, _ := CodexThreadFromContext(ctx)
-	//nolint:contextcheck // deliberate: addPending's own eventual recording (on eviction) uses
-	// a detached, bounded context of its own rather than ctx -- see recordAsync's own doc
-	// comment for why a request/reply's context must never be allowed to cut a recording short.
-	r.addPending(runID, workingDirectory, repo, installation, journalEntry, id.Harness, t, thread)
+	r.addPending(ctx, runID, workingDirectory, repo, installation, journalEntry, id.Harness, t, thread)
 }
 
 // addPending records t as pending, evicting and recording the oldest
 // pending entry (input-only) first if the table is already at its cap.
-func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installation, journalEntry, harness string, t ToolUse, thread CodexThreadIdentity) {
+func (r *ToolCallRecorder) addPending(ctx context.Context, runID, workingDirectory, repo, installation, journalEntry, harness string, t ToolUse, thread CodexThreadIdentity) {
 	key := pendingKey{runID: runID, toolUseID: t.ID}
 	call := pendingCall{
 		harness:   harness,
@@ -361,7 +391,10 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installatio
 		input:                 append(json.RawMessage(nil), t.Input...),
 		truncated:             t.Truncated,
 		observationIncomplete: t.ObservationIncomplete,
+		contextIncomplete:     t.ContextIncomplete,
+		observationGap:        t.ObservationGap,
 		observedAt:            time.Now(),
+		replayed:              IsReplay(ctx) || journalEntry != "",
 
 		workingDirectory: workingDirectory,
 		installation:     installation,
@@ -373,8 +406,22 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installatio
 	var evictedCall pendingCall
 	evicted := false
 	recordIncomplete := false
+	retryRecording := false
 
 	r.mu.Lock()
+	previous, previouslyObserved := r.pending[key]
+	if !previouslyObserved && r.states != nil {
+		stored, err := r.states.load(runID, t.ID)
+		if err != nil {
+			call.input = nil
+			call.observationIncomplete = true
+			call.observationGap = "the prior observation history could not be checked; recorded with input unknown"
+			noteReplayProblem(ctx, call.observationGap)
+		} else if stored != nil {
+			previous, previouslyObserved = stored.pending(), true
+			retryRecording = (stored.Record != nil || stored.Call.ObservationIncomplete) && !stored.Recorded
+		}
+	}
 	for otherKey, other := range r.pending {
 		if otherKey.toolUseID == key.toolUseID && (otherKey.runID != key.runID || other.ambiguous) {
 			other.ambiguous = true
@@ -393,9 +440,11 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installatio
 		}
 		r.order = append(r.order, key)
 	}
-	if previous, exists := r.pending[key]; exists {
+	if previouslyObserved {
 		// Keep the first observation's lifetime and evidence. A replay with
 		// different provenance or content cannot authorize either command.
+		// Historical-context warnings are retained from that first observation;
+		// changing a warning alone does not change the current command.
 		conflict := previous.sessionID != call.sessionID || previous.threadID != call.threadID || previous.harness != call.harness || previous.namespace != call.namespace || previous.wireType != call.wireType ||
 			previous.tool != call.tool || !bytes.Equal(previous.input, call.input) ||
 			previous.truncated != call.truncated || previous.observationIncomplete != call.observationIncomplete || previous.workingDirectory != call.workingDirectory ||
@@ -409,14 +458,24 @@ func (r *ToolCallRecorder) addPending(runID, workingDirectory, repo, installatio
 		call.recorded = true
 		recordIncomplete = true
 	}
+	if r.states != nil {
+		if err := r.states.save(stateFromPending(runID, t.ID, call)); err != nil {
+			call.input = nil
+			call.observationIncomplete = true
+			call.recorded = true
+			recordIncomplete = true
+			call.observationGap = "the current observation could not be persisted; recorded with input unknown"
+			noteReplayProblem(ctx, call.observationGap)
+		}
+	}
 	r.pending[key] = call
 	r.mu.Unlock()
 
 	if evicted && !evictedCall.recorded {
-		go r.recordAsync(evictedKey.runID, evictedKey.toolUseID, evictedCall, nil, "", false)
+		r.scheduleRecord(ctx, evictedKey.runID, evictedKey.toolUseID, evictedCall, nil, "", false)
 	}
-	if recordIncomplete {
-		go r.recordAsync(runID, t.ID, call, nil, "", false)
+	if recordIncomplete || retryRecording {
+		r.scheduleRecord(ctx, runID, t.ID, call, nil, "", false)
 	}
 }
 
@@ -490,7 +549,7 @@ func (r *ToolCallRecorder) takeBaselineAsync(runID, workingDirectory string) {
 // called for beyond the snapshot capture itself (this file's own doc
 // comment, "witness, never a gate").
 func (r *ToolCallRecorder) HandleResults(ctx context.Context, runID string, facts RequestFacts, results []observedToolResult) {
-	pairs := r.claimPending(runID, results)
+	pairs := r.claimPending(ctx, runID, results)
 	if len(pairs) == 0 {
 		return
 	}
@@ -499,20 +558,14 @@ func (r *ToolCallRecorder) HandleResults(ctx context.Context, runID string, fact
 
 	for _, p := range pairs {
 		result := p.result
-		//nolint:contextcheck,gosec // G118: deliberate, not an oversight. recordAsync builds
-		// its own detached, bounded context (context.Background plus recordTimeout) rather
-		// than ctx (the request's own): ctx is cancelled once the response this call is
-		// witnessing finishes, and a Postgres round trip that must complete regardless is
-		// exactly this file's own "witness, never a gate" requirement (see the package doc
-		// comment) -- a cancelled request must never cut short a recording already under way.
-		go r.recordAsync(runID, p.toolUseID, p.call, &result, treeHash, snapshotError)
+		r.scheduleRecord(ctx, runID, p.toolUseID, p.call, &result, treeHash, snapshotError)
 	}
 }
 
 // claimPending removes and returns the pending entry for every result that
 // has one, keeping order in sync with pending so a later eviction still
 // evicts the genuinely oldest entry still waiting.
-func (r *ToolCallRecorder) claimPending(runID string, results []observedToolResult) []claimedPair {
+func (r *ToolCallRecorder) claimPending(ctx context.Context, runID string, results []observedToolResult) []claimedPair {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -520,6 +573,14 @@ func (r *ToolCallRecorder) claimPending(runID string, results []observedToolResu
 	for _, res := range results {
 		key := pendingKey{runID: runID, toolUseID: res.ToolUseID}
 		call, found := r.pending[key]
+		if !found && r.states != nil {
+			state, err := r.states.load(runID, res.ToolUseID)
+			if err != nil {
+				noteReplayRecordingFailure(ctx)
+			} else if state != nil {
+				call, found = state.pending(), true
+			}
+		}
 		if !found {
 			// Either never observed by this recorder at all, or already
 			// claimed or evicted on an earlier request carrying the same
@@ -577,7 +638,7 @@ func (r *ToolCallRecorder) snapshotIfTriggered(ctx context.Context, runID string
 }
 
 // ---------------------------------------------------------------------------
-// Recording, always asynchronous.
+// Recording, detached from live forwarding.
 // ---------------------------------------------------------------------------
 
 // recordAsync builds the body for one tool_use — paired with result when
@@ -587,20 +648,30 @@ func (r *ToolCallRecorder) snapshotIfTriggered(ctx context.Context, runID string
 // finishes. A failure is handed off to onFailure and counted; it is never
 // returned to anything, because there is nothing left in this call chain
 // to return it to.
-func (r *ToolCallRecorder) recordAsync(runID, toolUseID string, call pendingCall, result *observedToolResult, treeHash string, snapshotError bool) {
+//
+//nolint:contextcheck // recordAsync deliberately detaches into its own bounded context so a disconnected peer cannot cancel a durable write.
+func (r *ToolCallRecorder) scheduleRecord(ctx context.Context, runID, toolUseID string, call pendingCall, result *observedToolResult, treeHash string, snapshotError bool) {
+	if IsReplay(ctx) {
+		// An importer must retain its signed source until triggered writes
+		// finish. The live relay still records off the forwarding path.
+		if err := r.recordAsync(runID, toolUseID, call, result, treeHash, snapshotError); err != nil {
+			noteReplayRecordingFailure(ctx)
+		}
+		return
+	}
+	go func() {
+		// recordAsync already counts and reports failures on the live path.
+		if err := r.recordAsync(runID, toolUseID, call, result, treeHash, snapshotError); err != nil {
+			return
+		}
+	}()
+}
+
+func (r *ToolCallRecorder) recordAsync(runID, toolUseID string, call pendingCall, result *observedToolResult, treeHash string, snapshotError bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), recordTimeout)
 	defer cancel()
 
-	if treeHash == "" && result != nil {
-		// A hosted core's snapshot is the client's (mirrorsnapshot.go).
-		var mirrorError bool
-		treeHash, mirrorError = r.mirrorTree(ctx, toolUseID, call)
-		snapshotError = snapshotError || mirrorError
-	}
-	body := buildToolCallBody(toolUseID, call, result, snapshotError)
-	_, err := r.record(ctx, mcp.GatewayToolCallInput{
-		RunID: runID, Tool: call.tool, Body: body, WorkspaceTreeHash: treeHash,
-	})
+	err := r.recordDurable(ctx, runID, toolUseID, call, result, treeHash, snapshotError)
 	if err != nil {
 		r.failed.Add(1)
 		r.onFailure(fmt.Errorf(
@@ -609,6 +680,57 @@ func (r *ToolCallRecorder) recordAsync(runID, toolUseID string, call pendingCall
 	if r.onRecorded != nil {
 		r.onRecorded()
 	}
+	return err
+}
+
+func (r *ToolCallRecorder) recordDurable(ctx context.Context, runID, toolUseID string, call pendingCall, result *observedToolResult, treeHash string, snapshotError bool) error {
+	state := stateFromPending(runID, toolUseID, call)
+	if r.states != nil {
+		prior, err := r.states.load(runID, toolUseID)
+		if err != nil {
+			return err
+		}
+		if prior != nil && prior.Record != nil {
+			state = *prior
+			if state.Recorded {
+				return nil
+			}
+		}
+	}
+	if state.Record == nil {
+		if treeHash == "" && result != nil {
+			// A hosted core's snapshot is the client's (mirrorsnapshot.go).
+			var mirrorError bool
+			treeHash, mirrorError = r.mirrorTree(ctx, toolUseID, call)
+			snapshotError = snapshotError || mirrorError
+		}
+		body := buildToolCallBody(toolUseID, call, result, snapshotError)
+		state.Record = &mcp.GatewayToolCallInput{
+			RunID: runID, Tool: call.tool, Body: body, WorkspaceTreeHash: treeHash,
+		}
+		if r.states != nil {
+			if err := r.states.save(state); err != nil {
+				return err
+			}
+			// A concurrent retry may have stored the canonical payload first.
+			stored, err := r.states.load(runID, toolUseID)
+			if err != nil {
+				return err
+			}
+			if stored == nil {
+				return fmt.Errorf("persisted call observation disappeared before recording")
+			}
+			state = *stored
+		}
+	}
+	if _, err := r.record(ctx, *state.Record); err != nil {
+		return err
+	}
+	if r.states != nil {
+		state.Recorded = true
+		return r.states.save(state)
+	}
+	return nil
 }
 
 // gatewayToolCallBody is what buildToolCallBody assembles: tool name,
@@ -630,6 +752,7 @@ type gatewayToolCallBody struct {
 	Input                 json.RawMessage `json:"input,omitempty"`
 	InputTruncated        bool            `json:"input_truncated,omitempty"`
 	ObservationIncomplete bool            `json:"observation_incomplete,omitempty"`
+	ContextIncomplete     bool            `json:"context_incomplete,omitempty"`
 	ResultObserved        bool            `json:"result_observed"`
 	Result                json.RawMessage `json:"result,omitempty"`
 	IsError               bool            `json:"is_error,omitempty"`
@@ -660,6 +783,7 @@ func buildToolCallBody(toolUseID string, call pendingCall, result *observedToolR
 		Input:                 call.input,
 		InputTruncated:        call.truncated,
 		ObservationIncomplete: call.observationIncomplete,
+		ContextIncomplete:     call.contextIncomplete,
 		JournalEntry:          call.journalEntry,
 	}
 	if len(snapshotError) > 0 {
@@ -674,10 +798,16 @@ func buildToolCallBody(toolUseID string, call pendingCall, result *observedToolR
 	} else {
 		if call.observationIncomplete {
 			b.Note = "the Responses stream ended before the complete call was observed; recorded with input unknown"
+			if call.observationGap != "" {
+				b.Note = call.observationGap
+			}
 		} else {
 			b.Note = "this tool_use was evicted from the gateway's bounded pending set " +
 				"before its result was observed; recorded input-only"
 		}
+	}
+	if call.contextIncomplete {
+		b.Note = call.observationGap
 	}
 	out, err := json.Marshal(b)
 	if err != nil {
@@ -980,7 +1110,7 @@ func (r *ToolCallRecorder) LookupPending(toolUseID string) (commitpath.RelayedCa
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for key, call := range r.pending {
-		if key.toolUseID == toolUseID && !call.ambiguous && !call.observationIncomplete && !call.recorded {
+		if key.toolUseID == toolUseID && !call.ambiguous && !call.observationIncomplete && !call.recorded && !call.replayed {
 			return commitpath.RelayedCall{
 				Harness:   call.harness,
 				SessionID: call.sessionID, ThreadID: call.threadID,

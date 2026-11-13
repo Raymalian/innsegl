@@ -287,6 +287,9 @@ func (s *Server) forwardDirect(w http.ResponseWriter, r *http.Request, ex *excha
 	stripHopByHop(out.Header)
 	out.Header.Del(StatementHeader)
 	out.Header.Del("X-Gateway-Key")
+	if ex.path == "/v1/responses" || ex.path == "/v1/models" {
+		out.Header.Del("ChatGPT-Account-ID")
+	}
 	out.Header.Set("Accept-Encoding", "identity")
 	out.ContentLength = int64(len(ex.body))
 	resp, err := s.providerClient.Do(out)

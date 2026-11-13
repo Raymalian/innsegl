@@ -92,6 +92,10 @@ func checkCodexEffectiveConfig(raw []byte, cfg client.CodexManagedConfig) error 
 	if json.Unmarshal(raw, &got) != nil || got.Config == nil {
 		return errors.New("the installed Codex CLI returned no effective configuration")
 	}
+	provider := got.Config["model_provider"]
+	if provider != nil && provider != "openai" && provider != "innsegl" {
+		return errors.New("the installed Codex CLI selected a provider outside Innsegl's supported routes; choose the native OpenAI provider or the existing Innsegl provider")
+	}
 	settings, err := client.CodexManagedTOML(cfg)
 	if err != nil {
 		return err

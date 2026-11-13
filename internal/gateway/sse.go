@@ -34,9 +34,15 @@ type ToolUse struct {
 	// only this observation of the tool call's input is incomplete.
 	Truncated bool
 	// ObservationIncomplete is true when the Responses stream ended before
-	// this item's complete event arrived. The id and tool name were present,
-	// but no partial command arguments are retained.
+	// this item's complete event arrived, or required response context is
+	// missing. The id and tool name are known; command arguments are not kept.
 	ObservationIncomplete bool
+	// ContextIncomplete marks missing historical response context separately
+	// from the completeness of the current tool item.
+	ContextIncomplete bool
+	// ObservationGap describes missing response context without retaining
+	// partial command arguments. It is a body note, never an event field.
+	ObservationGap string
 }
 
 // ToolUseObserver is notified of each ToolUse as it completes. An

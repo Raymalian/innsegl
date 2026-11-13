@@ -89,6 +89,9 @@ func observationBody(r *http.Request) wireBody {
 }
 
 func observationProblem(ctx context.Context) string {
+	if problem, ok := ctx.Value(responseParentProblemKey{}).(string); ok && problem != "" {
+		return problem
+	}
 	if b, ok := ctx.Value(wireBodyKey{}).(wireBody); ok {
 		return b.problem
 	}
