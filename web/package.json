@@ -33,7 +33,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "5.2.0",
     "jsdom": "27.0.0",
-    "tailwindcss": "4.3.3",
+    "tailwindcss": "4.3.5",
     "typescript": "7.0.2",
     "typescript-compiler-api": "npm:typescript@5.9.3",
     "vite": "8.3.7",
