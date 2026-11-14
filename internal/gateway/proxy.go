@@ -32,7 +32,8 @@ var hopByHopHeaders = []string{
 // after every chunk it forwards so a server-sent-events reply is never
 // buffered.
 type Proxy struct {
-	Upstream *Upstream
+	Upstream         *Upstream
+	responsesHistory *responseContextHistory
 
 	// ToolUse, set or nil. While an Anthropic Messages reply streams, each
 	// tool_use content block is handed to it as soon as its
@@ -105,6 +106,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Preserve the bounded request context before forwarding consumes its reader.
+	if isResponsesPath(r.URL.Path) && !isWebSocketUpgrade(r) &&
+		(p.ToolUse != nil || p.ReplyText != nil) && r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		body := observationBody(r)
+		r = p.markMissingResponseParent(r, body)
+	}
 	// A WebSocket upgrade is relayed by ws.go instead of the ordinary HTTP
 	// path below (GW-009, #372) -- dispatched here, after every guard has
 	// already run, so an unrecognised harness shape is refused (GW-011)
@@ -171,6 +178,10 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 	// names a host path, which is not the provider's to see.
 	outReq.Header.Del(StatementHeader)
 	outReq.Header.Del("X-Gateway-Key")
+	if r.URL.Path == "/v1/responses" || r.URL.Path == "/v1/models" {
+		// ChatGPT account selection is not an API-key credential.
+		outReq.Header.Del("ChatGPT-Account-ID")
+	}
 	// The reply is read here as well as relayed (stream, below), and a
 	// compressed one reads as nothing: Claude Code asks for gzip, br and
 	// zstd. Identity is the one encoding every client accepts, so the

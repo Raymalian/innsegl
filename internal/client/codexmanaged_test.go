@@ -10,7 +10,72 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
+
+// OAI-019/020: app-server resume may explicitly retain the built-in provider
+// even when managed defaults select the custom provider. Both must be routed.
+func TestOAI019CodexManagedRoutesResumedBuiltinProvider(t *testing.T) {
+	for _, api := range []bool{false, true} {
+		t.Run(map[bool]string{false: "chatgpt", true: "api"}[api], func(t *testing.T) {
+			cfg := CodexManagedConfig{LocalURL: "http://127.0.0.1:28495", HookBin: "/qa/innsegl", API: api}
+			body, err := CodexManagedTOML(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings struct {
+				BaseURL   string `toml:"openai_base_url"`
+				Providers map[string]struct {
+					BaseURL string `toml:"base_url"`
+				} `toml:"model_providers"`
+			}
+			if err := toml.Unmarshal(body, &settings); err != nil {
+				t.Fatal(err)
+			}
+			want := cfg.LocalURL + "/backend-api/codex"
+			if api {
+				want = cfg.LocalURL + "/v1"
+			}
+			if settings.BaseURL != want || settings.Providers["innsegl"].BaseURL != want {
+				t.Fatalf("resumed built-in route %q and custom route %q must both use %q",
+					settings.BaseURL, settings.Providers["innsegl"].BaseURL, want)
+			}
+		})
+	}
+}
+
+// OAI-019: current Codex pins conversations to their selected provider.
+// Recording must route both choices without changing that selection.
+func TestOAI019CodexManagedPreservesProviderChoice(t *testing.T) {
+	cfg := CodexManagedConfig{LocalURL: "http://127.0.0.1:28495", HookBin: "/qa/innsegl"}
+	body, err := CodexManagedTOML(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := toml.Unmarshal(body, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, forced := parsed["model_provider"]; forced {
+		t.Fatal("recording setup forces a provider change for existing conversations")
+	}
+	for _, provider := range []string{"openai", "innsegl"} {
+		t.Run(provider, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "managed_config.toml")
+			original := "model_provider = '" + provider + "'\n"
+			if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := InstallCodexSettings(path, cfg, time.Now, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(readFile(t, path), []byte(original)) {
+				t.Fatal("provider preference was overwritten")
+			}
+		})
+	}
+}
 
 // OAI-020/025, CLI-036: ordinary launches get the same managed route and
 // lifecycle as explicit launches; updates preserve the administrator's text.
@@ -29,7 +94,7 @@ func TestOAI025CodexManagedInstallUpdateRemove(t *testing.T) {
 		t.Fatalf("installed block inactive: %v", err)
 	}
 	first := readFile(t, path)
-	for _, want := range []string{original, "model_provider=\"innsegl\"", "hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.SubagentStart=", "hooks.SessionEnd=", "agents.enabled=true", "/backend-api/codex", "otel.exporter="} {
+	for _, want := range []string{original, "openai_base_url=", "hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.SubagentStart=", "hooks.SessionEnd=", "agents.enabled=true", "/backend-api/codex", "otel.exporter="} {
 		if !bytes.Contains(first, []byte(want)) {
 			t.Errorf("missing %q", want)
 		}
@@ -81,7 +146,7 @@ func TestOAI025CodexManagedInstallUpdateRemove(t *testing.T) {
 // OAI-025: invalid TOML, ambiguous ownership and overlapping administrator
 // configuration cannot be silently overwritten by enrollment or recovery.
 func TestOAI025CodexManagedRefusesAmbiguousConfiguration(t *testing.T) {
-	for _, original := range []string{"model = [", "model_provider = 'other'\n", "# BEGIN INNSEGL CODEX\n", "# END INNSEGL CODEX\n", "[hooks]\nSessionStart = []\n"} {
+	for _, original := range []string{"model = [", "model_provider = 'other'\n", "openai_base_url = 'https://example.invalid/v1'\n", "# BEGIN INNSEGL CODEX\n", "# END INNSEGL CODEX\n", "[hooks]\nSessionStart = []\n"} {
 		t.Run(strings.ReplaceAll(original, "\n", "_"), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "managed_config.toml")
 			if err := os.WriteFile(path, []byte(original), 0600); err != nil {

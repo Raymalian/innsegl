@@ -35,6 +35,7 @@ type gatewayBody struct {
 	Input                 json.RawMessage `json:"input"`
 	InputTruncated        bool            `json:"input_truncated"`
 	ObservationIncomplete bool            `json:"observation_incomplete"`
+	ContextIncomplete     bool            `json:"context_incomplete"`
 	ResultObserved        bool            `json:"result_observed"`
 	Result                json.RawMessage `json:"result"`
 	IsError               bool            `json:"is_error"`

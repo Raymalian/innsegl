@@ -72,7 +72,7 @@ func TestOAI016SameRunReplayPreservesSigningEvidence(t *testing.T) {
 		t.Run(fmt.Sprint(conflict), func(t *testing.T) {
 			rec := NewToolCallRecorder(ToolCallRecorderConfig{})
 			call := ToolUse{ID: "call_replay", Name: "functions.exec_command", Namespace: "functions", Input: json.RawMessage(`{"cmd":"git commit -m first"}`)}
-			rec.addPending("run-a", "", "", "", "", "codex", call, CodexThreadIdentity{})
+			rec.addPending(context.Background(), "run-a", "", "", "", "", "codex", call, CodexThreadIdentity{})
 			key := pendingKey{runID: "run-a", toolUseID: call.ID}
 			old := time.Now().Add(-time.Hour)
 			original := rec.pending[key]
@@ -81,15 +81,67 @@ func TestOAI016SameRunReplayPreservesSigningEvidence(t *testing.T) {
 			if conflict {
 				call.Input = json.RawMessage(`{"cmd":"git commit -m replacement"}`)
 			}
-			rec.addPending("run-a", "", "", "", "", "codex", call, CodexThreadIdentity{})
+			rec.addPending(WithReplay(context.Background()), "run-a", "", "", "", "", "codex", call, CodexThreadIdentity{})
 			if conflict {
 				if _, ok := rec.LookupPending(call.ID); ok {
 					t.Fatal("conflicting replay remained eligible")
 				}
 			} else if got := rec.pending[key].observedAt; !got.Equal(old) {
 				t.Fatal("identical replay renewed signing lifetime")
+			} else if _, ok := rec.LookupPending(call.ID); !ok {
+				t.Fatal("historical duplicate replaced the original live observation")
 			}
 		})
+	}
+}
+
+// OAI-018/021: importing historical evidence cannot open a current signing
+// window, even when the saved stream contains a complete direct command.
+func TestOAI018ImportedCallCannotAuthorizeSigning(t *testing.T) {
+	for _, source := range []string{"replay", "journal", "both"} {
+		t.Run(source, func(t *testing.T) {
+			calls := &fakeRecordCalls{}
+			rec := NewToolCallRecorder(ToolCallRecorderConfig{record: calls.fn})
+			ctx := WithIdentification(WithRunID(context.Background(), "run-import"), Identification{Harness: "codex"})
+			if source != "journal" {
+				ctx = WithReplay(ctx)
+			}
+			if source != "replay" {
+				ctx = WithJournalEntry(ctx, "sha256:historical-entry")
+			}
+			parser := newResponsesInterpreter(ToolUseObserverFunc(func(call ToolUse) {
+				rec.OnToolUseContext(ctx, call)
+			}))
+			parser.event("response.output_item.done", `{"item":{"type":"function_call","name":"exec_command","call_id":"call_imported","arguments":"{\"cmd\":\"git commit -m historical\"}"}}`)
+			if _, ok := rec.LookupPending("call_imported"); ok {
+				t.Fatal("historical import opened a current signing window")
+			}
+			live := WithIdentification(WithRunID(context.Background(), "run-import"), Identification{Harness: "codex"})
+			rec.OnToolUseContext(live, ToolUse{ID: "call_imported", Name: "exec_command", WireType: "function_call", Input: json.RawMessage(`{"cmd":"git commit -m historical"}`)})
+			if _, ok := rec.LookupPending("call_imported"); ok {
+				t.Fatal("duplicate promoted historical evidence to a live observation")
+			}
+			rec.HandleResults(ctx, "run-import", RequestFacts{}, []observedToolResult{recResult("call_imported", `"done"`, false)})
+			waitForCalls(t, calls, 1)
+		})
+	}
+}
+
+func TestOAI018HistoryWarningChangePreservesLiveCommandEvidence(t *testing.T) {
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{})
+	ctx := WithIdentification(WithRunID(context.Background(), "run-live-warning"), Identification{Harness: "codex"})
+	call := ToolUse{ID: "call_live_warning", Name: "exec_command", WireType: "function_call", Input: json.RawMessage(`{"cmd":"git commit -m current"}`),
+		ContextIncomplete: true, ObservationGap: missingResponseContext}
+	rec.OnToolUseContext(ctx, call)
+	original, ok := rec.LookupPending(call.ID)
+	if !ok {
+		t.Fatal("complete current command was not pending")
+	}
+	call.ContextIncomplete, call.ObservationGap = false, ""
+	rec.OnToolUseContext(ctx, call)
+	current, ok := rec.LookupPending(call.ID)
+	if !ok || !current.ObservedAt.Equal(original.ObservedAt) || string(current.Input) != string(original.Input) {
+		t.Fatal("a history-warning change replaced or invalidated identical current command evidence")
 	}
 }
 

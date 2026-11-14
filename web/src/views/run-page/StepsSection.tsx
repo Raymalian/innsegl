@@ -410,8 +410,8 @@ function StepBody({
     <>
       {!agrees ? <WitnessGrid step={step} /> : null}
 
-      {step.observation_incomplete ? (
-        <p role="alert" className={stepRefusedNote}>{strings.timeline.responseObservationIncomplete}</p>
+      {step.observation_incomplete || step.observation_gap ? (
+        <p role="alert" className={stepRefusedNote}>{step.observation_gap || strings.timeline.responseObservationIncomplete}</p>
       ) : null}
 
       {written !== null ? (

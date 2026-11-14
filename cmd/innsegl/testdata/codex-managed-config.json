@@ -1,6 +1,7 @@
 {
   "config": {
     "model_provider": "innsegl",
+    "openai_base_url": "http://127.0.0.1:28495/v1",
     "model_providers": {
       "innsegl": {
         "name": "Innsegl",

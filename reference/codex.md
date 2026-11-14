@@ -11,9 +11,25 @@ Codex server is already running, exit active sessions and restart it with
 Setup uses Codex's system managed defaults at `/etc/codex/managed_config.toml`.
 The managed layer sets the local Responses route, root and child lifecycle hooks,
 and local telemetry export. Codex treats these hooks as managed, trusted hooks.
+It sets `openai_base_url` as well as the custom provider URL, without changing
+`model_provider`. Native `openai` conversations and existing `innsegl`
+conversations keep their provider identity. Both URLs use the selected
+authentication mode and change together on update. See
+[Codex provider configuration](https://learn.chatgpt.com/docs/config-file/config-advanced).
 Setup checks the CLI's effective configuration through `config/read` before
 reporting success. A CLI that cannot load the required settings produces an
 explicit setup error; there is no exact CLI-version pin.
+
+The configuration check verifies both provider routes. It does not prove a
+previously loaded thread has reloaded its provider or that a particular call was
+recorded. Restart an existing runtime after setup; verify the first real commit's
+signature, attribution and log inclusion before treating signing as operational.
+
+Codex versions that enforce a conversation's provider match can open a chat
+read-only when the selected provider differs from the one saved with that chat.
+Choose its original provider in Codex. For an existing Innsegl-provider CLI chat,
+use `codex --no-daemon -c 'model_provider="innsegl"' resume <thread-id>`; use
+`openai` for a native-provider chat. Managed routing and hooks still apply.
 
 Managed defaults override ordinary user, project, profile and startup settings;
 macOS device management can take higher precedence. This configures the supported

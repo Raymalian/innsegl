@@ -84,6 +84,7 @@ export interface RecordStep {
   output: string;
   truncated: boolean;
   observation_incomplete: boolean;
+  observation_gap?: string;
   /** The record capped input or output; GET .../steps/{n} serves it in full (#440). */
   clipped: boolean;
   outcome: RecordOutcome;

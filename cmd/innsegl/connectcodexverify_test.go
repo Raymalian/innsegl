@@ -15,7 +15,7 @@ import (
 	"innsegl.dev/innsegl/internal/client"
 )
 
-// OAI-020/025: measured installed-CLI config/read output, with unrelated
+// OAI-020/025: installed-CLI config/read fixture, with unrelated
 // defaults retained. Setup must prove effective routing and hooks, not just
 // that it wrote a file. No exact CLI version is part of this contract.
 func TestOAI025CodexEffectiveManagedSettings(t *testing.T) {
@@ -27,7 +27,7 @@ func TestOAI025CodexEffectiveManagedSettings(t *testing.T) {
 	if err := checkCodexEffectiveConfig(b, cfg); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"model_provider", "model_providers", "hooks", "features", "otel", "agents"} {
+	for _, key := range []string{"model_providers", "hooks", "features", "otel", "agents"} {
 		var v map[string]map[string]any
 		if err := json.Unmarshal(b, &v); err != nil {
 			t.Fatal(err)
@@ -79,6 +79,61 @@ func TestOAI025CodexEffectiveManagedSettings(t *testing.T) {
 		}
 		if err := checkCodexEffectiveConfig(changed, cfg); err == nil {
 			t.Errorf("accepted modified hook %s", modifier)
+		}
+	}
+}
+
+// OAI-019/025: checking the default provider alone misses explicitly resumed
+// built-in threads. A missing or conflicting built-in route is not ready.
+func TestOAI019CodexEffectiveBuiltinRoute(t *testing.T) {
+	body, err := os.ReadFile("testdata/codex-managed-config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{"", "https://example.invalid/v1", "http://127.0.0.1:28495/v1"} {
+		t.Run(route, func(t *testing.T) {
+			var value struct {
+				Config map[string]any `json:"config"`
+			}
+			if err := json.Unmarshal(body, &value); err != nil {
+				t.Fatal(err)
+			}
+			delete(value.Config, "openai_base_url")
+			if route != "" {
+				value.Config["openai_base_url"] = route
+			}
+			raw, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := client.CodexManagedConfig{LocalURL: "http://127.0.0.1:28495", HookBin: "/qa/innsegl", API: true}
+			err = checkCodexEffectiveConfig(raw, cfg)
+			if ready := route == "http://127.0.0.1:28495/v1"; (err == nil) != ready {
+				t.Fatalf("route %q: ready=%v, error=%v", route, ready, err)
+			}
+		})
+	}
+}
+
+func TestOAI019CodexEffectiveProviderChoiceRemainsRouted(t *testing.T) {
+	body, err := os.ReadFile("testdata/codex-managed-config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := client.CodexManagedConfig{LocalURL: "http://127.0.0.1:28495", HookBin: "/qa/innsegl", API: true}
+	for _, provider := range []any{nil, "openai", "innsegl", "unrouted-provider"} {
+		var value map[string]map[string]any
+		if err := json.Unmarshal(body, &value); err != nil {
+			t.Fatal(err)
+		}
+		value["config"]["model_provider"] = provider
+		changed, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := checkCodexEffectiveConfig(changed, cfg)
+		if (got == nil) != (provider != "unrouted-provider") {
+			t.Fatalf("provider=%v effective configuration: %v", provider, got)
 		}
 	}
 }

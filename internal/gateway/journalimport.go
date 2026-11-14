@@ -164,18 +164,27 @@ func writeAtomic(path string, data []byte) error {
 	}
 	name := tmp.Name()
 	defer func() { _ = os.Remove(name) }() //nolint:gosec // G703: name is a temporary file this function created.
-	if _, err := tmp.Write(data); err != nil {
+	if _, writeErr := tmp.Write(data); writeErr != nil {
 		_ = tmp.Close()
-		return err
+		return writeErr
 	}
-	if err := tmp.Sync(); err != nil {
+	if syncErr := tmp.Sync(); syncErr != nil {
 		_ = tmp.Close()
+		return syncErr
+	}
+	if closeErr := tmp.Close(); closeErr != nil {
+		return closeErr
+	}
+	if renameErr := os.Rename(name, path); renameErr != nil { //nolint:gosec // G703: both paths are built from a checked id and hash.
+		return renameErr
+	}
+	dir, err := os.Open(filepath.Dir(path)) // #nosec G703 -- the same checked store directory as the atomic destination.
+	if err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, path) //nolint:gosec // G703: both paths are built from a checked id and hash.
+	syncErr := dir.Sync()
+	closeErr := dir.Close()
+	return errors.Join(syncErr, closeErr)
 }
 
 // JournalImporterConfig is what a JournalImporter runs on.
@@ -261,14 +270,6 @@ func (im *JournalImporter) importOne(
 		return res, head, true
 	}
 
-	has, err := im.store.Has(ctx, installation, hash)
-	if err != nil {
-		return retry("the core could not read its journal store: " + err.Error())
-	}
-	if has {
-		res.Status = clientjournal.ImportDuplicate
-		return res, head, false
-	}
 	e, err := sealed.Open(pub)
 	if err != nil {
 		return reject(err.Error())
@@ -276,6 +277,24 @@ func (im *JournalImporter) importOne(
 	res.Seq = e.Seq
 	if e.InstallationID != installation {
 		return reject(fmt.Sprintf("the entry names installation %q, not the caller's", e.InstallationID))
+	}
+	has, err := im.store.Has(ctx, installation, hash)
+	if err != nil {
+		return retry("the core could not read its journal store: " + err.Error())
+	}
+	if has {
+		if e.Seq == head.Seq+1 && e.Prev == head.Hash {
+			// The entry rename may have survived a crash before its head
+			// rename. Finish that write without replaying observed facts.
+			if putErr := im.store.Put(ctx, installation, e.Seq, sealed); putErr != nil {
+				return retry("the core could not repair its journal head")
+			}
+			head = JournalHead{Seq: e.Seq, Hash: hash}
+		} else if e.Seq > head.Seq {
+			return reject("the stored entry does not continue this installation's journal head")
+		}
+		res.Status = clientjournal.ImportDuplicate
+		return res, head, false
 	}
 	if e.Seq != head.Seq+1 || e.Prev != head.Hash {
 		return reject(fmt.Sprintf("the entry does not continue this installation's chain: it is sequence %d "+
@@ -286,6 +305,8 @@ func (im *JournalImporter) importOne(
 	switch {
 	case buildErr != nil:
 		res.Status, res.Reason = clientjournal.ImportStored, "not recorded: "+buildErr.Error()
+	case out.RecordingFailed:
+		return retry("the core could not persist a replayed tool observation")
 	case out.Refusal != nil && (out.Refusal.Status >= 500 || out.Refusal.Status == http.StatusTooManyRequests):
 		return retry(fmt.Sprintf("the core could not record the entry now (%d): %s", out.Refusal.Status, out.Refusal.Reason))
 	case out.Refusal != nil:

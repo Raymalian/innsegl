@@ -82,6 +82,36 @@ func recordedValue(ctx context.Context) string {
 
 type replayKey struct{}
 
+type replayProblemKey struct{}
+
+type replayProblem struct {
+	mu              sync.Mutex
+	message         string
+	recordingFailed bool
+}
+
+func noteReplayProblem(ctx context.Context, message string) {
+	if ctx == nil {
+		return
+	}
+	if problem, ok := ctx.Value(replayProblemKey{}).(*replayProblem); ok {
+		problem.mu.Lock()
+		defer problem.mu.Unlock()
+		if problem.message == "" {
+			problem.message = message
+		}
+	}
+}
+
+func noteReplayRecordingFailure(ctx context.Context) {
+	if problem, ok := ctx.Value(replayProblemKey{}).(*replayProblem); ok {
+		problem.mu.Lock()
+		defer problem.mu.Unlock()
+		problem.recordingFailed = true
+		problem.message = "a replayed tool observation could not be persisted"
+	}
+}
+
 // WithReplay marks ctx as a journal import's replay of an exchange that
 // already happened.
 func WithReplay(ctx context.Context) context.Context {
@@ -124,6 +154,9 @@ type ReplayOutcome struct {
 	// could not fully interpret the journaled request. A run ID alone does
 	// not turn such an exchange into a successful recording.
 	ObservationProblem string
+	// RecordingFailed keeps a transient write failure retryable instead of
+	// acknowledging it as an irrecoverable observation gap.
+	RecordingFailed bool
 }
 
 // Replayer replays one journaled exchange. *Proxy is one.
@@ -140,7 +173,10 @@ func (p *Proxy) Replay(r *http.Request, contentType string, reply []byte) Replay
 	return p.replay(r.WithContext(WithReplay(r.Context())), contentType, reply)
 }
 
+//nolint:contextcheck // each guard may return a request with a derived context; use the final guarded request for observation metadata.
 func (p *Proxy) replay(r *http.Request, contentType string, reply []byte) ReplayOutcome {
+	problem := &replayProblem{}
+	r = r.WithContext(context.WithValue(r.Context(), replayProblemKey{}, problem))
 	guards := p.Guards
 	if guards == nil {
 		guards = defaultGuards
@@ -154,6 +190,10 @@ func (p *Proxy) replay(r *http.Request, contentType string, reply []byte) Replay
 			r = next
 		}
 	}
+	if isResponsesPath(r.URL.Path) && r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		body := observationBody(r)
+		r = p.markMissingResponseParent(r, body)
+	}
 	out := ReplayOutcome{
 		UnrecordedRepo:     unrecordedRepo(r.Context()),
 		ObservationProblem: observationProblem(r.Context()),
@@ -165,6 +205,12 @@ func (p *Proxy) replay(r *http.Request, contentType string, reply []byte) Replay
 			finisher.Finish()
 		}
 	}
+	problem.mu.Lock()
+	out.RecordingFailed = problem.recordingFailed
+	if problem.message != "" {
+		out.ObservationProblem = problem.message
+	}
+	problem.mu.Unlock()
 	return out
 }
 
@@ -179,12 +225,13 @@ func (p *Proxy) replyObserver(r *http.Request, contentType string) io.Writer {
 		observer = boundToolUseObserver(r.Context(), p.ToolUse)
 	}
 	if isResponsesPath(r.URL.Path) {
-		interp := newResponsesInterpreter(observer)
-		if p.ReplyText != nil {
-			ctx := r.Context()
-			interp.onText = func(text string) { p.ReplyText.OnReplyText(ctx, text) }
+		frames := p.newResponsesObservation(r)
+		if body, ok := r.Context().Value(wireBodyKey{}).(wireBody); ok {
+			frames.noteHTTPRequest(body)
+		} else if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+			frames.noteHTTPRequest(observationBody(r))
 		}
-		return interp
+		return newResponsesStreamObserver(frames)
 	}
 	interp := newMessagesInterpreter(observer)
 	if p.ReplyText != nil {
@@ -199,11 +246,20 @@ func (p *Proxy) responsesWebSocketObserver(r *http.Request) FrameObserver {
 	if p.Frames == nil && p.ToolUse == nil && p.ReplyText == nil {
 		return nil
 	}
+	return p.newResponsesObservation(r)
+}
+
+func (p *Proxy) newResponsesObservation(r *http.Request) *responsesWebSocketObserver {
 	var observer ToolUseObserver
 	if p.ToolUse != nil {
 		observer = boundToolUseObserver(r.Context(), p.ToolUse)
 	}
 	frames := newResponsesWebSocketObserver(observer)
+	if runID, ok := RunIDFromContext(r.Context()); ok && runID != "" {
+		installation, _ := InstallationFromContext(r.Context())
+		frames.history = p.responseContextHistory()
+		frames.scope = installation + "\x00" + runID + "\x00" + r.URL.Path
+	}
 	frames.frames = p.Frames
 	if messages, ok := p.ToolUse.(ResponsesWebSocketMessageObserver); ok {
 		frames.messages = messages

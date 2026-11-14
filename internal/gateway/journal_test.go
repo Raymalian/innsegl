@@ -5,16 +5,86 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"innsegl.dev/innsegl/internal/clientjournal"
 	"innsegl.dev/innsegl/internal/mcp"
 )
+
+func TestOAI018ReplayReportsFailedPersistence(t *testing.T) {
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: func(context.Context, mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error) {
+		return mcp.GatewayToolCallOutput{}, errors.New("private storage detail")
+	}})
+	p := &Proxy{ToolUse: rec, Guards: []Guard{guardFunc(func(r *http.Request) (*http.Request, *Refusal) {
+		return r.WithContext(WithRunID(r.Context(), "run-replay-failure")), nil
+	})}}
+	stream := "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_failed_import\",\"name\":\"exec_command\",\"arguments\":\"{\"}}\n\n"
+	out := p.Replay(responseRequest([]byte(`{"input":"continue"}`)), "text/event-stream", []byte(stream))
+	if out.ObservationProblem != "a replayed tool observation could not be persisted" {
+		t.Fatalf("failed persistence was not reported safely: %+v", out)
+	}
+}
+
+func TestOAI022ReplayReportsMissingResponseContext(t *testing.T) {
+	p := &Proxy{ToolUse: &fakeToolUseObserver{}, Guards: []Guard{guardFunc(func(r *http.Request) (*http.Request, *Refusal) {
+		return r.WithContext(WithRunID(r.Context(), "run-replay-context")), nil
+	})}}
+	stream := "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_imported\"}}\n\n" +
+		"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_missing_context\",\"name\":\"exec_command\",\"arguments\":\"{}\"}}\n\n"
+	for _, reply := range []string{stream, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_text_only\"}}\n\n"} {
+		out := p.Replay(responseRequest([]byte(`{"input":"continue","previous_response_id":"resp_not_observed"}`)), "text/event-stream", []byte(reply))
+		if out.ObservationProblem == "" {
+			t.Fatalf("missing context reported as fully recorded: %+v", out)
+		}
+	}
+}
+
+// OAI-018: an import must not acknowledge a durable record while the write
+// it triggered is still in flight.
+func TestOAI018ReplayWaitsForTriggeredRecording(t *testing.T) {
+	started, release, finished := make(chan struct{}), make(chan struct{}), make(chan ReplayOutcome, 1)
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{record: func(context.Context, mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error) {
+		close(started)
+		<-release
+		return mcp.GatewayToolCallOutput{}, nil
+	}})
+	p := &Proxy{ToolUse: rec, Guards: []Guard{guardFunc(func(r *http.Request) (*http.Request, *Refusal) {
+		return r.WithContext(WithRunID(r.Context(), "run-replay-write")), nil
+	})}}
+	stream := "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_import_gap\",\"name\":\"exec_command\",\"arguments\":\"{\"}}\n\n"
+	go func() {
+		r := responseRequest([]byte(`{"input":"continue"}`))
+		finished <- p.Replay(r, "text/event-stream", []byte(stream))
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("replay did not start recording the incomplete call")
+	}
+	acknowledged := false
+	select {
+	case <-finished:
+		acknowledged = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if acknowledged {
+		t.Fatal("replay acknowledged before its durable recording completed")
+	}
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replay did not finish after recording completed")
+	}
+}
 
 // ADR-0068: the core says on every reply it relays whether it recorded the
 // exchange, and replays a journaled exchange through the same guards and
@@ -74,6 +144,29 @@ func TestJRN003TheCoreSaysWhetherItRecorded(t *testing.T) {
 		if got := recordedHeaderAfter(t, tc.guard, tc.upstream); got != tc.want {
 			t.Errorf("%s: %s = %q, want %q", name, clientjournal.RecordedHeader, got, tc.want)
 		}
+	}
+}
+
+func TestOAI019MissingHTTPParentRequestsOutageEvidence(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if _, err := io.WriteString(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_live\"}}\n\n"); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	up, err := NewUpstream(upstream.URL, upstream.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Proxy{Upstream: up, ToolUse: &fakeToolUseObserver{}, Guards: []Guard{guardFunc(func(r *http.Request) (*http.Request, *Refusal) {
+		return r.WithContext(WithRunID(r.Context(), "run-live-context")), nil
+	})}}
+	r := responseRequest([]byte(`{"input":"continue","previous_response_id":"resp_missing_live"}`))
+	reply := httptest.NewRecorder()
+	p.ServeHTTP(reply, r)
+	if reply.Code != http.StatusOK || reply.Header().Get(clientjournal.RecordedHeader) != clientjournal.RecordedFalse {
+		t.Fatalf("missing parent was reported fully recorded: status=%d header=%q", reply.Code, reply.Header().Get(clientjournal.RecordedHeader))
 	}
 }
 
