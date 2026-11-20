@@ -166,8 +166,8 @@ func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecove
 	var held []clientjournal.Sealed
 	if offlineCodex {
 		address := link.addr()
-		if err := link.ln.Close(); err != nil {
-			t.Fatal(err)
+		if closeErr := link.ln.Close(); closeErr != nil {
+			t.Fatal(closeErr)
 		}
 		link.cut()
 		held = journalExpiredCodexRequest(t, paths)
@@ -205,9 +205,9 @@ func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecove
 		}
 	}
 	if offlineCodex {
-		res, err := srv.Drain(t.Context())
-		if err != nil || res.Delivered != 1 || res.Rejected != nil || res.Retry != nil {
-			t.Fatalf("draining the recovered installation: %+v %v", res, err)
+		res, drainErr := srv.Drain(t.Context())
+		if drainErr != nil || res.Delivered != 1 || res.Rejected != nil || res.Retry != nil {
+			t.Fatalf("draining the recovered installation: %+v %v", res, drainErr)
 		}
 		if got := importDirect(t, enrolledHTTPClient(t, paths, ca), link.addr(), held); len(got) != 1 || got[0].Status != clientjournal.ImportDuplicate {
 			t.Fatalf("replayed offline Codex exchange: %+v", got)
