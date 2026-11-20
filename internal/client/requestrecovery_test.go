@@ -182,3 +182,34 @@ func TestRCV005RequestShowsOwnerRecoveryAction(t *testing.T) {
 		t.Fatalf("owner action missing: %d %s", w.Code, w.Body)
 	}
 }
+
+// RCV-005: an authenticated refusal is sticky across a restart and later
+// transport failure. A network outage must not override it.
+func TestRCV005ExpiredCodexDoesNotFallBackAfterRecoveryRefusal(t *testing.T) {
+	core, paths := enrolled(t)
+	provider := newProvider(t)
+	target, err := url.Parse(provider.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ServerOptions{ProviderClient: &http.Client{Transport: responsesProviderRouteTransport{
+		target: target, base: provider.srv.Client().Transport,
+	}}}
+	for i := 0; i < 2; i++ {
+		s, err := NewServerWith(paths, &syncWriter{}, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expiry := s.Leaf().NotAfter
+		s.Now = func() time.Time { return expiry.Add(time.Minute) }
+		s.statements.remember([]byte(repoStatement(scSession)))
+		w := httptest.NewRecorder()
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/backend-api/codex/responses", strings.NewReader("{}"))
+		r.Header.Set("Session-Id", scSession)
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusForbidden || !s.revoked.Load() || provider.hits.Load() != 0 {
+			t.Fatalf("attempt %d: status %d, refusal retained %v, provider hits %d", i, w.Code, s.revoked.Load(), provider.hits.Load())
+		}
+		core.Close()
+	}
+}

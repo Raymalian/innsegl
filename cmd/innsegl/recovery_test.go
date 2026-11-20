@@ -15,10 +15,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"innsegl.dev/innsegl/internal/client"
+	"innsegl.dev/innsegl/internal/clientjournal"
 	"innsegl.dev/innsegl/internal/gateway"
 	"innsegl.dev/innsegl/internal/spire"
 )
@@ -78,7 +80,7 @@ func TestRCV002RecoveryIssuesForTheSameInstallationWithoutATrafficCertificate(t 
 
 // RCV-002: reproduce the incident through the actual client, gateway and store.
 func TestRCV002ClientRecoversAfterLongOfflineAndRestartWithRefusalMarker(t *testing.T) {
-	checkOfflineRecovery(t, nil, false)
+	checkOfflineRecovery(t, nil, false, false)
 }
 
 // Exercise the same client/core/database path with certificates minted by the
@@ -100,21 +102,29 @@ func checkOfflineRecoveryWithRealSPIRE(t *testing.T, stack *signE2EStack) {
 			t.Error(err)
 		}
 	}()
-	checkOfflineRecovery(t, authority, true)
+	checkOfflineRecovery(t, authority, true, true)
 }
 
 // RCV-002/005: an incoming harness request recovers before it is forwarded.
 func TestRCV002ClientRequestRecoversAfterLongOffline(t *testing.T) {
-	checkOfflineRecovery(t, nil, true)
+	checkOfflineRecovery(t, nil, true, false)
 }
 
-func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecovery bool) {
+func TestRCV002ExpiredCodexJournalImportsAfterRecovery(t *testing.T) {
+	checkOfflineRecovery(t, nil, true, true)
+}
+
+func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecovery, offlineCodex bool) {
 	t.Helper()
 	f := newEnFixture(t)
 	if authority != nil {
 		t.Cleanup(publishClientAuthority(authority))
 	}
+	if offlineCodex {
+		t.Setenv(envClientJournalDir, t.TempDir())
+	}
 	g := startHostedGateway(t, f)
+	link := newSwitchable(t, g.addr)
 	caBytes, err := os.ReadFile(filepath.Join(g.certDir, gateway.CACertFileName))
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +134,7 @@ func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecove
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := client.Enrol(t.Context(), client.EnrolOptions{CoreURL: "https://" + g.addr, Token: f.token(t), Name: "device", CA: ca})
+	e, err := client.Enrol(t.Context(), client.EnrolOptions{CoreURL: "https://" + link.addr(), Token: f.token(t), Name: "device", CA: ca})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,8 +151,10 @@ func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecove
 	if writeErr := os.WriteFile(paths.Cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	if writeErr := os.WriteFile(paths.Refused, []byte("old unknown refusal"), 0600); writeErr != nil {
-		t.Fatal(writeErr)
+	if !offlineCodex {
+		if writeErr := os.WriteFile(paths.Refused, []byte("old unknown refusal"), 0600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
 	}
 	if mkdirErr := os.MkdirAll(paths.Outbox, 0700); mkdirErr != nil {
 		t.Fatal(mkdirErr)
@@ -151,13 +163,38 @@ func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecove
 	if writeErr := os.WriteFile(sentinel, []byte("pending"), 0600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
+	var held []clientjournal.Sealed
+	if offlineCodex {
+		address := link.addr()
+		if err := link.ln.Close(); err != nil {
+			t.Fatal(err)
+		}
+		link.cut()
+		held = journalExpiredCodexRequest(t, paths)
+		link = newSwitchableAt(t, address, g.addr)
+	}
 	srv, err := client.NewServer(paths, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requestRecovery {
+	request := func() *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/_client/capabilities", nil))
+		return w
+	}
+	link.set(false)
+	if w := request(); w.Code != http.StatusForbidden {
+		t.Fatalf("request during outage: %d %s", w.Code, w.Body)
+	}
+	retry := srv.Status(t.Context()).Recovery
+	if retry == nil || retry.State != "retrying" || retry.NextRetry.IsZero() {
+		t.Fatalf("outage did not schedule recovery: %+v", retry)
+	}
+	link.set(true)
+	if requestRecovery {
+		// Reach the retry deadline without sleeping through the backoff.
+		srv.Now = func() time.Time { return retry.NextRetry }
+		w := request()
 		if w.Code != http.StatusOK {
 			t.Fatalf("request did not recover after restart: %d %s", w.Code, w.Body)
 		}
@@ -165,6 +202,15 @@ func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecove
 		ok, renewErr := srv.MaybeRenew(t.Context())
 		if renewErr != nil || !ok {
 			t.Fatalf("reconnect did not recover after restart: %v %v", ok, renewErr)
+		}
+	}
+	if offlineCodex {
+		res, err := srv.Drain(t.Context())
+		if err != nil || res.Delivered != 1 || res.Rejected != nil || res.Retry != nil {
+			t.Fatalf("draining the recovered installation: %+v %v", res, err)
+		}
+		if got := importDirect(t, enrolledHTTPClient(t, paths, ca), link.addr(), held); len(got) != 1 || got[0].Status != clientjournal.ImportDuplicate {
+			t.Fatalf("replayed offline Codex exchange: %+v", got)
 		}
 	}
 	if !srv.Leaf().NotAfter.After(time.Now()) {
@@ -185,6 +231,44 @@ func checkOfflineRecovery(t *testing.T, authority clientAuthority, requestRecove
 	if err != nil || !again.Leaf().NotAfter.After(time.Now()) {
 		t.Fatalf("restart: %v", err)
 	}
+}
+
+type recoveryTestTransport func(*http.Request) (*http.Response, error)
+
+func (f recoveryTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func journalExpiredCodexRequest(t *testing.T, paths client.Paths) []clientjournal.Sealed {
+	t.Helper()
+	upstream := &http.Client{Transport: recoveryTestTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" {
+			t.Errorf("unexpected provider request: %s", r.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader("data: [DONE]\n\n"))}, nil
+	})}
+	srv, err := client.NewServerWith(paths, io.Discard, client.ServerOptions{ProviderClient: upstream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const session = "88888888-8888-4888-8888-888888888888"
+	post := func(path, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
+		r.Header.Set("Session-Id", session)
+		srv.Handler().ServeHTTP(w, r)
+		return w
+	}
+	if w := post(client.SessionStatementPath, statement(t, session, enRepo)); w.Code != http.StatusAccepted {
+		t.Fatalf("offline statement: %d %s", w.Code, w.Body)
+	}
+	if w := post("/backend-api/codex/responses", `{"input":"hello"}`); w.Code != http.StatusOK || w.Body.String() != "data: [DONE]\n\n" {
+		t.Fatalf("offline Codex response: %d %s", w.Code, w.Body)
+	}
+	held := readSealed(t, paths.Outbox)
+	if len(held) != 1 {
+		t.Fatalf("offline Codex outbox has %d entries, want one", len(held))
+	}
+	return held
 }
 
 func mustRecoveryJSON(t *testing.T, v any) []byte {

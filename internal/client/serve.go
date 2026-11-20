@@ -418,21 +418,32 @@ func (s *Server) Handler() http.Handler {
 			s.serveCorePassGone(w)
 			return
 		}
+		capabilities := r.URL.Path == "/_client/capabilities"
+		offline := false
 		if err := s.checkRequestCertificate(r.Context()); err != nil {
-			http.Error(w, err.Error(), http.StatusForbidden)
-			return
+			offline = (r.Method == http.MethodGet && capabilities ||
+				r.Method == http.MethodPost && (responsesPath(r.URL.Path) || r.URL.Path == SessionStatementPath)) &&
+				s.canJournalDuringRecovery()
+			if !offline {
+				http.Error(w, err.Error(), http.StatusForbidden)
+				return
+			}
 		}
-		if r.URL.Path == "/_client/capabilities" {
+		if capabilities {
 			if r.Method != http.MethodGet {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			if !s.responsesAvailable(r) {
+			if !offline && !s.responsesAvailable(r) {
 				http.Error(w, "innsegl client: Responses capture is unavailable", http.StatusNotImplemented)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "agents": s.responsesAgentMode(), "signing": s.responsesSigningAvailable(), "signing_mode": "structured"}); err != nil {
+			agents, signing := "root-only", false
+			if !offline {
+				agents, signing = s.responsesAgentMode(), s.responsesSigningAvailable()
+			}
+			if err := json.NewEncoder(w).Encode(map[string]any{"formats": []string{"responses-http"}, "agents": agents, "signing": signing, "signing_mode": "structured"}); err != nil {
 				return
 			}
 			return
@@ -442,7 +453,7 @@ func (s *Server) Handler() http.Handler {
 				http.Error(w, "innsegl client: Responses capture requires HTTP POST; configure supports_websockets=false", http.StatusMethodNotAllowed)
 				return
 			}
-			if !s.responsesAvailable(r) {
+			if !offline && !s.responsesAvailable(r) {
 				http.Error(w, "innsegl client: this core has not advertised Responses capture; upgrade the core and check enrollment", http.StatusNotImplemented)
 				return
 			}
@@ -454,7 +465,7 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 			r = kept
-			if s.coreDown() {
+			if offline || s.coreDown() {
 				s.keepStatement(w, r, errors.New("the core did not answer a moment ago"))
 				return
 			}
@@ -471,7 +482,7 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		if r.Method == http.MethodPost && isModelPath(r.URL.Path) {
-			s.serveModel(w, r)
+			s.serveModel(w, r, offline)
 			return
 		}
 		s.proxy.ServeHTTP(w, r)
@@ -613,6 +624,9 @@ func (s *Server) maybeRenewLocked(ctx context.Context) (bool, error) {
 	if s.revoked.Load() || (!attempt.Before(s.Leaf().NotAfter) && keyErr == nil) {
 		got, err = s.recoverCertificate(ctx)
 		authRequired = keyErr != nil || errors.Is(err, ErrCredentialRefused)
+		if errors.Is(err, ErrCredentialRefused) {
+			s.recordCredentialRefusal(attempt)
+		}
 	} else {
 		uri := s.Leaf().URIs[0]
 		var csr string
@@ -622,10 +636,7 @@ func (s *Server) maybeRenewLocked(ctx context.Context) (bool, error) {
 			got, err = requestCertificate(ctx, c, strings.TrimSuffix(s.core.CoreURL, "/")+RenewPath, map[string]string{"csr": csr}, s.key, uri)
 		}
 		if errors.Is(err, errStatus401) {
-			s.revoked.Store(true)
-			if werr := writeFileAtomic(s.paths.Refused, []byte(attempt.UTC().Format(time.RFC3339)+"\n"), 0600); werr != nil {
-				s.log.Printf("recording credential refusal: %v", werr)
-			}
+			s.recordCredentialRefusal(attempt)
 			got, err = s.recoverCertificate(ctx)
 			authRequired = keyErr != nil || errors.Is(err, ErrCredentialRefused)
 			if err != nil {
@@ -654,6 +665,8 @@ func (s *Server) maybeRenewLocked(ctx context.Context) (bool, error) {
 		failed.State = "retrying"
 		failed.Error = err.Error()
 		failed.NextRetry = attempt.Add(delay)
+		var dialErr *net.OpError
+		failed.dialFailed = keyErr == nil && !authRequired && errors.As(err, &dialErr) && dialErr.Op == "dial"
 		if authRequired {
 			failed.State = "authentication required"
 			failed.Action = RecoveryInstruction(s.core.CoreURL, s.paths.CA)
@@ -665,8 +678,16 @@ func (s *Server) maybeRenewLocked(ctx context.Context) (bool, error) {
 	s.renewFailures = 0
 	ready := RecoveryStatus{State: "ready", LastAttempt: attempt, LastSuccess: s.Now()}
 	s.recovery.Store(&ready)
+	s.kickOutbox()
 	s.log.Printf("renewed the client certificate; it expires %s", got.Chain[0].NotAfter.UTC().Format(time.RFC3339))
 	return true, nil
+}
+
+func (s *Server) recordCredentialRefusal(attempt time.Time) {
+	s.revoked.Store(true)
+	if err := writeFileAtomic(s.paths.Refused, []byte(attempt.UTC().Format(time.RFC3339)+"\n"), 0600); err != nil {
+		s.log.Printf("recording credential refusal: %v", err)
+	}
 }
 
 // RunRenewal renews at each half-life and retries failed renewal or recovery
