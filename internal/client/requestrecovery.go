@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+// A failed TCP dial is evidence of an outage. TLS, protocol and authorization
+// errors leave the model route closed, as does any saved credential refusal.
+func (s *Server) canJournalDuringRecovery() bool {
+	st := s.recovery.Load()
+	return st != nil && st.dialFailed && !s.revoked.Load() &&
+		!s.Now().Before(s.Leaf().NotAfter)
+}
+
 // checkRequestCertificate runs before forwarding, so recovery never replays a
 // model request. The renewal mutex and published retry deadline bound attempts
 // shared with background recovery.
