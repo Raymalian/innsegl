@@ -164,7 +164,7 @@ func TestASessionEndSentWhileTheCoreIsDownIsDeliveredAfter(t *testing.T) {
 		t.Fatalf("kept ends in the watch table = %d, want 0: the outbox holds them", n)
 	}
 
-	core.Restart(t)
+	core.Restart()
 	if _, err := srv.Drain(context.Background()); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
