@@ -60,6 +60,26 @@ async function installMocks(page: Page, runId: string, getRecord: () => RunRecor
   });
 }
 
+test("OAI-025: missing history warns without erasing the observed command", async ({ page }, testInfo) => {
+  const current = structuredClone(record());
+  const step = current.steps[0];
+  if (step === undefined) throw new Error("fixture has no current step");
+  const reason = "The previous Responses context was not observed; the current call was observed.";
+  step.observation_incomplete = false;
+  step.observation_gap = reason;
+  await page.clock.install({ time: NOW });
+  await installMocks(page, RUN_ID, () => current);
+  await page.setViewportSize({ width: 1440, height: 1800 });
+  await page.goto(`/runs/${RUN_ID}`);
+  const rendered = page.locator(`[data-step="${step.n}"]`);
+  await expect(rendered.getByRole("alert")).toHaveText(reason);
+  await expect(rendered).toContainText(step.summary);
+  await rendered.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("current-command-context.png"), fullPage: true });
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  expect(results.violations).toEqual([]);
+});
+
 test("RM-278: the subagent page has no WCAG 2.1 AA violations", async ({ page }) => {
   await page.clock.install({ time: AGENT_NOW });
   await installMocks(page, AGENT_RUN_ID, agentRecord);

@@ -12,6 +12,8 @@ import (
 // upstream solely from exact configured routes. Model discovery is relayed
 // without a run; it never reaches conversation observers.
 func ResponsesRoutes(base *Proxy, api, chatgpt *Upstream) http.Handler {
+	// Per-request route copies share the same bounded context history.
+	base.responseContextHistory()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var up *Upstream
 		model := false

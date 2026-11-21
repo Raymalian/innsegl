@@ -61,6 +61,17 @@ func CodexManagedTOML(cfg CodexManagedConfig) ([]byte, error) {
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-c" {
 			i++
+			if strings.HasPrefix(args[i], "model_provider=") {
+				// Conversations retain their provider identity. Forcing the
+				// launcher's custom default makes native-provider resumes
+				// read-only in clients that enforce a provider match.
+				continue
+			}
+			// A resumed app-server thread can explicitly keep "openai".
+			// Selecting the custom default alone does not route that thread.
+			if base, ok := strings.CutPrefix(args[i], "model_providers.innsegl.base_url="); ok {
+				b.WriteString("openai_base_url=" + base + "\n")
+			}
 			b.WriteString(args[i])
 			b.WriteByte('\n')
 		}
@@ -152,6 +163,9 @@ func planCodexSettings(path string, cfg CodexManagedConfig, install bool) ([]byt
 		var parsed map[string]any
 		if toml.Unmarshal(next, &parsed) != nil {
 			return nil, false, fmt.Errorf("%s has administrator settings that overlap Codex setup; refusing to overwrite them", path)
+		}
+		if provider, exists := parsed["model_provider"]; exists && provider != "openai" && provider != "innsegl" {
+			return nil, false, fmt.Errorf("%s selects a provider outside Innsegl's supported routes; preserve that preference in a separate configuration", path)
 		}
 	}
 	return next, !bytes.Equal(old, next), nil
