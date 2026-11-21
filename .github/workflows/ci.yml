@@ -578,12 +578,11 @@ jobs:
     #
     # Pinned by digest for the same reason the actions above are: the header of
     # this file forbids floating refs, and a container image tag is mutable in
-    # exactly the way a tag on an action is. sha256:dcc5531e… is the multi-arch
-    # index; on this amd64 runner it resolves to sha256:c091b21d…, which is the
-    # manifest the committed `-chromium-linux.png` baselines were generated
-    # against.
+    # exactly the way a tag on an action is. sha256:1507cbfc… is the multi-arch
+    # index; on this amd64 runner it resolves to sha256:766137e2…, which is the
+    # manifest used to verify the committed `-chromium-linux.png` baselines.
     container:
-      image: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+      image: mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
       # Chromium's default /dev/shm inside a container is 64 MB, which it
       # exhausts and then crashes in ways that look like flaky tests.
       options: --ipc=host
@@ -608,7 +607,7 @@ jobs:
         working-directory: web
         run: |
           driver="$(npx playwright --version | awk '{print $2}')"
-          image="${PW_IMAGE_VERSION:-1.62.1}"
+          image="${PW_IMAGE_VERSION:?missing Playwright image version}"
           echo "playwright driver: $driver / image: $image"
           if [ "$driver" != "$image" ]; then
             echo "::error::Playwright driver $driver does not match the container image $image."
@@ -619,7 +618,7 @@ jobs:
           test -d "${PLAYWRIGHT_BROWSERS_PATH:-/ms-playwright}"
         env:
           # Kept beside the digest above so the two are edited together.
-          PW_IMAGE_VERSION: "1.62.1"
+          PW_IMAGE_VERSION: "1.65.1"
       - name: axe, keyboard, contrast, green audit and visual regression
         # Every `expect` in web/tests fails this job. doc 06 §6.4 is gating:
         # a harness that reports and does not fail is what #57 replaced.
