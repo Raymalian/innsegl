@@ -418,7 +418,7 @@ data: {"type":"content_block_stop","index":0}
 			t.Errorf("spawn at downstream flush = %q, want toolu_plan", observed.ID)
 		}
 	}}
-	proxy.stream(writer, httptest.NewRequest(http.MethodPost, "/v1/messages", nil), &http.Response{
+	proxy.stream(writer, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/messages", nil), &http.Response{
 		Header: http.Header{"Content-Type": {"text/event-stream"}},
 		Body:   io.NopCloser(strings.NewReader(frame)),
 	})
