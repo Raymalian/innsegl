@@ -114,7 +114,7 @@ func TestOutboxDeliversEveryKindOldestFirst(t *testing.T) {
 		t.Fatalf("outbox %+v, want one exchange, two telemetry, one end", st)
 	}
 
-	core.Restart(t)
+	core.Restart()
 	res, err := srv.Drain(context.Background())
 	if err != nil || res.Delivered != 4 {
 		t.Fatalf("Drain = %+v, %v; want 4 delivered", res, err)
@@ -179,7 +179,7 @@ func TestOutboxStopsAtTheFirstItemTheCoreDoesNotTake(t *testing.T) {
 		t.Fatalf("Drain with the core down = %+v, %v; want the no-answer error and all 4 kept", res, err)
 	}
 
-	core.Restart(t)
+	core.Restart()
 	res, err = srv.Drain(context.Background())
 	if err == nil || res.Delivered != 2 {
 		t.Fatalf("Drain = %+v, %v; want both ends delivered and the 503 as the error", res, err)
@@ -515,7 +515,7 @@ func TestOutboxKicksDoNotResendARejectedEntry(t *testing.T) {
 	postJSON(t, front.URL+SessionStatementPath, repoStatement(jrnRepoSession), nil)
 	core.Stop()
 	postJSON(t, front.URL+"/v1/messages", `{}`, modelHeaders(jrnRepoSession))
-	core.Restart(t)
+	core.Restart()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -567,7 +567,7 @@ func TestOutboxARejectedExchangeDoesNotHoldBackEndsOrTelemetry(t *testing.T) {
 		t.Fatalf("held %+v, want an exchange, an end and an export", st)
 	}
 
-	core.Restart(t)
+	core.Restart()
 	res, err := srv.Drain(context.Background())
 	if err != nil || res.Rejected == nil || res.Delivered != 2 {
 		t.Fatalf("Drain = %+v, %v; want the rejection and the end and export delivered", res, err)

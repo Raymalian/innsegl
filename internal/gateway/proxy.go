@@ -199,9 +199,8 @@ func (p *Proxy) buildRequest(r *http.Request) (*http.Request, error) {
 // stream copies resp's body to w, flushing after every chunk arrives so a
 // streamed reply -- server-sent events above all -- reaches the caller as
 // it is received rather than once the whole body has arrived. A reply
-// observer parses the same bytes as they are relayed. Responses replies are
-// observed before forwarding each chunk so a child request cannot race its
-// parent's spawn association; the Messages path keeps its existing write order.
+// observer parses each chunk before forwarding it so a child request cannot
+// race its parent's spawn association.
 //
 // r is the ORIGINAL request this reply answers -- carried through only so
 // that a ToolUse observer implementing ContextToolUseObserver (below) can
@@ -224,11 +223,7 @@ func (p *Proxy) stream(w http.ResponseWriter, r *http.Request, resp *http.Respon
 
 	obs := p.replyObserver(r, resp.Header.Get("Content-Type"))
 	if obs != nil {
-		if isResponsesPath(r.URL.Path) {
-			dst = io.MultiWriter(obs, dst)
-		} else {
-			dst = io.MultiWriter(dst, obs)
-		}
+		dst = io.MultiWriter(obs, dst)
 	}
 
 	// A failed copy is discarded deliberately, not silently: by the time

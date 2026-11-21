@@ -402,3 +402,37 @@ func TestGatewayStripsHopByHopHeadersButForwardsEverythingElse(t *testing.T) {
 		t.Error("upstream saw X-Should-Drop, which the request's own Connection header named as hop-by-hop")
 	}
 }
+
+func TestSER021SpawnObservedBeforeFrameReachesClient(t *testing.T) {
+	const frame = `event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_plan","name":"Agent","input":{"prompt":"plan brief","subagent_type":"Plan"}}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+`
+	var observed ToolUse
+	proxy := Proxy{ToolUse: ToolUseObserverFunc(func(call ToolUse) { observed = call })}
+	writer := &spawnFrameWriter{ResponseRecorder: httptest.NewRecorder(), onFlush: func() {
+		if observed.ID != "toolu_plan" {
+			t.Errorf("spawn at downstream flush = %q, want toolu_plan", observed.ID)
+		}
+	}}
+	proxy.stream(writer, httptest.NewRequest(http.MethodPost, "/v1/messages", nil), &http.Response{
+		Header: http.Header{"Content-Type": {"text/event-stream"}},
+		Body:   io.NopCloser(strings.NewReader(frame)),
+	})
+	if writer.Body.String() != frame {
+		t.Fatal("the relayed frame changed")
+	}
+}
+
+type spawnFrameWriter struct {
+	*httptest.ResponseRecorder
+	onFlush func()
+}
+
+func (w *spawnFrameWriter) Flush() {
+	w.onFlush()
+	w.ResponseRecorder.Flush()
+}
