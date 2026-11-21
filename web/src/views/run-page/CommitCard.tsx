@@ -58,6 +58,7 @@ type Read =
 
 export function CommitCard({ commit, repo, fetchProof }: CommitCardProps) {
   const [state, setState] = useState<Read>({ status: "loading" });
+  const shortSHA = commit.sha.slice(0, 7);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -84,11 +85,11 @@ export function CommitCard({ commit, repo, fetchProof }: CommitCardProps) {
         <span className={commitCardTitle}>{strings.commitCard.heading}</span>
         <button
           type="button"
-          aria-label={strings.commitCard.copyCommitSha(commit.sha)}
+          aria-label={strings.commitCard.copyCommitSha(shortSHA)}
           onClick={() => void navigator.clipboard?.writeText(commit.sha)}
           className={commitCardSha}
         >
-          {commit.sha.slice(0, 7)}
+          {shortSHA}
         </button>
         <span className={commitCardSubject}>{commit.subject}</span>
         <span className="flex-grow" />
