@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -23,7 +24,118 @@ import (
 	"time"
 
 	"innsegl.dev/innsegl/internal/clientjournal"
+	"innsegl.dev/innsegl/internal/mcp"
 )
+
+func TestOAI018ImportRetainsSourceForFailedToolRecord(t *testing.T) {
+	states, err := NewCallStateStore(filepath.Join(t.TempDir(), "states"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	record := func(context.Context, mcp.GatewayToolCallInput) (mcp.GatewayToolCallOutput, error) {
+		attempts++
+		if attempts == 1 {
+			return mcp.GatewayToolCallOutput{}, errors.New("write unavailable")
+		}
+		return mcp.GatewayToolCallOutput{}, nil
+	}
+	rec := NewToolCallRecorder(ToolCallRecorderConfig{CallStates: states, record: record})
+	p := &Proxy{ToolUse: rec, Guards: []Guard{guardFunc(func(r *http.Request) (*http.Request, *Refusal) {
+		return r.WithContext(WithRunID(r.Context(), recTestRunID)), nil
+	})}}
+	im, _ := newImporter(t, p)
+	chain := newJournalChain(t, cgInstA)
+	sealed := chain.next(t, func(e *clientjournal.Entry) {
+		e.Path = "/v1/responses"
+		e.RequestBody = []byte(`{"input":"continue"}`)
+		e.ResponseBody = []byte("data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_import_write_retry\",\"name\":\"exec_command\",\"arguments\":\"{\"}}\n\n")
+	})
+	first := im.Import(t.Context(), cgInstA, &chain.key.PublicKey, []clientjournal.Sealed{sealed})
+	if len(first) != 1 || first[0].Status != clientjournal.ImportRetry {
+		t.Fatalf("failed observation acknowledged before persistence: %+v", first)
+	}
+	p.ToolUse = NewToolCallRecorder(ToolCallRecorderConfig{CallStates: states, record: record})
+	second := im.Import(t.Context(), cgInstA, &chain.key.PublicKey, []clientjournal.Sealed{sealed})
+	if len(second) != 1 || second[0].Status != clientjournal.ImportStored || attempts != 2 {
+		t.Fatalf("retry failed to persist the incomplete gap honestly: attempts=%d result=%+v", attempts, second)
+	}
+}
+
+func TestOAI018SignedJournalPairSurvivesImportRestart(t *testing.T) {
+	for _, path := range []string{"/v1/responses", "/backend-api/codex/responses"} {
+		t.Run(path, func(t *testing.T) {
+			dir := t.TempDir()
+			calls := &fakeRecordCalls{}
+			open := func() *JournalImporter {
+				states, err := NewCallStateStore(filepath.Join(dir, "states"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				rec := NewToolCallRecorder(ToolCallRecorderConfig{CallStates: states, record: calls.fn})
+				identity := guardFunc(func(r *http.Request) (*http.Request, *Refusal) {
+					ctx := WithIdentification(WithRunID(r.Context(), recTestRunID), Identification{Harness: "codex"})
+					return r.WithContext(ctx), nil
+				})
+				p := &Proxy{ToolUse: rec, Guards: []Guard{identity, NewToolCallRecordGuard(rec)}}
+				im, err := NewJournalImporter(JournalImporterConfig{Store: NewFileJournalStore(filepath.Join(dir, "imports")), Replayer: p})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return im
+			}
+			chain := newJournalChain(t, cgInstA)
+			command := chain.next(t, func(e *clientjournal.Entry) {
+				e.Path, e.Query = path, ""
+				e.RequestBody = []byte(`{"input":"start"}`)
+				e.ResponseBody = []byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_before_restart\"}}\n\n" +
+					"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_across_import_restart\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"echo retained\\\"}\"}}\n\n" +
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_before_restart\",\"status\":\"completed\",\"output\":[]}}\n\n")
+			})
+			first := open().Import(t.Context(), cgInstA, &chain.key.PublicKey, []clientjournal.Sealed{command})
+			if len(first) != 1 || first[0].Status != clientjournal.ImportRecorded {
+				t.Fatalf("command import: %+v", first)
+			}
+			result := chain.next(t, func(e *clientjournal.Entry) {
+				e.Path, e.Query = path, ""
+				e.RequestBody = []byte(`{"input":[{"type":"function_call_output","call_id":"call_across_import_restart","output":"retained"}],"previous_response_id":"resp_before_restart"}`)
+				e.ResponseBody = []byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_after_restart\"}}\n\n" +
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_after_restart\",\"status\":\"completed\",\"output\":[]}}\n\n")
+			})
+			im := open()
+			second := im.Import(t.Context(), cgInstA, &chain.key.PublicKey, []clientjournal.Sealed{command, result})
+			if len(second) != 2 || second[0].Status != clientjournal.ImportDuplicate || second[1].Status != clientjournal.ImportStored {
+				t.Fatalf("restart/retry lost its chain or missing-context gap: %+v", second)
+			}
+			got := calls.snapshot()
+			if len(got) != 1 || !bytes.Contains(got[0].Body, []byte(`"result":"retained"`)) || !bytes.Contains(got[0].Body, []byte(`"cmd":"echo retained"`)) {
+				t.Fatalf("signed journal restart lost or duplicated the call/result pair: %+v", got)
+			}
+		})
+	}
+}
+
+func TestOAI018ImportRepairsHeadAfterEntryRenameCrash(t *testing.T) {
+	replayer := &fakeReplayer{}
+	im, dir := newImporter(t, replayer)
+	chain := newJournalChain(t, cgInstA)
+	first, second := chain.next(t, nil), chain.next(t, nil)
+	if err := im.store.Put(t.Context(), cgInstA, 1, first); err != nil {
+		t.Fatal(err)
+	}
+	// Model the atomic entry rename succeeding, followed by a crash before
+	// the separate head rename. The entry is durable but the head is old.
+	if err := os.Remove(filepath.Join(dir, cgInstA, "head.json")); err != nil {
+		t.Fatal(err)
+	}
+	results := im.Import(t.Context(), cgInstA, &chain.key.PublicKey, []clientjournal.Sealed{first, second})
+	if len(results) != 2 || results[0].Status != clientjournal.ImportDuplicate || results[1].Status != clientjournal.ImportRecorded {
+		t.Fatalf("entry/head crash stranded the next valid entry: %+v", results)
+	}
+	if len(replayer.seen) != 1 {
+		t.Fatalf("recovery replayed an already persisted entry: %d replays", len(replayer.seen))
+	}
+}
 
 // ADR-0068: the core imports a client's journal behind the
 // client-certificate guard. Each entry is verified (signature by the

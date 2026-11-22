@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ type RecoveryStatus struct {
 	NextRetry   time.Time `json:"next_retry,omitempty"`
 	Error       string    `json:"error,omitempty"`
 	Action      string    `json:"action,omitempty"`
+	dialFailed  bool
 }
 
 func (s *Server) recoveryKeyPath() string {
@@ -50,6 +52,9 @@ func (s *Server) recoveryClient() *http.Client {
 	// Clone only the pinned TLS policy: device recovery does not present the
 	// expired traffic certificate and must never follow a redirect with proof.
 	rt := s.transport.Clone()
+	// Return the TCP dial error before the request and session-hook
+	// deadlines. A deadline after a connection opens is not a dial failure.
+	rt.DialContext = (&net.Dialer{Timeout: 1500 * time.Millisecond}).DialContext
 	cfg := rt.TLSClientConfig.Clone()
 	cfg.Certificates = nil
 	cfg.GetClientCertificate = nil

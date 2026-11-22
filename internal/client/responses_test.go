@@ -266,3 +266,43 @@ func TestOAI006ChildCapabilityComesFromCore(t *testing.T) {
 		})
 	}
 }
+
+// RCV-002 and OAI-024: a transport outage can outlast the client certificate.
+// The local outbox must keep the exchange even if the client restarts offline.
+func TestRCV002ExpiredCodexJournalsDuringCoreDialFailure(t *testing.T) {
+	core, paths := enrolled(t)
+	core.Close()
+	provider := newProvider(t)
+	target, err := url.Parse(provider.srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := ServerOptions{ProviderClient: &http.Client{Transport: responsesProviderRouteTransport{
+		target: target, base: provider.srv.Client().Transport,
+	}}}
+	for i := 1; i <= 2; i++ {
+		srv, front, _ := startJournalClient(t, paths, nil, opts)
+		before := srv.outbox.status().Items
+		if before != i-1 {
+			t.Fatalf("start %d: expected %d queued exchanges, got %d", i, i-1, before)
+		}
+		expiry := srv.Leaf().NotAfter
+		srv.Now = func() time.Time { return expiry.Add(time.Minute) }
+		caps := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(caps, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/_client/capabilities", nil))
+		if caps.Code != http.StatusOK || !strings.Contains(caps.Body.String(), `"signing":false`) {
+			t.Fatalf("offline capabilities: %d %s", caps.Code, caps.Body)
+		}
+		if status := scPost(t, front.URL+SessionStatementPath, repoStatement(scSession), nil); status != http.StatusAccepted {
+			t.Fatalf("offline workspace statement: got %d, want 202", status)
+		}
+		status, _, body := postJSON(t, front.URL+"/backend-api/codex/responses", `{"input":"hello"}`, map[string]string{"Session-Id": scSession})
+		if status != http.StatusOK || body != jrnSSE || provider.hits.Load() != int32(i) {
+			t.Fatalf("offline Codex request: status %d, body %q, provider hits %d", status, body, provider.hits.Load())
+		}
+		if queued := srv.outbox.status().Items; queued != i {
+			t.Fatalf("expected %d queued exchanges, got %d", i, queued)
+		}
+		front.Close()
+	}
+}

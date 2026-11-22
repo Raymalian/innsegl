@@ -153,7 +153,7 @@ func (s *Server) serveProvider(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
-		s.serveModel(w, r)
+		s.serveModel(w, r, false)
 		return
 	}
 	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/") && !strings.HasPrefix(r.URL.Path, "/v1/code/") {

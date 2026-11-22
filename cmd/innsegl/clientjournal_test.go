@@ -53,7 +53,12 @@ type switchable struct {
 
 func newSwitchable(t *testing.T, target string) *switchable {
 	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	return newSwitchableAt(t, "127.0.0.1:0", target)
+}
+
+func newSwitchableAt(t *testing.T, address, target string) *switchable {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", address)
 	if err != nil {
 		t.Fatal(err)
 	}

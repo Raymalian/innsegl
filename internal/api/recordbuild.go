@@ -376,6 +376,9 @@ func (rs *recordServer) buildSteps(
 			step.Input = string(body.Input)
 			step.Truncated = body.InputTruncated || body.ResultTruncated
 			step.ObservationIncomplete = body.ObservationIncomplete
+			if body.ObservationIncomplete || body.ContextIncomplete {
+				step.ObservationGap, _ = clipStepText(body.Note)
+			}
 			if body.ResultObserved {
 				if text, ok := resultText(body.Result); ok {
 					step.Output = text

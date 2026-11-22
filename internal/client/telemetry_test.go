@@ -48,7 +48,7 @@ func TestTelemetryHeldWhileTheCoreIsDownIsDeliveredAfter(t *testing.T) {
 		t.Fatalf("held exports %d, want 1", n)
 	}
 
-	core.Restart(t) // the core answers again
+	core.Restart() // the core answers again
 	if _, err := srv.Drain(context.Background()); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestCodexTelemetryIsScrubbedBeforeOutageQueueAndDelivery(t *testing.T) {
 		}
 	}
 
-	core.Restart(t)
+	core.Restart()
 	if _, err := srv.Drain(context.Background()); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}

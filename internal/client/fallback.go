@@ -97,7 +97,7 @@ func (e errCoreFailed) Error() string {
 
 // serveModel handles one model request: held for a resend, then to the core,
 // or straight to the provider while the core is known to be down.
-func (s *Server) serveModel(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveModel(w http.ResponseWriter, r *http.Request, offline bool) {
 	s.noteRouted(requestSession(r))
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxReplayableBytes+1))
 	if err != nil {
@@ -105,6 +105,10 @@ func (s *Server) serveModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(body) > maxReplayableBytes {
+		if offline {
+			http.Error(w, "innsegl client: request exceeds the offline journal limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		// Too large to hold: it goes to the core as it streams, and only there.
 		r.Body = struct {
 			io.Reader
@@ -130,6 +134,10 @@ func (s *Server) serveModel(w http.ResponseWriter, r *http.Request) {
 	}
 	if responsesPath(r.URL.Path) && len(ex.statement) == 0 {
 		http.Error(w, "innsegl client: Codex has not stated its workspace; review and trust the lifecycle hooks in /hooks, then retry", http.StatusPreconditionRequired)
+		return
+	}
+	if offline {
+		s.forwardDirect(w, r, ex)
 		return
 	}
 	s.serveHeld(w, r.WithContext(context.WithValue(r.Context(), exchangeKey{}, ex)), ex)
@@ -287,6 +295,9 @@ func (s *Server) forwardDirect(w http.ResponseWriter, r *http.Request, ex *excha
 	stripHopByHop(out.Header)
 	out.Header.Del(StatementHeader)
 	out.Header.Del("X-Gateway-Key")
+	if ex.path == "/v1/responses" || ex.path == "/v1/models" {
+		out.Header.Del("ChatGPT-Account-ID")
+	}
 	out.Header.Set("Accept-Encoding", "identity")
 	out.ContentLength = int64(len(ex.body))
 	resp, err := s.providerClient.Do(out)

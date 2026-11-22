@@ -1527,7 +1527,20 @@ func openIdentityStack(
 
 	spawnRecorder := gateway.NewSpawnRecorder(tree, nil)
 
-	toolCallRecorder := gateway.NewToolCallRecorder(newToolCallRecorderConfig(running, hosted))
+	recorderConfig := newToolCallRecorderConfig(running, hosted)
+	if bodyRoot := os.Getenv(envObserveBodyDir); bodyRoot != "" {
+		incomplete, historyErr := gateway.NewIncompleteCallStore(filepath.Join(bodyRoot, "gateway-incomplete"))
+		if historyErr != nil {
+			return nil, nil, nil, nil, fmt.Errorf("open incomplete observation history: %w", historyErr)
+		}
+		recorderConfig.IncompleteCalls = incomplete
+		states, stateErr := gateway.NewCallStateStore(bodyRoot)
+		if stateErr != nil {
+			return nil, nil, nil, nil, fmt.Errorf("open call observation history: %w", stateErr)
+		}
+		recorderConfig.CallStates = states
+	}
+	toolCallRecorder := gateway.NewToolCallRecorder(recorderConfig)
 	toolUse = gateway.CombineToolUseObservers(g, spawnRecorder, toolCallRecorder)
 
 	// The commit path (ADR-0059, E17) authorises a commit by a git commit

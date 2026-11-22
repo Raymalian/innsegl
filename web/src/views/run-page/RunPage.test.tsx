@@ -350,6 +350,20 @@ describe("a plain root run (record.json) renders through the session layout", ()
 });
 
 describe("witness disagreement and dark mode survive the redesign (states-record.json)", () => {
+  it("explains missing Responses context without claiming the stream ended", async () => {
+    const incomplete = structuredClone(record());
+    const firstStep = incomplete.steps[0];
+    if (firstStep === undefined) throw new Error("fixture has no first step");
+    const reason = "The previous Responses context was not observed; the current call was observed.";
+    Object.assign(firstStep, { observation_incomplete: false, observation_gap: reason, outcome: { kind: "unknown", exit_code: null } });
+    window.history.pushState(null, "", "/runs/" + RUN_ID);
+    render(<RunPage route={ROUTE} fetchRunRecord={async () => incomplete} fetchStepDiff={async () => stepOneDiff()} fetchProof={async () => verifiedProof()} now={NOW} />);
+    await screen.findByText(/What it ran/);
+    const step = document.querySelector(`[data-step="${firstStep.n}"]`) as HTMLElement;
+    expect(await within(step).findByRole("alert")).toHaveTextContent(reason);
+    expect(within(step).getByText("outcome unknown")).toBeInTheDocument();
+  });
+
   it("shows when the gateway only observed an incomplete Responses call", async () => {
     const incomplete = structuredClone(record());
     const firstStep = incomplete.steps[0];

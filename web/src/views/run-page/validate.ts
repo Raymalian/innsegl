@@ -163,6 +163,7 @@ function isRecordStep(v: unknown): v is RecordStep {
     isString(v["output"]) &&
     isBoolean(v["truncated"]) &&
     isBoolean(v["observation_incomplete"]) &&
+    (v["observation_gap"] === undefined || isString(v["observation_gap"])) &&
     isBoolean(v["clipped"]) &&
     okOutcome &&
     isString(v["tree_before"]) &&
