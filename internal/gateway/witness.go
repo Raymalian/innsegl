@@ -82,6 +82,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"innsegl.dev/innsegl/internal/commitpath"
@@ -144,10 +145,8 @@ type telemetryRecord struct {
 	ToolUseID string `json:"tool_use_id"`
 	ToolName  string `json:"tool_name,omitempty"`
 	Success   bool   `json:"success"`
-	// Decision is "reject" for a call the harness stopped before it ran (a
-	// refused permission, a hook's deny, an interrupt): such a call has no
-	// tool_result, and its tool_decision is the witness. Empty for a
-	// tool_result.
+	// Decision is "reject" for a call the harness stopped before it ran.
+	// Some harnesses also report a generic failed result for that call.
 	Decision  string    `json:"decision,omitempty"`
 	SessionID string    `json:"session_id,omitempty"`
 	Time      time.Time `json:"time"`
@@ -157,6 +156,7 @@ type telemetryRecord struct {
 // export the harness's own exporter sends. See this file's own package doc
 // comment for what is kept, what is dropped, and why.
 func TelemetryHandler(cfg TelemetryConfig) http.Handler {
+	var storeMu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeTelemetryError(w, http.StatusMethodNotAllowed,
@@ -208,7 +208,10 @@ func TelemetryHandler(cfg TelemetryConfig) http.Handler {
 		}
 
 		for _, rec := range extractToolResultRecords(req, cfg.now()) {
-			if err := writeTelemetryRecord(cfg.Dir, rec); err != nil {
+			storeMu.Lock()
+			err := writeTelemetryRecord(cfg.Dir, rec)
+			storeMu.Unlock()
+			if err != nil {
 				// A write failure here is the same "witness, never a gate"
 				// posture record.go's own recordAsync holds: it costs this
 				// endpoint's own caller nothing, and the harness's OTLP
@@ -490,6 +493,21 @@ func writeTelemetryRecord(dir string, rec telemetryRecord) error {
 	if err := os.MkdirAll(telemetryDir, telemetryDirMode); err != nil {
 		return err
 	}
+	final := filepath.Join(telemetryDir, rec.ToolUseID+".json")
+	if strings.HasPrefix(rec.ToolUseID, "call_") && !rec.Success && rec.Decision == "" {
+		// Keep a recorded denial when the harness also reports a failed tool
+		// result for the same call. The stored decision survives later exports
+		// and receiver restarts.
+		raw, err := os.ReadFile(final)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		var previous telemetryRecord
+		if err == nil && json.Unmarshal(raw, &previous) == nil && previous.Decision == toolDecisionReject &&
+			(previous.SessionID == "" || rec.SessionID == "" || previous.SessionID == rec.SessionID) {
+			return nil
+		}
+	}
 	body, err := json.Marshal(rec)
 	if err != nil {
 		// telemetryRecord holds only strings, a bool and a time.Time, none
@@ -497,7 +515,6 @@ func writeTelemetryRecord(dir string, rec telemetryRecord) error {
 		// reachable.
 		return err
 	}
-	final := filepath.Join(telemetryDir, rec.ToolUseID+".json")
 	partial := filepath.Join(telemetryDir, "."+rec.ToolUseID+".part")
 	if err := os.WriteFile(partial, body, telemetryFileMode); err != nil {
 		return err

@@ -208,6 +208,31 @@ func TestOAI012CodexDeniedToolDecisionIsKeptByCallID(t *testing.T) {
 	if strings.Contains(string(stored), "source") {
 		t.Errorf("stored denied decision retained its source attribute: %s", stored)
 	}
+
+	// The harness can emit a generic failed result after the explicit denial.
+	// Exercise a new handler to cover delivery after a receiver restart.
+	restarted := TelemetryHandler(TelemetryConfig{Dir: dir})
+	result := `{"resourceLogs":[{"scopeLogs":[{"logRecords":[` +
+		`{"body":{"stringValue":"codex.tool_result"},"attributes":[` +
+		`{"key":"call_id","value":{"stringValue":"` + callID + `"}},` +
+		`{"key":"tool_name","value":{"stringValue":"exec_command"}},` +
+		`{"key":"success","value":{"stringValue":"false"}}]}` +
+		`]}]}]}`
+	response := otwPost(t, restarted, "application/json", []byte(result))
+	if response.Code != http.StatusOK {
+		t.Fatalf("failed result status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	afterRaw, readErr := os.ReadFile(filepath.Join(dir, "telemetry", callID+".json"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	var after telemetryRecord
+	if err := json.Unmarshal(afterRaw, &after); err != nil {
+		t.Fatal(err)
+	}
+	if after.Decision != toolDecisionReject || after.Success {
+		t.Fatalf("record after failed result = %+v, want the explicit rejection to remain", after)
+	}
 }
 
 // TestOTW001TelemetryHandlerAnswersOTLPSuccess: the OTLP/HTTP JSON logs

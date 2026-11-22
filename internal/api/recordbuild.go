@@ -765,9 +765,9 @@ func nonNilInts(s []int) []int {
 // summarizeWitness folds RecordWitness (record.go): per step, Agree when
 // every AVAILABLE witness is consistent, Disagree when one of them actively
 // says otherwise, and Unchecked when there was nothing yet to judge —
-// either this step's own body could not be read at all (Outcome.Kind ==
-// "unknown"), or its telemetry is still "pending" (inside the window,
-// genuinely undecided, never a disagreement).
+// either the step's outcome is unknown and its telemetry has no match, or its
+// telemetry is still "pending". A matching telemetry record corroborates the
+// recorded call even when its command outcome cannot be determined.
 //
 // "Inactive" telemetry (this deployment has none configured, or this call
 // predates it) counts toward Agree rather than Disagree: it is not a
@@ -776,7 +776,7 @@ func summarizeWitness(steps []RecordStep, bodiesStored, bodiesVerified int) Reco
 	w := RecordWitness{Steps: len(steps), BodiesStored: bodiesStored, BodiesVerified: bodiesVerified}
 	for _, st := range steps {
 		switch {
-		case st.Outcome.Kind == "unknown", st.Witnesses.Telemetry == "pending":
+		case st.Outcome.Kind == "unknown" && st.Witnesses.Telemetry != "matched", st.Witnesses.Telemetry == "pending":
 			w.Unchecked++
 		case st.Witnesses.Gateway == "present" && st.Witnesses.Telemetry != "missing":
 			w.Agree++

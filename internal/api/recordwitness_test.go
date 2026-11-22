@@ -143,6 +143,17 @@ func TestRPG005SummarizeWitness(t *testing.T) {
 	}
 }
 
+func TestRPG005MatchedWitnessWithUnknownOutcome(t *testing.T) {
+	steps := []RecordStep{{
+		Outcome:   RecordOutcome{Kind: "unknown"},
+		Witnesses: RecordWitnesses{Gateway: "present", Snapshot: "inactive", Telemetry: "matched"},
+	}}
+	got := summarizeWitness(steps, 1, 1)
+	if got.Agree != 1 || got.Unchecked != 0 || got.Disagree != 0 {
+		t.Fatalf("summary = %+v, want one matched step with no unchecked steps or disagreements", got)
+	}
+}
+
 // TestSettleRunWitnessesJudgesEachWitnessPerRun — #438. A witness is judged
 // only for a run where it was ever active. Measured on 2026-10-01: a run
 // recorded through the hook, which never exported telemetry and never had a
